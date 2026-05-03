@@ -1,0 +1,25 @@
+# Lightweight runtime-only image for the combined community server bundle.
+# Before building:
+#   1. copy the WSL-compiled binary to target/wsl-backend
+#   2. build frontend_app and frontend_admin so their dist directories exist
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY target/wsl-backend /app/backend
+COPY frontend_app/dist /app/frontend_app_dist
+COPY frontend_admin/dist /app/frontend_admin_dist
+RUN chmod +x /app/backend
+
+EXPOSE 8090
+
+ENV HOST=0.0.0.0
+ENV PORT=8090
+ENV SERVER_APP_DIST_DIR=/app/frontend_app_dist
+ENV SERVER_ADMIN_DIST_DIR=/app/frontend_admin_dist
+
+ENTRYPOINT ["/app/backend"]

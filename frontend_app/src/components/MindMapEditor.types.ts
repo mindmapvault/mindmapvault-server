@@ -1,0 +1,39 @@
+import type { MindMapTree, NodeAttachmentRef } from '../types';
+
+export interface NodeAttachmentViewerAsset {
+  url: string;
+  contentType: string;
+  name: string;
+}
+
+export interface MindMapEditorProps {
+  initialTree: MindMapTree | null;
+  externalNodeAttachments?: Record<string, NodeAttachmentRef[]>;
+  title: string;
+  onSave: (tree: MindMapTree, title: string) => Promise<void>;
+  onTitleChange: (title: string) => void;
+  saving: boolean;
+  saveMsg: string;
+  error: string;
+  onBack?: () => void;
+  onShowHistory?: () => void;
+  onDownloadEncrypted?: (fileBaseName?: string) => void;
+  onDownloadJson?: (tree: MindMapTree, title: string) => void;
+  onExportMarkdown?: (tree: MindMapTree, title: string) => void;
+  titleChanged?: boolean;
+  onRenameTitle?: () => void;
+  renamingTitle?: boolean;
+  versionLabel?: string;
+  versionTooltip?: string;
+  onTreeChange?: (tree: MindMapTree) => void;
+  onSelectionChange?: (nodeId: string | null) => void;
+  onOpenSecurePanel?: (tab: 'attachments' | 'shares') => void;
+  onNodeFileDrop?: (nodeId: string, files: File[]) => Promise<NodeAttachmentRef[]>;
+  onOpenNodeAttachment?: (attachment: NodeAttachmentRef) => Promise<void> | void;
+  onDeleteNodeAttachment?: (attachment: NodeAttachmentRef) => Promise<void> | void;
+  onLoadNodeAttachmentPreview?: (attachment: NodeAttachmentRef) => Promise<string | null>;
+  onLoadNodeAttachmentViewer?: (attachment: NodeAttachmentRef) => Promise<NodeAttachmentViewerAsset | null>;
+}
+
+export type MindMapEditorMode = 'desktop' | 'mobile';
+export type MindMapEditorModePreference = 'auto' | MindMapEditorMode;

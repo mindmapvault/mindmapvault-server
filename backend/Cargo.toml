@@ -1,0 +1,69 @@
+[package]
+name = "backend"
+version = "0.3.11"
+edition = "2021"
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["macros", "ws"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "fs"] }
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# SQL backend (PostgreSQL protocol-compatible)
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
+
+# MinIO / S3
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+aws-credential-types = "1"
+
+# JWT & hashing
+jsonwebtoken = "9"
+argon2 = "0.5"
+rand = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bson = { version = "2", features = ["chrono-0_4"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Validation
+validator = { version = "0.19", features = ["derive"] }
+
+# Tracing / logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Config / env
+config = "0.14"
+dotenvy = "0.15"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Base64
+base64 = "0.22"
+
+# Profiling (optional at runtime via env)
+pprof = { version = "0.8", features = ["flamegraph"] }
+jemallocator = "0.5"
+jemalloc-ctl = "0.5"
+
+# Rate limiting
+tower_governor = "0.4"
+
+# HTTP client (health checks)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[dev-dependencies]
+axum-test = "15"
+tokio = { version = "1", features = ["full"] }

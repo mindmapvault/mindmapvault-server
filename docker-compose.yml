@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    container_name: mindmapvault-server-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mindmapvault
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d mindmapvault']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2026-04-22T22-12-26Z
+    container_name: mindmapvault-server-minio
+    restart: unless-stopped
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:RELEASE.2026-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >-
+      /bin/sh -c
+      "mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/mindmapvault &&
+      mc version enable local/mindmapvault"
+    restart: 'no'
+
+  server:
+    image: ${SERVER_IMAGE:-mindmapvault-server:local}
+    container_name: mindmapvault-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    env_file:
+      - ./backend/.env
+    ports:
+      - '8090:8090'
+
+volumes:
+  postgres-data:
+  minio-data:

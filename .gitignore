@@ -1,0 +1,31 @@
+# Environment files
+.env
+.env.local
+backend/.env
+backend/.env.local
+
+# Node / frontend outputs
+node_modules/
+frontend_app/node_modules/
+frontend_admin/node_modules/
+frontend_app/dist/
+frontend_admin/dist/
+frontend_app/.wrangler/
+frontend_admin/.wrangler/
+
+# Rust / backend outputs
+backend/target/
+target/
+
+# Logs and local state
+*.log
+.DS_Store
+
+# Compose and container state
+.docker/
+minio-data/
+postgres-data/
+
+# Editor
+.vscode/
+!.vscode/mcp.json
