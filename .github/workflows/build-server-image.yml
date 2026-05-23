@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Compute image coordinates
         id: image
@@ -42,9 +42,6 @@ jobs:
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
 
           dockerhub_namespace="${{ vars.DOCKERHUB_NAMESPACE }}"
-          if [ -z "$dockerhub_namespace" ] && [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
-            dockerhub_namespace="${{ secrets.DOCKERHUB_USERNAME }}"
-          fi
 
           if [ -n "$dockerhub_namespace" ]; then
             dockerhub_namespace="${dockerhub_namespace,,}"
@@ -56,7 +53,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ${{ steps.image.outputs.ghcr }}
@@ -71,33 +68,30 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate Docker Hub credentials
+      - name: Validate Docker Hub config
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
         env:
+          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
 
+          namespace="$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '\r\n')"
           username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '\r\n')"
           token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
 
-          # Trim optional accidental wrapping quotes from secret values.
-          username="${username%\"}"
-          username="${username#\"}"
-          username="${username%\'}"
-          username="${username#\'}"
-          token="${token%\"}"
-          token="${token#\"}"
-          token="${token%\'}"
-          token="${token#\'}"
+          if [ -z "$namespace" ]; then
+            echo "DOCKERHUB_NAMESPACE is empty. Set repository variable DOCKERHUB_NAMESPACE (example: kornelko2)."
+            exit 1
+          fi
 
           if [ -z "$username" ]; then
             echo "DOCKERHUB_USERNAME is empty."
@@ -126,20 +120,8 @@ jobs:
             exit 1
           fi
 
-          # Keep validation permissive to avoid rejecting valid Docker Hub usernames.
-          # We only block clearly malformed values that break registry auth.
-          if [[ "$username" == "." ]] || [[ "$username" == "-" ]] || [[ "$username" == "_" ]]; then
-            echo "DOCKERHUB_USERNAME looks invalid; use your Docker Hub account/org name (example: kornelko2)."
-            exit 1
-          fi
-
-          if [[ ! "$username" =~ ^[A-Za-z0-9_-]+$ ]]; then
-            echo "DOCKERHUB_USERNAME contains unsupported characters; use only letters, digits, '_' or '-'."
-            exit 1
-          fi
-
-          if [[ ! "$token" =~ ^[[:graph:]]+$ ]]; then
-            echo "DOCKERHUB_TOKEN contains non-printable characters; regenerate and paste a clean token."
+          if [[ "$namespace" == "dockerhub_username" ]] || [[ "$username" == "dockerhub_username" ]]; then
+            echo "Docker Hub is configured with placeholder value 'dockerhub_username'. Use your real namespace and username (example: kornelko2)."
             exit 1
           fi
 
@@ -148,31 +130,15 @@ jobs:
             exit 1
           fi
 
-      - name: Configure Docker Hub auth for push
+      - name: Log in to Docker Hub
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '\r\n')"
-          token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
-          username="${username%\"}"
-          username="${username#\"}"
-          username="${username%\'}"
-          username="${username#\'}"
-          token="${token%\"}"
-          token="${token#\"}"
-          token="${token%\'}"
-          token="${token#\'}"
-          auth_b64="$(printf '%s' "${username}:${token}" | base64 | tr -d '\n')"
-
-          export DOCKERHUB_AUTH_B64="$auth_b64"
-            python3 -c 'import json, os; from pathlib import Path; p = Path.home() / ".docker" / "config.json"; p.parent.mkdir(parents=True, exist_ok=True); cfg = {}; raw = p.read_text(encoding="utf-8").strip() if p.exists() else ""; cfg = json.loads(raw) if raw else {}; auths = cfg.setdefault("auths", {}); auth = os.environ["DOCKERHUB_AUTH_B64"]; [auths.__setitem__(r, {"auth": auth}) for r in ("docker.io", "https://index.docker.io/v1/", "registry-1.docker.io")]; p.write_text(json.dumps(cfg), encoding="utf-8")'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and optionally push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/Dockerfile
