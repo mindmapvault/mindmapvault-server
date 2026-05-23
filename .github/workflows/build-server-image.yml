@@ -36,16 +36,23 @@ jobs:
         id: image
         shell: bash
         run: |
-          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+          echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ vars.DOCKERHUB_NAMESPACE }}" ]; then
+            echo "dockerhub=docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.image.outputs.name }}
+          images: |
+            ${{ steps.image.outputs.ghcr }}
+            ${{ steps.image.outputs.dockerhub }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
@@ -56,6 +63,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request' && vars.DOCKERHUB_NAMESPACE != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v6
@@ -74,12 +88,15 @@ jobs:
           {
             echo "## Server Image"
             echo ""
-            echo "Image: \`${{ steps.image.outputs.name }}\`"
+            echo "GHCR image: \`${{ steps.image.outputs.ghcr }}\`"
+            if [ -n "${{ steps.image.outputs.dockerhub }}" ]; then
+              echo "Docker Hub image: \`${{ steps.image.outputs.dockerhub }}\`"
+            fi
             echo ""
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "This run validated the Docker build without pushing an image."
             else
-              echo "This run pushed image tags to GHCR:" 
+              echo "This run pushed image tags to the configured registries:"
               echo ""
               echo '```'
               echo "${{ steps.meta.outputs.tags }}"

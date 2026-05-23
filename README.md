@@ -77,6 +77,8 @@ Prerequisites:
 - Docker Compose
 - WSL 2 if you want to use the native Windows workflow described below
 
+For the full container setup guide, prerequisites, service reference, persistence model, upgrade flow, and troubleshooting notes, see `docs/DEPLOYMENT.md`.
+
 Start the local stack:
 
 ```powershell
@@ -89,6 +91,8 @@ What you get:
 - Garage S3 API on `127.0.0.1:9000`
 - Garage admin API on `127.0.0.1:3903`
 - the packaged server on `http://localhost:8090`
+
+This README keeps the quick-start short. The recommended operator path and container guidance live in `docs/DEPLOYMENT.md`.
 
 If you run the backend directly from source, copy the env template to `backend/.env` first:
 
@@ -154,17 +158,28 @@ Published image:
 ghcr.io/mindmapvault/mindmapvault-server:latest
 ```
 
+If Docker Hub publishing is configured in GitHub Actions, the same image is also published as:
+
+```text
+docker.io/<dockerhub-namespace>/mindmapvault-server:latest
+docker.io/<dockerhub-namespace>/mindmapvault-server:0.3.24
+```
+
 Pull it directly with:
 
 ```bash
 docker pull ghcr.io/mindmapvault/mindmapvault-server:latest
 ```
 
+Container registry pushes publish image manifests and layers only. The repository README and `docs/DEPLOYMENT.md` stay in GitHub; they are not embedded into the Docker Hub repository description automatically by this workflow.
+
 ## Local Configuration
 
 For container-based local development, `docker-compose.yml` is the primary configuration file.
 
 Edit the `server` service values there to change host, database, S3, JWT, CORS, and logging settings.
+
+For service-by-service explanations, recommended container choices, prerequisites, internet exposure notes, backups, and upgrades, use `docs/DEPLOYMENT.md`.
 
 The backend still auto-loads `backend/.env` when you run it directly from source, but that file is only a fallback for source-based runs.
 

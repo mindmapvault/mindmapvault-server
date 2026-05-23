@@ -16,6 +16,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **Object Upload Compatibility** — Accepted opaque S3/Garage version IDs returned from uploads instead of requiring UUID-shaped IDs, which fixes hosted uploads against the current Garage backend.
 - **Support UI** — Added a direct link to the public `mindmapvault-server` repository in the in-app support section so users can find documentation, report bugs, and open pull requests from the product UI.
 - **Secrets Scan Reliability** — Tightened `scripts/check_no_committed_secrets.mjs` so local storage/cache key strings in TypeScript no longer trigger false-positive secret detections in CI.
+- **Deployment Documentation** — Added `docs/DEPLOYMENT.md` as the dedicated Docker Compose operator guide covering prerequisites, recommended containers, configuration, persistence, upgrades, and troubleshooting, and linked the README quick-start to that guide.
+- **Image Publishing** — Extended the server image workflow so the same GitHub Actions run can publish to Docker Hub and emit clean semver tags like `0.3.24` on versioned releases.
 
 ### Removed
 
