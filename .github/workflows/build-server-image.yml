@@ -134,12 +134,29 @@ jobs:
             exit 1
           fi
 
+      - name: Trust Amazon root CA (Docker Hub CloudFront CDN)
+        if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
+        shell: bash
+        run: |
+          # Docker Hub added CloudFront CDN on 2026-05-20. TLS certs are issued by
+          # Amazon Trust Services. Ensure the runner trusts those roots before login.
+          curl -fsSL https://www.amazontrust.com/repository/AmazonRootCA1.cer \
+            -o /usr/local/share/ca-certificates/AmazonRootCA1.crt
+          sudo update-ca-certificates --fresh
+
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Use CLI login (mirrors local WSL workflow) instead of docker/login-action
+          # to avoid any Node runtime credential encoding issues.
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login \
+            --username "$DOCKERHUB_USERNAME" \
+            --password-stdin \
+            docker.io
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v7
