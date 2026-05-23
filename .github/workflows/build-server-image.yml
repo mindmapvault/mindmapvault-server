@@ -134,29 +134,31 @@ jobs:
             exit 1
           fi
 
-      - name: Trust Amazon root CA (Docker Hub CloudFront CDN)
-        if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
-        shell: bash
-        run: |
-          # Docker Hub added CloudFront CDN on 2026-05-20. TLS certs are issued by
-          # Amazon Trust Services. Ensure the runner trusts those roots before login.
-          curl -fsSL https://www.amazontrust.com/repository/AmazonRootCA1.cer \
-            | sudo tee /usr/local/share/ca-certificates/AmazonRootCA1.crt > /dev/null
-          sudo update-ca-certificates --fresh
-
-      - name: Log in to Docker Hub
+      - name: Store Docker Hub credentials
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         shell: bash
         run: |
-          # Use CLI login (mirrors local WSL workflow) instead of docker/login-action
-          # to avoid any Node runtime credential encoding issues.
-          printf '%s' "$DOCKERHUB_TOKEN" | docker login \
-            --username "$DOCKERHUB_USERNAME" \
-            --password-stdin \
-            docker.io
+          set -euo pipefail
+          user="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
+          pat="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '[:space:]')"
+          auth="$(printf '%s:%s' "$user" "$pat" | base64 -w 0)"
+          mkdir -p ~/.docker
+          # Write credentials directly to config.json using jq, bypassing the
+          # Docker daemon auth flow that fails against registry-1.docker.io in CI.
+          # docker/build-push-action (BuildKit) reads auths from this file directly.
+          if [ -f ~/.docker/config.json ]; then
+            jq --arg a "$auth" \
+              '.auths["https://index.docker.io/v1/"] = {"auth": $a}' \
+              ~/.docker/config.json > ~/.docker/config.json.tmp
+            mv ~/.docker/config.json.tmp ~/.docker/config.json
+          else
+            printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"}}}' "$auth" \
+              > ~/.docker/config.json
+          fi
+          echo "Docker Hub credentials stored for user: $user"
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v7
