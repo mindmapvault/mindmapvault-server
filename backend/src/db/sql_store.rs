@@ -10,11 +10,7 @@ use crate::{
         access::UserAccessGrant,
         admin_audit::AdminAuditEvent,
         attachment::AttachmentStatus,
-        feedback::NewFeedbackSubmission,
         mindmap::VersionSnapshot,
-        notifications::{NewNotificationEvent, StoredNotificationEvent, UserNotificationSettings},
-        plaintext_map::{DirectUserShare, GroupMember, GroupShare},
-        share::{ShareScope, ShareStatus},
         settings::UserAccountSettings,
         user::{Argon2Params, SubscriptionTier},
     },
@@ -136,19 +132,6 @@ pub struct AdminUserRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct AdminFeedbackRecord {
-    pub public_id: String,
-    pub name: Option<String>,
-    pub email: Option<String>,
-    pub subject: String,
-    pub message: String,
-    pub page_url: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub is_archived: bool,
-    pub archived_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone)]
 pub struct AdminUserAdminUpdate {
     pub admin_note: Option<String>,
     pub locked_reason: Option<String>,
@@ -177,7 +160,6 @@ pub struct StoredMindMap {
     pub version_history: Vec<VersionSnapshot>,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
-    pub vault_sharing_mode: String,
     pub vault_encryption_mode: String,
     pub max_versions: u32,
     pub vault_labels: Vec<String>,
@@ -198,7 +180,6 @@ pub struct NewMindMap {
     pub version_history: Vec<VersionSnapshot>,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
-    pub vault_sharing_mode: String,
     pub vault_encryption_mode: String,
     pub max_versions: u32,
     pub vault_labels: Vec<String>,
@@ -218,7 +199,6 @@ pub struct MindMapMetaUpdate {
     pub title_encrypted: String,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
-    pub vault_sharing_mode: String,
     pub vault_encryption_mode: String,
     pub max_versions: u32,
     pub vault_labels: Vec<String>,
@@ -268,170 +248,6 @@ pub struct MindMapAttachmentUploadUpdate {
     pub s3_version_id: String,
     pub checksum_sha256: Option<String>,
     pub status: AttachmentStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredMindMapShare {
-    pub id: String,
-    pub map_id: String,
-    pub share_name: String,
-    pub scope: ShareScope,
-    pub s3_key: String,
-    pub s3_version_id: Option<String>,
-    pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub revoked: bool,
-    pub include_attachments: bool,
-    pub passphrase_hint: Option<String>,
-    pub content_type: String,
-    pub size_bytes: i64,
-    pub encryption_meta: Value,
-    pub checksum_sha256: Option<String>,
-    pub status: ShareStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewMindMapShare {
-    pub id: String,
-    pub map_id: String,
-    pub share_name: String,
-    pub scope: ShareScope,
-    pub s3_key: String,
-    pub s3_version_id: Option<String>,
-    pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub revoked: bool,
-    pub include_attachments: bool,
-    pub passphrase_hint: Option<String>,
-    pub content_type: String,
-    pub size_bytes: i64,
-    pub encryption_meta: Value,
-    pub checksum_sha256: Option<String>,
-    pub status: ShareStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct MindMapShareUploadUpdate {
-    pub s3_version_id: String,
-    pub checksum_sha256: Option<String>,
-    pub status: ShareStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredMindMapShareAttachment {
-    pub id: String,
-    pub share_id: String,
-    pub source_attachment_id: Option<String>,
-    pub node_id: Option<String>,
-    pub name: String,
-    pub sanitized_name: String,
-    pub content_type: String,
-    pub size_bytes: i64,
-    pub s3_key: String,
-    pub s3_version_id: Option<String>,
-    pub uploaded_at: DateTime<Utc>,
-    pub encryption_meta: Value,
-    pub checksum_sha256: Option<String>,
-    pub status: AttachmentStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewMindMapShareAttachment {
-    pub id: String,
-    pub share_id: String,
-    pub source_attachment_id: Option<String>,
-    pub node_id: Option<String>,
-    pub name: String,
-    pub sanitized_name: String,
-    pub content_type: String,
-    pub size_bytes: i64,
-    pub s3_key: String,
-    pub s3_version_id: Option<String>,
-    pub uploaded_at: DateTime<Utc>,
-    pub encryption_meta: Value,
-    pub checksum_sha256: Option<String>,
-    pub status: AttachmentStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct MindMapShareAttachmentUploadUpdate {
-    pub s3_version_id: String,
-    pub checksum_sha256: Option<String>,
-    pub status: AttachmentStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredSharedUserGroup {
-    pub id: String,
-    pub owner_user_id: String,
-    pub owner_username: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub members: Vec<GroupMember>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewSharedUserGroup {
-    pub id: String,
-    pub owner_user_id: String,
-    pub owner_username: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub members: Vec<GroupMember>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SharedUserGroupUpdate {
-    pub name: String,
-    pub description: Option<String>,
-    pub members: Vec<GroupMember>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredPlainTextMap {
-    pub id: String,
-    pub owner_user_id: String,
-    pub owner_username: String,
-    pub title: String,
-    pub summary: Option<String>,
-    pub content_json: Value,
-    pub direct_user_shares: Vec<DirectUserShare>,
-    pub group_shares: Vec<GroupShare>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewPlainTextMap {
-    pub id: String,
-    pub owner_user_id: String,
-    pub owner_username: String,
-    pub title: String,
-    pub summary: Option<String>,
-    pub content_json: Value,
-    pub direct_user_shares: Vec<DirectUserShare>,
-    pub group_shares: Vec<GroupShare>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PlainTextMapUpdate {
-    pub title: String,
-    pub summary: Option<String>,
-    pub content_json: Value,
-    pub direct_user_shares: Vec<DirectUserShare>,
-    pub group_shares: Vec<GroupShare>,
-    pub updated_at: DateTime<Utc>,
 }
 
 impl StoredUser {
@@ -526,17 +342,6 @@ impl AdminUserRecord {
 
 #[async_trait]
 pub trait SqlStore: Send + Sync {
-    async fn create_feedback_submission(
-        &self,
-        submission: NewFeedbackSubmission,
-    ) -> Result<(), AppError>;
-    async fn count_feedback_submissions(&self) -> Result<u64, AppError>;
-    async fn list_admin_feedback(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<AdminFeedbackRecord>, AppError>;
-    async fn delete_feedback_submission(&self, public_id: &str) -> Result<bool, AppError>;
-    async fn set_feedback_archived(&self, public_id: &str, archived: bool) -> Result<bool, AppError>;
     async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError>;
     async fn create_admin_audit_event(&self, event: AdminAuditEvent) -> Result<(), AppError>;
     async fn list_admin_users(&self) -> Result<Vec<AdminUserRecord>, AppError>;
@@ -585,48 +390,6 @@ pub trait SqlStore: Send + Sync {
         user_id: &str,
         settings: UserAccountSettings,
     ) -> Result<(), AppError>;
-    async fn load_user_notification_settings(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<UserNotificationSettings>, AppError>;
-    async fn upsert_user_notification_settings(
-        &self,
-        user_id: &str,
-        settings: UserNotificationSettings,
-    ) -> Result<(), AppError>;
-    async fn list_notification_events(
-        &self,
-        user_id: &str,
-        category: Option<&str>,
-        state: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<StoredNotificationEvent>, AppError>;
-    async fn create_notification_event(
-        &self,
-        event: NewNotificationEvent,
-    ) -> Result<(), AppError>;
-    async fn mark_notification_read(
-        &self,
-        user_id: &str,
-        notification_id: &str,
-        read: bool,
-    ) -> Result<bool, AppError>;
-    async fn mark_notification_saved(
-        &self,
-        user_id: &str,
-        notification_id: &str,
-        saved: bool,
-    ) -> Result<bool, AppError>;
-    async fn mark_notification_done(
-        &self,
-        user_id: &str,
-        notification_id: &str,
-        done: bool,
-    ) -> Result<bool, AppError>;
-    async fn mark_all_notifications_read(
-        &self,
-        user_id: &str,
-    ) -> Result<u64, AppError>;
 
     async fn list_mind_maps(&self, user_id: &str) -> Result<Vec<StoredMindMap>, AppError>;
     async fn create_mind_map(&self, map: NewMindMap) -> Result<(), AppError>;
@@ -683,72 +446,6 @@ pub trait SqlStore: Send + Sync {
         map_id: &str,
         attachment_id: &str,
     ) -> Result<(), AppError>;
-    async fn list_mind_map_shares(&self, map_id: &str) -> Result<Vec<StoredMindMapShare>, AppError>;
-    async fn create_mind_map_share(&self, share: NewMindMapShare) -> Result<(), AppError>;
-    async fn get_mind_map_share(
-        &self,
-        map_id: &str,
-        share_id: &str,
-    ) -> Result<Option<StoredMindMapShare>, AppError>;
-    async fn get_public_mind_map_share(&self, share_id: &str) -> Result<Option<StoredMindMapShare>, AppError>;
-    async fn complete_mind_map_share_upload(
-        &self,
-        map_id: &str,
-        share_id: &str,
-        update: MindMapShareUploadUpdate,
-    ) -> Result<(), AppError>;
-    async fn set_mind_map_share_revoked(
-        &self,
-        map_id: &str,
-        share_id: &str,
-        revoked: bool,
-    ) -> Result<(), AppError>;
-    async fn list_mind_map_share_attachments(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<StoredMindMapShareAttachment>, AppError>;
-    async fn create_mind_map_share_attachment(
-        &self,
-        attachment: NewMindMapShareAttachment,
-    ) -> Result<(), AppError>;
-    async fn get_mind_map_share_attachment(
-        &self,
-        share_id: &str,
-        attachment_id: &str,
-    ) -> Result<Option<StoredMindMapShareAttachment>, AppError>;
-    async fn complete_mind_map_share_attachment_upload(
-        &self,
-        share_id: &str,
-        attachment_id: &str,
-        update: MindMapShareAttachmentUploadUpdate,
-    ) -> Result<(), AppError>;
-
-    async fn list_shared_user_groups_for_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<StoredSharedUserGroup>, AppError>;
-    async fn create_shared_user_group(&self, group: NewSharedUserGroup) -> Result<(), AppError>;
-    async fn get_shared_user_group(&self, id: &str) -> Result<Option<StoredSharedUserGroup>, AppError>;
-    async fn update_shared_user_group(
-        &self,
-        id: &str,
-        owner_user_id: &str,
-        update: SharedUserGroupUpdate,
-    ) -> Result<(), AppError>;
-    async fn delete_shared_user_group(&self, id: &str, owner_user_id: &str) -> Result<(), AppError>;
-
-    async fn list_plaintext_maps_for_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<StoredPlainTextMap>, AppError>;
-    async fn create_plaintext_map(&self, map: NewPlainTextMap) -> Result<(), AppError>;
-    async fn get_plaintext_map(&self, id: &str) -> Result<Option<StoredPlainTextMap>, AppError>;
-    async fn update_plaintext_map(
-        &self,
-        id: &str,
-        update: PlainTextMapUpdate,
-    ) -> Result<(), AppError>;
-    async fn delete_plaintext_map(&self, id: &str, owner_user_id: &str) -> Result<(), AppError>;
 }
 
 pub type DynSqlStore = Arc<dyn SqlStore>;

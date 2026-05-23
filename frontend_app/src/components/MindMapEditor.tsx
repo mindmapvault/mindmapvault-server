@@ -4,7 +4,6 @@
  * Ported features from the dashboard (minus PVS entity links and sharing):
  * • Checkboxes (tri-state: null / false / true)           C key
  * • Progress pie (inline 32 px diameter)                    P key
- * • Icons (lucide-react multi-select)                       I key
  * • Drag-and-drop (free-drag + reparent)
  * • Left / right child layout from root                     Shift+Tab
  * • Extended 54-swatch colour palette
@@ -29,10 +28,10 @@ import { marked } from 'marked';
 import type { MindMapTree, MindMapTreeNode, NodeAttachmentRef, UrlEntry } from '../types';
 import { useThemeStore } from '../store/theme';
 import { ThemePanel } from './ThemePanel';
-import { MindMapIconPicker } from './MindMapIconPicker';
+import { MindMapIconPicker } from './MindMapIconPicker.tsx';
 import { MindMapColorPicker } from './MindMapColorPicker';
 import { MindMapDateDialog } from './MindMapDateDialog';
-import DynamicLucideIcon from './DynamicLucideIcon';
+import DynamicLucideIcon from './DynamicLucideIcon.tsx';
 import { MindMapNotesDialog } from './MindMapNotesDialog';
 import { useUserLabels } from '../hooks/useUserLabels';
 import type { MindMapEditorProps } from './MindMapEditor.types';
@@ -63,6 +62,8 @@ import {
 import { layoutTree, bezierPath } from './MindMapLayout';
 import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils/nodeAttachments';
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
+import { downloadBlob, downloadDataUrl } from '../utils/download';
+import { handleDelegatedLinkClick, openExternalUrl } from '../utils/openExternal';
 import './MindMapEditor.css';
 
 // ── Drag state ────────────────────────────────────────────────────────────────
@@ -79,13 +80,13 @@ interface DragState {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export function DesktopMindMapEditor({
-  initialTree, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack, onShowHistory,
-  onDownloadEncrypted, onDownloadJson, onExportMarkdown, titleChanged, onRenameTitle, renamingTitle,
+  initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
+  onExportMarkdown, titleChanged, onRenameTitle, renamingTitle,
   versionLabel, versionTooltip,
-  onTreeChange, onSelectionChange, onOpenSecurePanel, onNodeFileDrop, onOpenNodeAttachment,
+  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenNodeAttachment,
+  onFetchNodeAttachmentContent,
   onDeleteNodeAttachment,
   onLoadNodeAttachmentPreview,
-  onLoadNodeAttachmentViewer,
 }: MindMapEditorProps) {
   const autosaveMode = useThemeStore((s) => s.autosaveMode);
 
@@ -109,6 +110,12 @@ export function DesktopMindMapEditor({
   const [showMarkdownHelp, setShowMarkdownHelp] = useState(false);
   const [notesDropActive, setNotesDropActive] = useState(false);
   const [notesUploadBusy, setNotesUploadBusy] = useState(false);
+  const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
+  const [attachmentPreviewTitle, setAttachmentPreviewTitle] = useState('');
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null);
+  const [attachmentPreviewType, setAttachmentPreviewType] = useState<'image' | 'pdf' | 'unsupported'>('unsupported');
+  const [attachmentPreviewContentType, setAttachmentPreviewContentType] = useState<string>('');
+  const [attachmentPreviewBusy, setAttachmentPreviewBusy] = useState(false);
 
   // ── View ───────────────────────────────────────────────────────────────────
   const [zoom, setZoom] = useState(() => {
@@ -126,9 +133,10 @@ export function DesktopMindMapEditor({
   });
   const isPanning = useRef(false);
   const lastPan = useRef({ x: 0, y: 0 });
+  const skipNextAutoPan = useRef(false);
 
   // ── UI toggles ─────────────────────────────────────────────────────────────
-  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(() => Boolean(initialShowShortcuts));
   const [shortcutsPos, setShortcutsPos] = useState<{ x: number; y: number } | null>(null);
   const scDragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -296,7 +304,8 @@ export function DesktopMindMapEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
-  const notesImageInputRef = useRef<HTMLInputElement>(null);
+  const notesAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const nodeAttachmentInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const [isDirty, setIsDirty] = useState(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -329,6 +338,7 @@ export function DesktopMindMapEditor({
     setZoom(nextZoom);
     setFocusMode(Boolean(savedView?.focus_mode));
     setFocusAnchorId(nextFocusAnchor);
+    skipNextAutoPan.current = true;
     setIsDirty(false);
   }, [initialTree]);
 
@@ -356,6 +366,62 @@ export function DesktopMindMapEditor({
   useEffect(() => {
     attachmentPreviewUrlsRef.current = attachmentPreviewUrls;
   }, [attachmentPreviewUrls]);
+
+  useEffect(() => {
+    return () => {
+      if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
+    };
+  }, [attachmentPreviewUrl]);
+
+  const closeAttachmentPreview = useCallback(() => {
+    setAttachmentPreviewOpen(false);
+    setAttachmentPreviewBusy(false);
+    setAttachmentPreviewTitle('');
+    setAttachmentPreviewType('unsupported');
+    setAttachmentPreviewContentType('');
+    setAttachmentPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  }, []);
+
+  const previewOrOpenAttachment = useCallback(async (attachment: NodeAttachmentRef) => {
+    const contentType = (attachment.content_type || '').toLowerCase();
+    const isImage = contentType.startsWith('image/');
+    const isPdf = contentType === 'application/pdf' || attachment.name.toLowerCase().endsWith('.pdf');
+
+    if (!isImage && !isPdf) {
+      await onOpenNodeAttachment?.(attachment);
+      return;
+    }
+
+    if (!onFetchNodeAttachmentContent) {
+      await onOpenNodeAttachment?.(attachment);
+      return;
+    }
+
+    setAttachmentPreviewBusy(true);
+    setAttachmentPreviewOpen(true);
+    setAttachmentPreviewTitle(attachment.name || 'Attachment preview');
+    setAttachmentPreviewType(isPdf ? 'pdf' : 'image');
+    setAttachmentPreviewContentType(attachment.content_type || 'application/octet-stream');
+
+    const content = await onFetchNodeAttachmentContent(attachment);
+    if (!content) {
+      setAttachmentPreviewBusy(false);
+      await onOpenNodeAttachment?.(attachment);
+      return;
+    }
+
+    const url = URL.createObjectURL(content.blob);
+    setAttachmentPreviewContentType(content.contentType || attachment.content_type || 'application/octet-stream');
+    setAttachmentPreviewTitle(content.name || attachment.name);
+    setAttachmentPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return url;
+    });
+    setAttachmentPreviewBusy(false);
+  }, [onFetchNodeAttachmentContent, onOpenNodeAttachment]);
 
   useEffect(() => () => {
     Object.values(attachmentPreviewUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
@@ -782,8 +848,13 @@ export function DesktopMindMapEditor({
     for (const id of getTargetIds()) {
       const f = findNode(newRoot, id); if (!f) continue;
       if (!f.node.icons) f.node.icons = [];
-      if (iconName === null) { f.node.icons = []; }
-      else { const idx = f.node.icons.indexOf(iconName); if (idx >= 0) f.node.icons.splice(idx, 1); else f.node.icons.push(iconName); }
+      if (iconName === null) {
+        f.node.icons = [];
+      } else {
+        const idx = f.node.icons.indexOf(iconName);
+        if (idx >= 0) f.node.icons.splice(idx, 1);
+        else f.node.icons.push(iconName);
+      }
     }
     mutate(newRoot);
   }, [root, mutate, getTargetIds]);
@@ -1017,6 +1088,11 @@ export function DesktopMindMapEditor({
 
   // ── Auto-pan to selected node ─────────────────────────────────────────────
   useLayoutEffect(() => {
+    if (disableAutoPanToSelection) return;
+    if (skipNextAutoPan.current) {
+      skipNextAutoPan.current = false;
+      return;
+    }
     const box = layout[selectedId];
     if (!box || !containerRef.current) return;
     const { width, height } = containerRef.current.getBoundingClientRect();
@@ -1031,7 +1107,7 @@ export function DesktopMindMapEditor({
     if (top < 60 + margin) dy = (60 + margin) - top;
     else if (bottom > height - margin) dy = (height - margin) - bottom;
     if (dx !== 0 || dy !== 0) setPan({ x: pan.x + dx, y: pan.y + dy });
-  }, [selectedId, layout]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [disableAutoPanToSelection, selectedId, layout]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Save handler ──────────────────────────────────────────────────────────
   const handleSave = useCallback(() => {
@@ -1063,27 +1139,29 @@ export function DesktopMindMapEditor({
   }, [title, versionLabel]);
 
   // ── PNG export ────────────────────────────────────────────────────────────
-  const exportPng = useCallback(() => {
+  const exportPng = useCallback(async () => {
     const svg = svgRef.current;
     if (!svg) return;
     const parsed = versionTooltip ? new Date(versionTooltip) : null;
     const exportDate = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
 
-    renderSvgToCanvas(svg, versionLabel, exportDate.toISOString())
-      .then((canvas) => {
-        canvas.toBlob((pngBlob) => {
-          if (!pngBlob) return;
-          const url = URL.createObjectURL(pngBlob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${buildExportFileBaseName()}.png`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 10000);
-        }, 'image/png');
-      })
-      .catch(() => showToast('PNG export failed'));
+    try {
+      const canvas = await renderSvgToCanvas(svg, versionLabel, exportDate.toISOString());
+      const pngBlob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
+      if (pngBlob) {
+        try {
+          await downloadBlob(pngBlob, `${buildExportFileBaseName()}.png`);
+          return;
+        } catch (err) {
+          // fall through to data URL fallback
+        }
+      }
+      // Fallback: data URL path
+      const dataUrl = canvas.toDataURL('image/png');
+      await downloadDataUrl(dataUrl, `${buildExportFileBaseName()}.png`);
+    } catch (err) {
+      showToast('PNG export failed');
+    }
   }, [svgRef, buildExportFileBaseName, versionLabel, versionTooltip, showToast]);
 
   // ── PDF export ────────────────────────────────────────────────────────────
@@ -1133,7 +1211,7 @@ export function DesktopMindMapEditor({
       return;
     }
     // When the icon picker or colour picker is open, only allow Escape to
-    // close it — all other keys are handled by the picker so we must not navigate.
+    // close it - all other keys are handled by the picker so we must not navigate.
     if (showIconPicker) {
       if (e.key === 'Escape') { setShowIconPicker(false); e.preventDefault(); }
       return;
@@ -1156,15 +1234,26 @@ export function DesktopMindMapEditor({
     else if (e.key === 'F5') { e.preventDefault(); setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); showToast(focusMode ? 'F5 — Focus off' : 'F5 — Focus on'); }
     else if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); showToast(focusMode ? 'F — Focus off' : 'F — Focus on'); }
     else if (e.key === 'F1') { e.preventDefault(); setShowShortcuts((v) => !v); showToast('F1 — Shortcuts'); }
-    else if (e.key === 'F6' && onOpenSecurePanel) { e.preventDefault(); onOpenSecurePanel('attachments'); showToast('F6 — Attachments'); }
-    else if (e.key === 'F7' && onOpenSecurePanel) { e.preventDefault(); onOpenSecurePanel('shares'); showToast('F7 — Share exports'); }
+    else if (e.key === 'F6') {
+      e.preventDefault();
+      nodeAttachmentInputRef.current?.click();
+      showToast('F6 — Attach encrypted file');
+    }
     else if (e.key === 'Escape') { setShowShortcuts(false); setShowColorPicker(false); setShowIconPicker(false); setShowExportMenu(false); setContextMenu(null); setSearchOpen(false); setMultiSelect(new Set()); setShowTagDialog(false); }
     else if (e.key === 'F9' || (e.ctrlKey && e.key === 'z' && !e.shiftKey)) { e.preventDefault(); undo(); showToast('Undo'); }
     else if (e.key === 'F10' || (e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) { e.preventDefault(); redo(); showToast('Redo'); }
     else if (e.key === ' ') { e.preventDefault(); hasBulk ? bulkToggleCollapse() : toggleCollapse(selectedId); showToast('Space — Fold / Unfold'); }
     else if (e.key === 'Home') { e.preventDefault(); setSelectedId('root'); showToast('Home — Root'); }
-    else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); showToast('C — Checkbox'); }
-    else if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); showToast('P — Progress'); }
+    else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId);
+      showToast('C — Checkbox');
+    }
+    else if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      hasBulk ? bulkCycleProgress() : cycleProgress(selectedId);
+      showToast('P — Progress');
+    }
     else if (e.key.toLowerCase() === 'i' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowIconPicker((v) => !v); showToast('I — Icons'); }
     else if (e.key.toLowerCase() === 'd' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowDateDialog((v) => !v); showToast('D — Dates'); }
     else if (e.key.toLowerCase() === 'u' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowUrlDialog((v) => !v); showToast('U — URL'); }
@@ -1215,9 +1304,9 @@ export function DesktopMindMapEditor({
     }
     else if (e.key === '+') { e.preventDefault(); setZoom((z) => Math.min(3, z + 0.15)); }
     else if (e.key === '-') { e.preventDefault(); setZoom((z) => Math.max(0.3, z - 0.15)); }
-  }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
+    }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
       toggleCheckbox, undo, redo, toggleCollapse, openNotes, showToast, resetNodePosition, resetAllPositions, autoAlignSubtree, showIconPicker, showColorPicker, focusMode, focusedIds,
-      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel]);
+      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1336,6 +1425,30 @@ export function DesktopMindMapEditor({
     setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
   }, [zoom, layout, rectSel, pan, multiSelect]);
 
+  const onTouchStartSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    if (e.touches.length !== 1) return;
+    if ((e.target as SVGElement).closest('[data-node]')) return;
+    const touch = e.touches[0];
+    isPanning.current = true;
+    lastPan.current = { x: touch.clientX, y: touch.clientY };
+    setContextMenu(null);
+    setMultiSelect(new Set());
+  }, []);
+
+  const onTouchMoveSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    if (!isPanning.current || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - lastPan.current.x;
+    const dy = touch.clientY - lastPan.current.y;
+    lastPan.current = { x: touch.clientX, y: touch.clientY };
+    setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
+  }, []);
+
+  const onTouchEndSvg = useCallback(() => {
+    isPanning.current = false;
+    if (svgRef.current) svgRef.current.style.cursor = '';
+  }, []);
+
   const getNodeIdAtClientPoint = useCallback((clientX: number, clientY: number): string | null => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return selectedId !== 'root' ? selectedId : null;
@@ -1384,10 +1497,38 @@ export function DesktopMindMapEditor({
         mutate(newRoot);
         setSelectedId(nodeId);
       }
+      showToast(`${refs.length} encrypted file${refs.length === 1 ? '' : 's'} attached`);
     } finally {
       setFileDropBusyNodeId(null);
     }
-  }, [getNodeIdAtClientPoint, mutate, onNodeFileDrop, root]);
+  }, [getNodeIdAtClientPoint, mutate, onNodeFileDrop, root, showToast]);
+
+  const attachFilesToSelectedNode = useCallback(async (files: FileList | File[] | null) => {
+    if (!onNodeFileDrop || !files || files.length === 0 || selectedId === 'root') return;
+
+    const selectedFiles = Array.from(files);
+    setFileDropBusyNodeId(selectedId);
+    try {
+      const refs = await onNodeFileDrop(selectedId, selectedFiles);
+      if (refs.length === 0) {
+        showToast('Attachment upload failed');
+        return;
+      }
+
+      const newRoot = cloneTree(root);
+      const found = findNode(newRoot, selectedId);
+      if (found) {
+        found.node.attachments = [...(found.node.attachments ?? []), ...refs];
+        found.node.text = appendAttachmentMarkdownLinks(found.node.text, refs);
+        mutate(newRoot);
+      }
+      showToast(`${refs.length} encrypted file${refs.length === 1 ? '' : 's'} attached`);
+    } catch {
+      showToast('Attachment upload failed');
+    } finally {
+      setFileDropBusyNodeId(null);
+    }
+  }, [mutate, onNodeFileDrop, root, selectedId, showToast]);
 
   const onMouseUpSvg = useCallback(() => {
     // Finish rectangle selection
@@ -1510,10 +1651,12 @@ export function DesktopMindMapEditor({
       }
       const cBox = layout[ch.id];
       if (!cBox) continue;
-      const dir = pBox.direction;
-      const x1 = dir === 'left' ? pBox.x : pBox.x + pBox.w;
+      const parentCenterX = pBox.x + pBox.w / 2;
+      const childCenterX = cBox.x + cBox.w / 2;
+      const childOnLeft = childCenterX < parentCenterX;
+      const x1 = childOnLeft ? pBox.x : pBox.x + pBox.w;
       const y1 = pBox.y + pBox.h / 2;
-      const x2 = dir === 'left' ? cBox.x + cBox.w : cBox.x;
+      const x2 = childOnLeft ? cBox.x + cBox.w : cBox.x;
       const y2 = cBox.y + cBox.h / 2;
       const branchColor = ch.color ?? nodeColor;
       const faded = focusMode && focusedIds.size > 0 && !focusedIds.has(node.id) && !focusedIds.has(ch.id);
@@ -1790,12 +1933,28 @@ export function DesktopMindMapEditor({
 
         {(node.urls ?? []).map((urlItem, ui) => {
           const fy = bodyTopY + bodyH + previewHeight + ui * LINK_STRIP_H;
+          const rawUrl = (urlItem.url ?? '').trim();
+          const openUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
           return (
             <g key={`url-${ui}`}>
               <line x1={box.x + 4} y1={fy} x2={box.x + box.w - 4} y2={fy} stroke={ownColor ? '#ffffff33' : 'var(--mm-node-stroke)'} strokeWidth={0.5} />
-              <text x={box.x + 8} y={fy + LINK_STRIP_H / 2 + 1} fontSize={10} fill={ownColor ? '#ffffffcc' : 'var(--accent)'} dominantBaseline="middle"
-                className="mm-url-link" style={{ cursor: 'pointer', textDecoration: 'underline' }}
-                onClick={(e) => { e.stopPropagation(); window.open(urlItem.url, '_blank'); }}>{urlItem.label || urlItem.url}</text>
+              <text
+                x={box.x + 8}
+                y={fy + LINK_STRIP_H / 2 + 1.5}
+                fontSize={10.5}
+                fontWeight={600}
+                fill={ownColor ? '#ffffff' : 'var(--accent)'}
+                dominantBaseline="middle"
+                className={`mm-url-link${ownColor ? ' mm-url-link--on-color' : ''}`}
+                style={{ cursor: 'pointer', textDecoration: 'underline' }}
+                onMouseDown={(e) => { e.stopPropagation(); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void openExternalUrl(openUrl);
+                }}
+              >
+                {urlItem.label || rawUrl}
+              </text>
             </g>
           );
         })}
@@ -1938,6 +2097,16 @@ export function DesktopMindMapEditor({
           )}
         </div>
         <div className="mm-toolbar-right">
+          <input
+            ref={nodeAttachmentInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              void attachFilesToSelectedNode(e.currentTarget.files);
+              e.currentTarget.value = '';
+            }}
+          />
           <button className="mm-btn" onClick={undo} title="Undo (F9)" disabled={historyIdx <= 0}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
           <button className="mm-btn" onClick={redo} title="Redo (F10)" disabled={historyIdx >= history.length - 1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
           <div className="mm-toolbar-sep" />
@@ -1945,8 +2114,8 @@ export function DesktopMindMapEditor({
           <button className="mm-btn" onClick={() => addSibling(selectedId)} title="Add sibling (Enter)" disabled={selectedId === 'root'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5H7m0 0v12m0-12l-3 3m3-3l3 3"/></svg></button>
           <button className="mm-btn mm-btn--danger" onClick={() => hasBulk ? bulkDelete() : deleteNode(selectedId)} title="Delete (Del)" disabled={selectedId === 'root' && !hasBulk}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
           <div className="mm-toolbar-sep" />
-          <button className="mm-btn" onClick={() => hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId)} title="Checkbox (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></button>
-          <button className="mm-btn" onClick={() => hasBulk ? bulkCycleProgress() : cycleProgress(selectedId)} title="Progress (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 017.07 17.07" strokeLinecap="round"/></svg></button>
+          <button className="mm-btn" onClick={() => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }} title="Checkbox (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></button>
+          <button className="mm-btn" onClick={() => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); }} title="Progress (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 017.07 17.07" strokeLinecap="round"/></svg></button>
           <div style={{ position: 'relative' }}>
             <button className="mm-btn mm-btn--color" onClick={() => setShowColorPicker((v) => !v)} title="Color (F4)" style={{ background: selNode?.color ?? 'transparent' }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
@@ -1955,7 +2124,7 @@ export function DesktopMindMapEditor({
           </div>
           <div style={{ position: 'relative' }}>
             <button className="mm-btn" onClick={() => setShowIconPicker((v) => !v)} title="Icons (I)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
-            <MindMapIconPicker open={showIconPicker} currentIcons={selNode?.icons ?? []} onSelect={(name) => hasBulk ? bulkSetIcon(name) : setNodeIcon(selectedId, name)} onClose={() => setShowIconPicker(false)} showToast={showToast} />
+            <MindMapIconPicker open={showIconPicker} currentIcons={selNode?.icons ?? []} onSelect={(name: string | null) => hasBulk ? bulkSetIcon(name) : setNodeIcon(selectedId, name)} onClose={() => setShowIconPicker(false)} showToast={showToast} />
           </div>
           <button
             className={`mm-btn mm-btn--notes${selNodeAttachmentCount > 0 ? ' mm-btn--notes-has-files' : ''}`}
@@ -1981,12 +2150,16 @@ export function DesktopMindMapEditor({
           <button className="mm-btn" onClick={() => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }} title="Search (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
           <div className="mm-toolbar-sep" />
           <button className="mm-btn" onClick={() => setShowShortcuts((v) => !v)} title="Shortcuts (F1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg></button>
-          {onOpenSecurePanel && <button className="mm-btn" onClick={() => onOpenSecurePanel('attachments')} title="Encrypted attachments (F6)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg></button>}
-          {onOpenSecurePanel && <button className="mm-btn" onClick={() => onOpenSecurePanel('shares')} title="Encrypted shares (F7)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>}
-          {onShowHistory && <button className="mm-btn" onClick={onShowHistory} title="Version history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>}
-          {(onDownloadEncrypted || onDownloadJson || onExportMarkdown) && <div className="mm-toolbar-sep" />}
-          {onDownloadEncrypted && <button className="mm-btn" onClick={() => onDownloadEncrypted(buildExportFileBaseName())} title="Download encrypted (.crypt)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v-4m0 4l-2-2m2 2l2-2"/><path d="M20.5 9H18a2 2 0 01-2-2V4.5M20.5 9L16 4.5"/><rect x="4" y="2" width="16" height="20" rx="2"/></svg></button>}
-          {(onDownloadJson || onExportMarkdown) && (
+          <button
+            className="mm-btn"
+            onClick={() => nodeAttachmentInputRef.current?.click()}
+            title="Attach encrypted files to selected node (F6)"
+            disabled={!onNodeFileDrop || selectedId === 'root'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg>
+          </button>
+          {onExportMarkdown && <div className="mm-toolbar-sep" />}
+          {onExportMarkdown && (
             <div style={{ position: 'relative' }}>
               <button className="mm-btn" onClick={() => setShowExportMenu((v) => !v)} title="Export">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
@@ -1996,11 +2169,6 @@ export function DesktopMindMapEditor({
                   style={{ position: 'absolute', right: 0, top: '100%', zIndex: 300, background: 'var(--mm-node-fill, #1e293b)', border: '1px solid var(--mm-node-stroke, #334155)', borderRadius: 8, padding: '4px 0', minWidth: 150, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
-                  {onDownloadJson && (
-                    <button className="mm-context-item" onClick={() => { onDownloadJson({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
-                      JSON (.json)
-                    </button>
-                  )}
                   {onExportMarkdown && (
                     <button className="mm-context-item" onClick={() => { onExportMarkdown({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
                       Markdown (.md)
@@ -2035,6 +2203,7 @@ export function DesktopMindMapEditor({
       {/* ── Canvas ──────────────────────────────────────────────────── */}
       <div className="mm-canvas-wrap">
         <svg ref={svgRef} className="mm-canvas" onWheel={onWheel} onMouseDown={onMouseDownSvg} onMouseMove={onMouseMoveSvg} onMouseUp={onMouseUpSvg} onMouseLeave={onMouseUpSvg}
+          onTouchStart={onTouchStartSvg} onTouchMove={onTouchMoveSvg} onTouchEnd={onTouchEndSvg} onTouchCancel={onTouchEndSvg}
           onDragOver={onDragOverSvg} onDragLeave={onDragLeaveSvg} onDrop={(e) => { void onDropSvg(e); }}
           onClick={() => { setShowColorPicker(false); setContextMenu(null); }}>
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
@@ -2049,11 +2218,6 @@ export function DesktopMindMapEditor({
             })()}
           </g>
         </svg>
-        <div className="mm-zoom-controls" aria-label="Zoom controls">
-          <button className="mm-zoom-btn" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))} title="Zoom out">−</button>
-          <div className="mm-zoom-badge">{Math.round(zoom * 100)}%</div>
-          <button className="mm-zoom-btn" onClick={() => setZoom((z) => Math.min(3, z + 0.15))} title="Zoom in">+</button>
-        </div>
         {fileDropBusyNodeId && <div className="mm-file-drop-badge">Encrypting dropped files…</div>}
         {hoveredNoteData && (
           <div
@@ -2080,24 +2244,10 @@ export function DesktopMindMapEditor({
             <div className="mm-note-hover-title">{hoveredNoteData.title}</div>
             <div
               className="mm-note-hover-text"
-              onClick={(event) => {
-                const target = event.target;
-                if (!(target instanceof HTMLElement)) return;
-                const anchor = target.closest('a[href^="attachment://"]');
-                if (!(anchor instanceof HTMLAnchorElement)) return;
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                const attachmentId = (anchor.getAttribute('href') ?? '').replace(/^attachment:\/\//, '');
-                if (!attachmentId) return;
-
-                const attachment = attachmentById.get(attachmentId);
-                if (attachment) {
-                  void onOpenNodeAttachment?.(attachment);
-                }
-              }}
               dangerouslySetInnerHTML={{ __html: hoveredNoteData.html }}
+              onClick={(e) => {
+                handleDelegatedLinkClick(e as unknown as MouseEvent);
+              }}
             />
           </div>
         )}
@@ -2108,7 +2258,7 @@ export function DesktopMindMapEditor({
       <div className="mm-statusbar">
         <span>{flattenTree(root).length} node{flattenTree(root).length !== 1 ? 's' : ''}{multiSelect.size > 0 ? ` · ${multiSelect.size} selected` : ''}</span>
         <span>{selNode ? `Selected: ${selNode.text.split('\n')[0]}` : ''}</span>
-        <span className="mm-statusbar-hint">Tab=child · Enter=sibling · F2=rename · F6=attachments · F7=shares · Space=fold · C=check · P=progress · I=icon · D=date · Ctrl+F=search</span>
+        <span className="mm-statusbar-hint">Tab=child · Enter=sibling · F2=rename · F6=attach file · Space=fold · C=check · P=progress · I=icon · D=date · Ctrl+F=search</span>
       </div>
 
       {/* ── Context menu ────────────────────────────────────────────── */}
@@ -2133,12 +2283,21 @@ export function DesktopMindMapEditor({
             {cmHasChildren && <button className="mm-context-item" onClick={() => { toggleCollapse(contextMenu.nodeId); setContextMenu(null); }}>{cmNode.collapsed ? 'Expand' : 'Collapse'} <kbd>Space</kbd></button>}
             <button className="mm-context-item" onClick={() => { openNotes(contextMenu.nodeId); setNotesOpen(true); setContextMenu(null); }}>Notes <kbd>F3</kbd></button>
             <button className="mm-context-item" onClick={() => { setShowIconPicker(true); setContextMenu(null); }}>Icon <kbd>I</kbd></button>
-            <button className="mm-context-item" onClick={() => { cmHasCheckbox ? toggleCheckbox(contextMenu.nodeId) : addCheckbox(contextMenu.nodeId); setContextMenu(null); }}>{cmHasCheckbox ? (cmNode.checked ? 'Uncheck' : 'Check') : 'Add Checkbox'} <kbd>C</kbd></button>
+            <button className="mm-context-item" onClick={() => {
+              cmHasCheckbox ? toggleCheckbox(contextMenu.nodeId) : addCheckbox(contextMenu.nodeId);
+              setContextMenu(null);
+            }}>{cmHasCheckbox ? (cmNode.checked ? 'Uncheck' : 'Check') : 'Add Checkbox'} <kbd>C</kbd></button>
             {cmHasCheckbox && <button className="mm-context-item" onClick={() => { removeCheckbox(contextMenu.nodeId); setContextMenu(null); }}>Remove Checkbox</button>}
             <div className="mm-context-item mm-context-progress-row">Progress
               <div className="mm-context-progress-presets">
-                <span className={`mm-ctx-progress${cmNode.progress == null ? ' active' : ''}`} onClick={() => { setNodeProgress(contextMenu.nodeId, null); setContextMenu(null); }}>✕</span>
-                {PROGRESS_PRESETS.map((pct) => (<span key={pct} className={`mm-ctx-progress${cmNode.progress === pct ? ' active' : ''}`} onClick={() => { setNodeProgress(contextMenu.nodeId, pct); setContextMenu(null); }}>{pct}</span>))}
+                <span className={`mm-ctx-progress${cmNode.progress == null ? ' active' : ''}`} onClick={() => {
+                  setNodeProgress(contextMenu.nodeId, null);
+                  setContextMenu(null);
+                }}>✕</span>
+                {PROGRESS_PRESETS.map((pct) => (<span key={pct} className={`mm-ctx-progress${cmNode.progress === pct ? ' active' : ''}`} onClick={() => {
+                  setNodeProgress(contextMenu.nodeId, pct);
+                  setContextMenu(null);
+                }}>{pct}</span>))}
               </div><kbd>P</kbd>
             </div>
             <button className="mm-context-item" onClick={() => { setShowDateDialog(true); setContextMenu(null); }}>Date Planning <kbd>D</kbd></button>
@@ -2255,7 +2414,6 @@ export function DesktopMindMapEditor({
         notesDropActive={notesDropActive}
         nodeTitle={getVisibleNodeTextLines(selNode?.text ?? '')[0] || 'Untitled node'}
         hasNodeNotes={Boolean(selNode?.notes?.trim())}
-        nodeIcons={selNode?.icons ?? []}
         nodeTags={(selNode?.tags ?? []).map((tag) => ({ name: tag, color: userLabels.find((label) => label.name === tag)?.color ?? 'var(--accent)' }))}
         attachmentCount={selNodeAttachmentCount}
         attachmentLabel={selNodeAttachmentLabel}
@@ -2267,7 +2425,7 @@ export function DesktopMindMapEditor({
         notesText={notesText}
         notesPreviewHtml={notesPreviewHtml}
         notesRef={notesRef}
-        notesImageInputRef={notesImageInputRef}
+        notesAttachmentInputRef={notesAttachmentInputRef}
         onClose={() => setNotesOpen(false)}
         onDragOver={(e) => {
           if (!onNodeFileDrop) return;
@@ -2290,10 +2448,9 @@ export function DesktopMindMapEditor({
             setNotesDropActive(false);
           }
         }}
-        onOpenAttachment={(attachment) => { void onOpenNodeAttachment?.(attachment); }}
+        onOpenAttachment={(attachment) => { void previewOrOpenAttachment(attachment); }}
         onDeleteAttachment={(attachment) => { void deleteNotesAttachment(attachment); }}
-        onLoadAttachmentViewer={(attachment) => onLoadNodeAttachmentViewer?.(attachment) ?? Promise.resolve(null)}
-        onAddPictureFiles={(files) => { void uploadFilesIntoNotes(files); }}
+        onAddAttachmentFiles={(files) => { void uploadFilesIntoNotes(files); }}
         onInsertMarkdownAction={insertMarkdownAction}
         onToggleMarkdownHelp={() => setShowMarkdownHelp((v) => !v)}
         onNotesTextChange={setNotesText}
@@ -2310,6 +2467,50 @@ export function DesktopMindMapEditor({
         onSaveNotes={saveNotes}
         onDeleteNotes={deleteNotes}
       />
+
+      {attachmentPreviewOpen && (
+        <>
+          <div className="mm-overlay mm-overlay--attachment-preview" onClick={closeAttachmentPreview} />
+          <div className="mm-attachment-preview-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="mm-attachment-preview-header">
+              <span>{attachmentPreviewTitle || 'Attachment preview'}</span>
+              <button className="mm-btn-icon" onClick={closeAttachmentPreview} title="Close preview">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+            <div className="mm-attachment-preview-body">
+              {attachmentPreviewBusy && <div className="mm-attachment-preview-placeholder">Loading preview…</div>}
+              {!attachmentPreviewBusy && attachmentPreviewType === 'image' && attachmentPreviewUrl && (
+                <img className="mm-attachment-preview-image" src={attachmentPreviewUrl} alt={attachmentPreviewTitle || 'Attachment'} />
+              )}
+              {!attachmentPreviewBusy && attachmentPreviewType === 'pdf' && attachmentPreviewUrl && (
+                <iframe className="mm-attachment-preview-pdf" src={attachmentPreviewUrl} title={attachmentPreviewTitle || 'PDF preview'} />
+              )}
+              {!attachmentPreviewBusy && !attachmentPreviewUrl && (
+                <div className="mm-attachment-preview-placeholder">Preview is unavailable for this file.</div>
+              )}
+            </div>
+            <div className="mm-attachment-preview-footer">
+              <button
+                className="mm-btn mm-btn--primary"
+                onClick={async () => {
+                  if (!attachmentPreviewUrl) return;
+                  const response = await fetch(attachmentPreviewUrl);
+                  const blob = await response.blob();
+                  await downloadBlob(blob, attachmentPreviewTitle || 'attachment');
+                }}
+              >
+                Download
+              </button>
+              <button className="mm-btn" onClick={closeAttachmentPreview}>Close</button>
+              <span className="mm-attachment-preview-meta">{attachmentPreviewContentType}</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── Shortcuts panel ─────────────────────────────────────────── */}
       {showShortcuts && (
@@ -2332,7 +2533,7 @@ export function DesktopMindMapEditor({
           </div>
           <div className="mm-shortcuts-grid">{[
             ['Tab', 'Add child'], ['⇧Tab', 'Add left child (root)'], ['Enter', 'Add sibling'], ['Del / ⌫', 'Delete node'], ['F2', 'Rename'], ['F3', 'Notes'],
-            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Encrypted attachments'], ['F7', 'Encrypted shares'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
+            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
             ['↑ ↓ ← →', 'Navigate (spatial)'], ['⇧+Arrow', 'Multi-select'], ['Ctrl+Click', 'Toggle select'], ['⇧+Drag', 'Rectangle select'],
             ['Home', 'Root'], ['+ −', 'Zoom'], ['Ctrl+S', 'Save'],
             ['C', 'Checkbox'], ['P', 'Progress'], ['I', 'Icons'], ['D', 'Dates'], ['U', 'URL'], ['R', 'Reset pos'],

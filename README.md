@@ -36,71 +36,94 @@ See `docs/SURFACE_OWNERSHIP.md` for the local rule set and `mindmapvault-www/doc
 
 ## Local Configuration
 
-The backend reads environment variables directly and also auto-loads a local `.env` file when present in its working directory.
+For container-based local development, `docker-compose.yml` is the primary configuration file.
+Edit the values in the `server` service there to change host, database, S3, JWT, CORS, and logging settings.
 
-1. Copy `.env.example` to `backend/.env` for local source-based backend runs.
-2. Fill in the values for `SQL_DSN`, `MINIO_*`, `JWT_SECRET`, and `ADMIN_API_TOKEN`.
-3. Keep `POSTGRES_DSN` empty unless you need it for backward-compatible local setups.
+The backend still auto-loads a local `.env` file when you run it directly from `backend/`, but that file is now only a fallback for source-based runs.
 
-Example:
+1. Use `docker compose up -d postgres garage server` for the default local stack.
+2. Edit `docker-compose.yml` directly if you want to change backend settings for the compose stack.
+3. If you run the backend from source, create or edit `backend/.env` with only the values you need for that direct run.
+
+Example source-based setup:
 
 ```powershell
 Copy-Item .env.example backend/.env
 ```
+The `.gitignore` intentionally ignores both `.env` and `backend/.env` so local credentials do not get committed.
 
-If you want to run the packaged container directly, you can reuse the same values in a root-level `.env` file:
+## Clone And Build
 
-```powershell
-Copy-Item .env.example .env
-```
-
-The packaged container can then use that file:
+If you are starting from scratch, clone the repository first and then build the server image:
 
 ```powershell
-docker run --env-file .env -p 8090:8090 ghcr.io/<owner>/mindmapvault-server:latest
+git clone https://github.com/mindmapvault/mindmapvault-server
+cd mindmapvault-server
+docker build -f backend/Dockerfile -t mindmapvault-server:local .
 ```
 
-The new `.gitignore` intentionally ignores both `.env` and `backend/.env` so local credentials do not get committed.
+The same build works from WSL:
+
+```powershell
+wsl.exe -d Ubuntu bash -lc 'git clone https://github.com/mindmapvault/mindmapvault-server && cd mindmapvault-server && docker build -f backend/Dockerfile -t mindmapvault-server:local .'
+```
+
+## Tests
+
+Repository test helpers live under `tests/`.
+
+- `tests/performance/load-test.mjs` runs a JavaScript load test against the backend and defaults to 200 concurrent users.
+
+Run it after starting the local stack:
+
+```powershell
+node tests/performance/load-test.mjs --users 200 --concurrency 200 --no-cleanup
+```
+
+The script registers test users, logs them in, reads account data, updates settings, exercises notifications, creates and edits a vault, and then reads it back. Add `--cleanup` if you want it to attempt vault and profile deletion after the run.
 
 ## Local Dependencies
 
 MindMapVault Server expects two infrastructure services:
 
 - PostgreSQL for application data
-- MinIO for encrypted blob storage
+- an S3-compatible object store for encrypted blob storage
 
-The repository includes `docker-compose.yml` to start both services and an initialization helper that creates the `mindmapvault` bucket and enables versioning.
+The repository includes `docker-compose.yml` to start both services and an initialization flow that creates the `mindmapvault` bucket. Garage is supported as the local S3-compatible backend, but it does not implement bucket versioning, so the server skips that step at startup instead of failing on `PutBucketVersioning`.
+
+The compose file is also the main place to edit the backend runtime settings for the local container stack.
 
 Start only the infrastructure services:
 
 ```powershell
-docker compose up -d postgres minio minio-init
+docker compose up -d postgres garage server
 ```
 
 What you get:
 
 - PostgreSQL on `127.0.0.1:5432`
-- MinIO S3 API on `127.0.0.1:9000`
-- MinIO console on `127.0.0.1:9001`
+- Garage S3 API on `127.0.0.1:9000`
+- Garage admin API on `127.0.0.1:3903`
 
-Default local credentials from the compose stack:
+Default local values from the compose stack:
 
 - PostgreSQL database: `mindmapvault`
 - PostgreSQL user: `postgres`
 - PostgreSQL password: `postgres`
-- MinIO access key: `minioadmin`
-- MinIO secret key: `minioadmin`
 
-These values already match `.env.example`.
+- S3 access key: `garage-access-key`
+- S3 secret key: `garage-secret-key`
+
+Change the inline values in `docker-compose.yml` before using the stack in a shared or long-lived environment.
 
 ## Running The Server Locally
 
 ### Source-Based Backend Run
 
-1. Start PostgreSQL and MinIO:
+1. Start PostgreSQL and the S3-compatible storage backend:
 
 ```powershell
-docker compose up -d postgres minio minio-init
+docker compose up -d postgres garage server
 ```
 
 2. Copy the env template to `backend/.env`:
@@ -123,19 +146,31 @@ wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server/bac
 docker build -f backend/Dockerfile -t mindmapvault-server:local .
 ```
 
-2. Copy the env template to `backend/.env` for compose:
+If you want to run the same build step from WSL, use:
+
+```powershell
+wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server && docker build -f backend/Dockerfile -t mindmapvault-server:local .'
+```
+
+2. Start the local stack with Docker Compose:
+
+```powershell
+docker compose up -d postgres garage server
+```
+
+If you prefer to launch it from WSL, use:
+
+```powershell
+wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server && docker compose up -d postgres garage server'
+```
+
+3. If you want a direct source-based backend run instead of the container image, copy the env template to `backend/.env`:
 
 ```powershell
 Copy-Item .env.example backend/.env
 ```
 
-3. Start the full local stack:
-
-```powershell
-docker compose up -d
-```
-
-The compose stack starts PostgreSQL, MinIO, bucket initialization, and the packaged Server image. The default compose `server` service uses `mindmapvault-server:local`, but you can override it with a published image by setting `SERVER_IMAGE`.
+The compose stack starts PostgreSQL, Garage, bucket initialization, and the packaged Server image. The default compose `server` service uses `mindmapvault-server:local`, but you can override it with a published image by setting `SERVER_IMAGE`.
 
 ## Docker Image
 
@@ -162,6 +197,8 @@ If you prefer the compose-based local stack, the same image is used by `docker c
 ## GitHub Actions Image Publishing
 
 The workflow in `.github/workflows/build-server-image.yml` builds the same single-image Server package.
+
+It uses the current common GitHub Actions versions for container builds, including `actions/checkout@v4` and `docker/build-push-action@v6`.
 
 - pull requests: validate the Docker build without pushing
 - pushes to `main`: publish `latest`, `main`, and `sha-<commit>` tags to GHCR

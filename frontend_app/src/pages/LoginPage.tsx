@@ -3,7 +3,6 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { authApi } from '../api/auth';
 import { DEFAULT_CLOUD_SERVER_URL, setServerUrl } from '../api/client';
 import { DesktopTauriBadge } from '../components/DesktopTauriBadge';
-import { LegalDocumentDialog, type LegalDocument } from '../components/LegalDocumentDialog';
 import { LogoBlock } from '../components/Logo';
 import { aesDecrypt } from '../crypto/aes';
 import { deriveMasterAesKey, deriveMasterKey, deriveAuthToken } from '../crypto/kdf';
@@ -14,6 +13,10 @@ import { useModeStore } from '../store/mode';
 import { useThemeStore } from '../store/theme';
 import type { SessionKeys } from '../types';
 import packageJson from '../../package.json';
+
+const HOSTED_APP_BASE = 'https://app.mindmapvault.com';
+const HOSTED_LOGIN_URL = `${HOSTED_APP_BASE}/login`;
+const HOSTED_REGISTER_URL = `${HOSTED_APP_BASE}/register`;
 
 function validateUsername(value: string) {
   if (!value) {
@@ -54,7 +57,6 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [legalDocumentOpen, setLegalDocumentOpen] = useState<LegalDocument | null>(null);
   const postAuthRedirect = useMemo(() => getSafeRedirectPath(searchParams), [searchParams]);
   const registrationSucceeded = searchParams.get('registered') === '1';
   const appVersion = packageJson.version;
@@ -259,17 +261,6 @@ export function LoginPage() {
               )}
             </button>
 
-            <p className="text-center text-xs leading-5 text-slate-500">
-              By using the hosted service, you acknowledge the{' '}
-              <button type="button" onClick={() => setLegalDocumentOpen('privacy')} className="text-accent hover:underline">
-                Privacy & GDPR Notice
-              </button>
-              {' '}and{' '}
-              <button type="button" onClick={() => setLegalDocumentOpen('terms')} className="text-accent hover:underline">
-                Terms of Service
-              </button>
-              .
-            </p>
           </form>
         </div>
 
@@ -278,6 +269,18 @@ export function LoginPage() {
           <Link to={`/register${searchParams.toString() ? `?${searchParams.toString()}` : ''}`} className="text-accent hover:underline">
             Create one
           </Link>
+        </p>
+
+        <p className="mt-2 text-center text-xs text-slate-500">
+          Prefer the hosted SaaS version?{' '}
+          <a href={HOSTED_LOGIN_URL} className="text-accent hover:underline">
+            Sign in there
+          </a>
+          {' '}or{' '}
+          <a href={HOSTED_REGISTER_URL} className="text-accent hover:underline">
+            create a hosted account
+          </a>
+          .
         </p>
 
         {isDesktop && (
@@ -297,8 +300,6 @@ export function LoginPage() {
       </div>
 
       {isDesktop && <DesktopTauriBadge />}
-
-      <LegalDocumentDialog document={legalDocumentOpen} onClose={() => setLegalDocumentOpen(null)} />
     </div>
   );
 }

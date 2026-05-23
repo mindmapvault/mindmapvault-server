@@ -1,14 +1,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::models::access::{AccessPlan, AccessSource, SubscriptionMode, UiSurface, UserAccessGrant};
+use crate::models::access::{AccessSource, SubscriptionMode, UiSurface, UserAccessGrant};
 
 pub const CLOUD_FREE_LIMIT_BYTES: i64 = 25 * 1024 * 1024;
 pub const CLOUD_PAID_LIMIT_BYTES: i64 = 250 * 1024 * 1024;
 pub const CLOUD_FREE_MAX_ATTACHMENT_SIZE_BYTES: i64 = 5 * 1024 * 1024;
 pub const CLOUD_PAID_MAX_ATTACHMENT_SIZE_BYTES: i64 = 50 * 1024 * 1024;
-pub const CLOUD_FREE_MAX_ACTIVE_SHARES: i64 = 3;
-pub const CLOUD_PAID_MAX_ACTIVE_SHARES: i64 = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -36,25 +34,6 @@ impl SubscriptionTier {
             Self::Free => CLOUD_FREE_MAX_ATTACHMENT_SIZE_BYTES,
             Self::Paid => CLOUD_PAID_MAX_ATTACHMENT_SIZE_BYTES,
         }
-    }
-
-    pub fn max_active_shares(&self) -> i64 {
-        match self {
-            Self::Free => CLOUD_FREE_MAX_ACTIVE_SHARES,
-            Self::Paid => CLOUD_PAID_MAX_ACTIVE_SHARES,
-        }
-    }
-
-    pub fn can_create_public_shares(&self) -> bool {
-        true
-    }
-
-    pub fn can_include_attachments_in_shares(&self) -> bool {
-        matches!(self, Self::Paid)
-    }
-
-    pub fn can_use_plaintext_collaboration(&self) -> bool {
-        true
     }
 
     pub fn can_export_large_maps(&self) -> bool {
@@ -101,7 +80,7 @@ impl Default for Argon2Params {
 
 pub fn effective_access_grants_from_legacy(
     stored_grants: &[UserAccessGrant],
-    effective_tier: SubscriptionTier,
+    _effective_tier: SubscriptionTier,
     effective_plan_source: &str,
     created_at: DateTime<Utc>,
     subscription_current_period_end: Option<DateTime<Utc>>,
@@ -122,10 +101,6 @@ pub fn effective_access_grants_from_legacy(
         grants.push(UserAccessGrant {
             subscription_mode: SubscriptionMode::PrivateEncrypted,
             ui_surface: UiSurface::EncryptedVaultApp,
-            plan: match effective_tier {
-                SubscriptionTier::Free => AccessPlan::Free,
-                SubscriptionTier::Paid => AccessPlan::Paid,
-            },
             source: match effective_plan_source {
                 "admin_override" => AccessSource::AdminOverride,
                 "stripe" => AccessSource::Stripe,
@@ -275,10 +250,6 @@ pub struct AccountCapabilitiesResponse {
     pub plan_tier: String,
     pub storage_limit_bytes: i64,
     pub max_attachment_size_bytes: i64,
-    pub max_active_shares: i64,
-    pub can_create_public_shares: bool,
-    pub can_include_attachments_in_shares: bool,
-    pub can_use_plaintext_collaboration: bool,
     pub can_export_large_maps: bool,
     pub can_use_admin_controls: bool,
 }

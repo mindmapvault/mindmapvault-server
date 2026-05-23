@@ -28,7 +28,6 @@ pub struct UpsertMindMapRequest {
 pub struct UpdateVaultMetaRequest {
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
-    pub vault_sharing_mode: Option<String>,
     pub vault_encryption_mode: Option<String>,
     pub max_versions: Option<u32>,
     /// Re-encrypted vault title (optional — only sent on rename).
@@ -44,7 +43,6 @@ pub struct MindMapListItem {
     pub title_encrypted: String,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
-    pub vault_sharing_mode: String,
     pub vault_encryption_mode: String,
     pub max_versions: u32,
     pub vault_labels: Vec<String>,
@@ -63,7 +61,6 @@ pub struct MindMapDetail {
     pub wrapped_dek: String,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
-    pub vault_sharing_mode: String,
     pub vault_encryption_mode: String,
     pub max_versions: u32,
     pub total_version_count: usize,

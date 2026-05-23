@@ -3,20 +3,19 @@ use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use chrono::Utc;
 use tokio_postgres::{types::Json, Client, NoTls, Row};
 
 use crate::{
     config::AppConfig,
     db::sql_store::{
-        AdminFeedbackRecord, AdminUserAdminUpdate, AdminUserRecord, ManualSubscriptionUpdate,
+        AdminUserAdminUpdate, AdminUserRecord, ManualSubscriptionUpdate,
         MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate,
-        MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate, NewMindMap,
-        NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, NewPlainTextMap,
-        NewSharedUserGroup, NewUser, PlainTextMapUpdate, RotateCredentialsUpdate,
-        SharedUserGroupUpdate, SqlStore,
-        StoredMindMap, StoredMindMapAttachment, StoredMindMapShare,
-        StoredMindMapShareAttachment, StoredPlainTextMap, StoredSharedUserGroup, StoredUser,
+        NewMindMap,
+        NewMindMapAttachment, NewUser,
+        RotateCredentialsUpdate,
+        SqlStore,
+        StoredMindMap, StoredMindMapAttachment,
+        StoredUser,
         UserProfileUpdate,
     },
     error::AppError,
@@ -24,14 +23,7 @@ use crate::{
         access::UserAccessGrant,
         admin_audit::AdminAuditEvent,
         attachment::AttachmentStatus,
-        feedback::NewFeedbackSubmission,
         mindmap::VersionSnapshot,
-        notifications::{
-            NewNotificationEvent, NotificationPriority, StoredNotificationEvent,
-            UserNotificationSettings,
-        },
-        plaintext_map::{DirectUserShare, GroupMember, GroupShare},
-        share::{ShareScope, ShareStatus},
         settings::UserAccountSettings,
         user::{Argon2Params, SubscriptionTier},
     },
@@ -131,52 +123,12 @@ impl PostgresDb {
                     date_format TEXT NOT NULL DEFAULT 'iso',
                     accessibility_reduce_motion BOOLEAN NOT NULL DEFAULT FALSE,
                     sync_appearance_across_devices BOOLEAN NOT NULL DEFAULT FALSE,
-                    default_share_expiry_days INTEGER NOT NULL DEFAULT 7,
-                    default_include_attachments_on_share BOOLEAN NOT NULL DEFAULT FALSE,
                     default_map_layout TEXT NOT NULL DEFAULT 'mindmap',
                     default_map_theme TEXT NOT NULL DEFAULT 'system',
                     default_export_format TEXT NOT NULL DEFAULT 'cryptmind',
                     default_node_style_preset TEXT NOT NULL DEFAULT 'default',
                     user_labels_json TEXT NOT NULL DEFAULT '[]',
                     updated_at TIMESTAMPTZ NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS user_notification_settings (
-                    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                    inbox_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                    email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                    push_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                    desktop_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                    digest_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                    quiet_hours_start TEXT,
-                    quiet_hours_end TEXT,
-                    allow_preview_local_only BOOLEAN NOT NULL DEFAULT TRUE,
-                    share_created BOOLEAN NOT NULL DEFAULT TRUE,
-                    share_revoked BOOLEAN NOT NULL DEFAULT TRUE,
-                    attachment_upload_failures BOOLEAN NOT NULL DEFAULT TRUE,
-                    billing_notices BOOLEAN NOT NULL DEFAULT TRUE,
-                    security_alerts BOOLEAN NOT NULL DEFAULT TRUE,
-                    admin_messages BOOLEAN NOT NULL DEFAULT TRUE,
-                    collaboration_mentions BOOLEAN NOT NULL DEFAULT FALSE,
-                    updated_at TIMESTAMPTZ NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS notification_events (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    event_type TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    priority TEXT NOT NULL,
-                    actor_user_id TEXT,
-                    object_type TEXT NOT NULL,
-                    object_id TEXT NOT NULL,
-                    object_label_safe TEXT,
-                    reason_code TEXT NOT NULL,
-                    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    read_at TIMESTAMPTZ,
-                    saved_at TIMESTAMPTZ,
-                    done_at TIMESTAMPTZ
                 );
 
                 CREATE TABLE IF NOT EXISTS mind_maps (
@@ -193,13 +145,11 @@ impl PostgresDb {
                     version_history JSONB NOT NULL DEFAULT '[]'::jsonb,
                     vault_color TEXT,
                     vault_note_encrypted TEXT,
-                    vault_sharing_mode TEXT NOT NULL DEFAULT 'private',
                     vault_encryption_mode TEXT NOT NULL DEFAULT 'standard',
                     max_versions INTEGER NOT NULL,
                     vault_labels JSONB NOT NULL DEFAULT '[]'::jsonb
                 );
 
-                ALTER TABLE mind_maps ADD COLUMN IF NOT EXISTS vault_sharing_mode TEXT NOT NULL DEFAULT 'private';
                 ALTER TABLE mind_maps ADD COLUMN IF NOT EXISTS vault_encryption_mode TEXT NOT NULL DEFAULT 'standard';
                 ALTER TABLE mind_maps ADD COLUMN IF NOT EXISTS vault_labels JSONB NOT NULL DEFAULT '[]'::jsonb;
                 ALTER TABLE user_account_settings ADD COLUMN IF NOT EXISTS user_labels_json TEXT NOT NULL DEFAULT '[]';
@@ -222,83 +172,6 @@ impl PostgresDb {
                     status TEXT NOT NULL DEFAULT 'pending'
                 );
 
-                CREATE TABLE IF NOT EXISTS mind_map_shares (
-                    id TEXT PRIMARY KEY,
-                    map_id TEXT NOT NULL REFERENCES mind_maps(id) ON DELETE CASCADE,
-                    share_name TEXT NOT NULL,
-                    share_scope TEXT NOT NULL,
-                    s3_key TEXT NOT NULL,
-                    s3_version_id TEXT,
-                    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL,
-                    expires_at TIMESTAMPTZ,
-                    revoked BOOLEAN NOT NULL DEFAULT FALSE,
-                    include_attachments BOOLEAN NOT NULL DEFAULT FALSE,
-                    passphrase_hint TEXT,
-                    content_type TEXT NOT NULL,
-                    size_bytes BIGINT NOT NULL,
-                    encryption_meta JSONB NOT NULL,
-                    checksum_sha256 TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending'
-                );
-
-                CREATE TABLE IF NOT EXISTS mind_map_share_attachments (
-                    id TEXT PRIMARY KEY,
-                    share_id TEXT NOT NULL REFERENCES mind_map_shares(id) ON DELETE CASCADE,
-                    source_attachment_id TEXT,
-                    node_id TEXT,
-                    name TEXT NOT NULL,
-                    sanitized_name TEXT NOT NULL,
-                    content_type TEXT NOT NULL,
-                    size_bytes BIGINT NOT NULL,
-                    s3_key TEXT NOT NULL,
-                    s3_version_id TEXT,
-                    uploaded_at TIMESTAMPTZ NOT NULL,
-                    encryption_meta JSONB NOT NULL,
-                    checksum_sha256 TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending'
-                );
-
-                CREATE TABLE IF NOT EXISTS user_groups (
-                    id TEXT PRIMARY KEY,
-                    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    owner_username TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    members_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS plaintext_maps (
-                    id TEXT PRIMARY KEY,
-                    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    owner_username TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    summary TEXT,
-                    content_json JSONB NOT NULL,
-                    direct_user_shares_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    group_shares_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS feedback_submissions (
-                    id TEXT PRIMARY KEY,
-                    name TEXT,
-                    email TEXT,
-                    subject TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    page_url TEXT,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    is_archived BOOLEAN NOT NULL DEFAULT FALSE,
-                    archived_at TIMESTAMPTZ
-                );
-
-                ALTER TABLE feedback_submissions ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE;
-                ALTER TABLE feedback_submissions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
-
                 CREATE TABLE IF NOT EXISTS admin_audit_events (
                     id TEXT PRIMARY KEY,
                     entity_type TEXT NOT NULL,
@@ -314,17 +187,6 @@ impl PostgresDb {
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_map_id ON mind_map_attachments (map_id, uploaded_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_uploaded_by ON mind_map_attachments (uploaded_by);
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_status ON mind_map_attachments (status);
-                CREATE INDEX IF NOT EXISTS idx_mind_map_shares_map_id ON mind_map_shares (map_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_mind_map_shares_status ON mind_map_shares (status, revoked);
-                CREATE INDEX IF NOT EXISTS idx_mind_map_shares_expires_at ON mind_map_shares (expires_at);
-                CREATE INDEX IF NOT EXISTS idx_mind_map_share_attachments_share_id ON mind_map_share_attachments (share_id, uploaded_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_mind_map_share_attachments_status ON mind_map_share_attachments (status);
-                CREATE INDEX IF NOT EXISTS idx_user_groups_owner_user_id ON user_groups (owner_user_id);
-                CREATE INDEX IF NOT EXISTS idx_plaintext_maps_owner_user_id ON plaintext_maps (owner_user_id);
-                CREATE INDEX IF NOT EXISTS idx_notification_events_user_created_at ON notification_events (user_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_notification_events_user_unread ON notification_events (user_id, read_at, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_notification_events_user_category ON notification_events (user_id, category, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_feedback_submissions_created_at ON feedback_submissions (created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_admin_audit_events_created_at ON admin_audit_events (created_at DESC);",
             )
             .await
@@ -336,84 +198,6 @@ impl PostgresDb {
 
 #[async_trait]
 impl SqlStore for PostgresDb {
-    async fn create_feedback_submission(
-        &self,
-        submission: NewFeedbackSubmission,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO feedback_submissions (
-                    id, name, email, subject, message, page_url, created_at
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7
-                 )",
-                &[
-                    &submission.public_id,
-                    &submission.name,
-                    &submission.email,
-                    &submission.subject,
-                    &submission.message,
-                    &submission.page_url,
-                    &submission.created_at,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn count_feedback_submissions(&self) -> Result<u64, AppError> {
-        let row = self
-            .client
-            .query_one("SELECT COUNT(*)::BIGINT AS count FROM feedback_submissions", &[])
-            .await?;
-
-        Ok(row.get::<_, i64>("count") as u64)
-    }
-
-    async fn list_admin_feedback(&self, limit: usize) -> Result<Vec<AdminFeedbackRecord>, AppError> {
-        let rows = self
-            .client
-            .query(
-                "SELECT id, name, email, subject, message, page_url, created_at, is_archived, archived_at
-                 FROM feedback_submissions
-                 ORDER BY created_at DESC
-                 LIMIT $1",
-                &[&(limit as i64)],
-            )
-            .await?;
-
-        rows.into_iter().map(admin_feedback_from_row).collect()
-    }
-
-    async fn delete_feedback_submission(&self, public_id: &str) -> Result<bool, AppError> {
-        let deleted = self
-            .client
-            .execute(
-                "DELETE FROM feedback_submissions WHERE id = $1",
-                &[&public_id],
-            )
-            .await?;
-
-        Ok(deleted > 0)
-    }
-
-    async fn set_feedback_archived(&self, public_id: &str, archived: bool) -> Result<bool, AppError> {
-        let archived_at = if archived { Some(Utc::now()) } else { None };
-        let updated = self
-            .client
-            .execute(
-                "UPDATE feedback_submissions
-                 SET is_archived = $1,
-                     archived_at = $2
-                 WHERE id = $3",
-                &[&archived, &archived_at, &public_id],
-            )
-            .await?;
-
-        Ok(updated > 0)
-    }
-
     async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError> {
         let rows = self
             .client
@@ -828,8 +612,7 @@ impl SqlStore for PostgresDb {
             .client
             .query_opt(
                 "SELECT user_id, locale, timezone, date_format, accessibility_reduce_motion,
-                        sync_appearance_across_devices, default_share_expiry_days,
-                        default_include_attachments_on_share, default_map_layout,
+                        sync_appearance_across_devices, default_map_layout,
                         default_map_theme, default_export_format, default_node_style_preset,
                         user_labels_json, updated_at
                  FROM user_account_settings
@@ -851,15 +634,13 @@ impl SqlStore for PostgresDb {
             .execute(
                 "INSERT INTO user_account_settings (
                     user_id, locale, timezone, date_format, accessibility_reduce_motion,
-                    sync_appearance_across_devices, default_share_expiry_days,
-                    default_include_attachments_on_share, default_map_layout,
+                    sync_appearance_across_devices, default_map_layout,
                     default_map_theme, default_export_format, default_node_style_preset,
                     user_labels_json, updated_at
                  ) VALUES (
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9,
-                    $10, $11, $12,
-                    $13, $14
+                    $10, $11, $12
                  )
                  ON CONFLICT (user_id) DO UPDATE SET
                     locale = EXCLUDED.locale,
@@ -867,8 +648,6 @@ impl SqlStore for PostgresDb {
                     date_format = EXCLUDED.date_format,
                     accessibility_reduce_motion = EXCLUDED.accessibility_reduce_motion,
                     sync_appearance_across_devices = EXCLUDED.sync_appearance_across_devices,
-                    default_share_expiry_days = EXCLUDED.default_share_expiry_days,
-                    default_include_attachments_on_share = EXCLUDED.default_include_attachments_on_share,
                     default_map_layout = EXCLUDED.default_map_layout,
                     default_map_theme = EXCLUDED.default_map_theme,
                     default_export_format = EXCLUDED.default_export_format,
@@ -882,8 +661,6 @@ impl SqlStore for PostgresDb {
                     &settings.date_format,
                     &settings.accessibility_reduce_motion,
                     &settings.sync_appearance_across_devices,
-                    &settings.default_share_expiry_days,
-                    &settings.default_include_attachments_on_share,
                     &settings.default_map_layout,
                     &settings.default_map_theme,
                     &settings.default_export_format,
@@ -897,231 +674,6 @@ impl SqlStore for PostgresDb {
         Ok(())
     }
 
-    async fn load_user_notification_settings(
-        &self,
-        user_id: &str,
-    ) -> Result<Option<UserNotificationSettings>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT user_id, inbox_enabled, email_enabled, push_enabled, desktop_enabled,
-                        digest_enabled, quiet_hours_start, quiet_hours_end,
-                        allow_preview_local_only, share_created, share_revoked,
-                        attachment_upload_failures, billing_notices, security_alerts,
-                        admin_messages, collaboration_mentions, updated_at
-                 FROM user_notification_settings
-                 WHERE user_id = $1
-                 LIMIT 1",
-                &[&user_id],
-            )
-            .await?;
-
-        row.map(user_notification_settings_from_row).transpose()
-    }
-
-    async fn upsert_user_notification_settings(
-        &self,
-        user_id: &str,
-        settings: UserNotificationSettings,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO user_notification_settings (
-                    user_id, inbox_enabled, email_enabled, push_enabled, desktop_enabled,
-                    digest_enabled, quiet_hours_start, quiet_hours_end,
-                    allow_preview_local_only, share_created, share_revoked,
-                    attachment_upload_failures, billing_notices, security_alerts,
-                    admin_messages, collaboration_mentions, updated_at
-                 ) VALUES (
-                    $1, $2, $3, $4, $5,
-                    $6, $7, $8,
-                    $9, $10, $11,
-                    $12, $13, $14,
-                    $15, $16, $17
-                 )
-                 ON CONFLICT (user_id) DO UPDATE SET
-                    inbox_enabled = EXCLUDED.inbox_enabled,
-                    email_enabled = EXCLUDED.email_enabled,
-                    push_enabled = EXCLUDED.push_enabled,
-                    desktop_enabled = EXCLUDED.desktop_enabled,
-                    digest_enabled = EXCLUDED.digest_enabled,
-                    quiet_hours_start = EXCLUDED.quiet_hours_start,
-                    quiet_hours_end = EXCLUDED.quiet_hours_end,
-                    allow_preview_local_only = EXCLUDED.allow_preview_local_only,
-                    share_created = EXCLUDED.share_created,
-                    share_revoked = EXCLUDED.share_revoked,
-                    attachment_upload_failures = EXCLUDED.attachment_upload_failures,
-                    billing_notices = EXCLUDED.billing_notices,
-                    security_alerts = EXCLUDED.security_alerts,
-                    admin_messages = EXCLUDED.admin_messages,
-                    collaboration_mentions = EXCLUDED.collaboration_mentions,
-                    updated_at = EXCLUDED.updated_at",
-                &[
-                    &user_id,
-                    &settings.inbox_enabled,
-                    &settings.email_enabled,
-                    &settings.push_enabled,
-                    &settings.desktop_enabled,
-                    &settings.digest_enabled,
-                    &settings.quiet_hours_start,
-                    &settings.quiet_hours_end,
-                    &settings.allow_preview_local_only,
-                    &settings.share_created,
-                    &settings.share_revoked,
-                    &settings.attachment_upload_failures,
-                    &settings.billing_notices,
-                    &settings.security_alerts,
-                    &settings.admin_messages,
-                    &settings.collaboration_mentions,
-                    &settings.updated_at,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn list_notification_events(
-        &self,
-        user_id: &str,
-        category: Option<&str>,
-        state: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<StoredNotificationEvent>, AppError> {
-        let rows = self
-            .client
-            .query(
-                "SELECT id, user_id, event_type, category, priority, actor_user_id,
-                        object_type, object_id, object_label_safe, reason_code,
-                        payload_json, created_at, read_at, saved_at, done_at
-                 FROM notification_events
-                 WHERE user_id = $1
-                   AND ($2::TEXT IS NULL OR category = $2)
-                   AND (
-                        $3::TEXT IS NULL
-                        OR $3 = 'all'
-                        OR ($3 = 'unread' AND read_at IS NULL)
-                        OR ($3 = 'saved' AND saved_at IS NOT NULL)
-                        OR ($3 = 'done' AND done_at IS NOT NULL)
-                   )
-                 ORDER BY created_at DESC
-                 LIMIT $4",
-                &[&user_id, &category, &state, &(limit as i64)],
-            )
-            .await?;
-
-        rows.into_iter().map(notification_event_from_row).collect()
-    }
-
-    async fn create_notification_event(
-        &self,
-        event: NewNotificationEvent,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO notification_events (
-                    id, user_id, event_type, category, priority, actor_user_id,
-                    object_type, object_id, object_label_safe, reason_code,
-                    payload_json, created_at
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6,
-                    $7, $8, $9, $10,
-                    $11, $12
-                 )",
-                &[
-                    &event.id,
-                    &event.user_id,
-                    &event.event_type,
-                    &event.category,
-                    &event.priority.as_str(),
-                    &event.actor_user_id,
-                    &event.object_type,
-                    &event.object_id,
-                    &event.object_label_safe,
-                    &event.reason_code,
-                    &Json(&event.payload_json),
-                    &event.created_at,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn mark_notification_read(
-        &self,
-        user_id: &str,
-        notification_id: &str,
-        read: bool,
-    ) -> Result<bool, AppError> {
-        let read_at = if read { Some(Utc::now()) } else { None };
-        let updated = self
-            .client
-            .execute(
-                "UPDATE notification_events
-                 SET read_at = $1
-                 WHERE user_id = $2 AND id = $3",
-                &[&read_at, &user_id, &notification_id],
-            )
-            .await?;
-
-        Ok(updated > 0)
-    }
-
-    async fn mark_notification_saved(
-        &self,
-        user_id: &str,
-        notification_id: &str,
-        saved: bool,
-    ) -> Result<bool, AppError> {
-        let saved_at = if saved { Some(Utc::now()) } else { None };
-        let updated = self
-            .client
-            .execute(
-                "UPDATE notification_events
-                 SET saved_at = $1
-                 WHERE user_id = $2 AND id = $3",
-                &[&saved_at, &user_id, &notification_id],
-            )
-            .await?;
-
-        Ok(updated > 0)
-    }
-
-    async fn mark_notification_done(
-        &self,
-        user_id: &str,
-        notification_id: &str,
-        done: bool,
-    ) -> Result<bool, AppError> {
-        let done_at = if done { Some(Utc::now()) } else { None };
-        let updated = self
-            .client
-            .execute(
-                "UPDATE notification_events
-                 SET done_at = $1
-                 WHERE user_id = $2 AND id = $3",
-                &[&done_at, &user_id, &notification_id],
-            )
-            .await?;
-
-        Ok(updated > 0)
-    }
-
-    async fn mark_all_notifications_read(&self, user_id: &str) -> Result<u64, AppError> {
-        let updated = self
-            .client
-            .execute(
-                "UPDATE notification_events
-                 SET read_at = NOW()
-                 WHERE user_id = $1 AND read_at IS NULL",
-                &[&user_id],
-            )
-            .await?;
-
-        Ok(updated)
-    }
-
     async fn list_mind_maps(&self, user_id: &str) -> Result<Vec<StoredMindMap>, AppError> {
         let rows = self
             .client
@@ -1129,7 +681,7 @@ impl SqlStore for PostgresDb {
                 "SELECT
                     id, user_id, title_encrypted, minio_object_key, eph_classical_public,
                     eph_pq_ciphertext, wrapped_dek, created_at, updated_at, minio_version_id,
-                    version_history, vault_color, vault_note_encrypted, vault_sharing_mode,
+                    version_history, vault_color, vault_note_encrypted,
                     vault_encryption_mode, max_versions, vault_labels
                  FROM mind_maps
                  WHERE user_id = $1
@@ -1147,13 +699,13 @@ impl SqlStore for PostgresDb {
                 "INSERT INTO mind_maps (
                     id, user_id, title_encrypted, minio_object_key, eph_classical_public,
                     eph_pq_ciphertext, wrapped_dek, created_at, updated_at, minio_version_id,
-                    version_history, vault_color, vault_note_encrypted, vault_sharing_mode,
+                    version_history, vault_color, vault_note_encrypted,
                     vault_encryption_mode, max_versions, vault_labels
                  ) VALUES (
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9, $10,
-                    $11, $12, $13, $14,
-                    $15, $16, $17
+                    $11, $12, $13,
+                    $14, $15, $16
                  )",
                 &[
                     &map.id,
@@ -1169,7 +721,6 @@ impl SqlStore for PostgresDb {
                     &Json(&map.version_history),
                     &map.vault_color,
                     &map.vault_note_encrypted,
-                    &map.vault_sharing_mode,
                     &map.vault_encryption_mode,
                     &(map.max_versions as i32),
                     &Json(&map.vault_labels),
@@ -1191,7 +742,7 @@ impl SqlStore for PostgresDb {
                 "SELECT
                     id, user_id, title_encrypted, minio_object_key, eph_classical_public,
                     eph_pq_ciphertext, wrapped_dek, created_at, updated_at, minio_version_id,
-                    version_history, vault_color, vault_note_encrypted, vault_sharing_mode,
+                    version_history, vault_color, vault_note_encrypted,
                     vault_encryption_mode, max_versions, vault_labels
                  FROM mind_maps
                  WHERE id = $1 AND user_id = $2
@@ -1274,17 +825,15 @@ impl SqlStore for PostgresDb {
                 "UPDATE mind_maps
                  SET vault_color = $1,
                      vault_note_encrypted = $2,
-                     vault_sharing_mode = $3,
-                     vault_encryption_mode = $4,
-                     max_versions = $5,
-                     title_encrypted = $6,
-                     updated_at = $7,
-                     vault_labels = $8
-                 WHERE id = $9 AND user_id = $10",
+                     vault_encryption_mode = $3,
+                     max_versions = $4,
+                     title_encrypted = $5,
+                     updated_at = $6,
+                     vault_labels = $7
+                 WHERE id = $8 AND user_id = $9",
                 &[
                     &update.vault_color,
                     &update.vault_note_encrypted,
-                    &update.vault_sharing_mode,
                     &update.vault_encryption_mode,
                     &(update.max_versions as i32),
                     &update.title_encrypted,
@@ -1438,477 +987,9 @@ impl SqlStore for PostgresDb {
 
         Ok(())
     }
-
-    async fn list_mind_map_shares(&self, map_id: &str) -> Result<Vec<StoredMindMapShare>, AppError> {
-        let rows = self
-            .client
-            .query(
-                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
-                        created_at, updated_at, expires_at, revoked, include_attachments,
-                        passphrase_hint, content_type, size_bytes, encryption_meta,
-                        checksum_sha256, status
-                 FROM mind_map_shares
-                 WHERE map_id = $1
-                 ORDER BY created_at DESC",
-                &[&map_id],
-            )
-            .await?;
-
-        rows.into_iter().map(stored_mind_map_share_from_row).collect()
-    }
-
-    async fn create_mind_map_share(&self, share: NewMindMapShare) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO mind_map_shares (
-                    id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
-                    created_at, updated_at, expires_at, revoked, include_attachments,
-                    passphrase_hint, content_type, size_bytes, encryption_meta,
-                    checksum_sha256, status
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7,
-                    $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16,
-                    $17, $18
-                 )",
-                &[
-                    &share.id,
-                    &share.map_id,
-                    &share.share_name,
-                    &share.scope.as_str(),
-                    &share.s3_key,
-                    &share.s3_version_id,
-                    &share.created_by,
-                    &share.created_at,
-                    &share.updated_at,
-                    &share.expires_at,
-                    &share.revoked,
-                    &share.include_attachments,
-                    &share.passphrase_hint,
-                    &share.content_type,
-                    &share.size_bytes,
-                    &Json(&share.encryption_meta),
-                    &share.checksum_sha256,
-                    &share.status.as_str(),
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get_mind_map_share(
-        &self,
-        map_id: &str,
-        share_id: &str,
-    ) -> Result<Option<StoredMindMapShare>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
-                        created_at, updated_at, expires_at, revoked, include_attachments,
-                        passphrase_hint, content_type, size_bytes, encryption_meta,
-                        checksum_sha256, status
-                 FROM mind_map_shares
-                 WHERE map_id = $1 AND id = $2
-                 LIMIT 1",
-                &[&map_id, &share_id],
-            )
-            .await?;
-
-        row.map(stored_mind_map_share_from_row).transpose()
-    }
-
-    async fn get_public_mind_map_share(&self, share_id: &str) -> Result<Option<StoredMindMapShare>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
-                        created_at, updated_at, expires_at, revoked, include_attachments,
-                        passphrase_hint, content_type, size_bytes, encryption_meta,
-                        checksum_sha256, status
-                 FROM mind_map_shares
-                 WHERE id = $1
-                 LIMIT 1",
-                &[&share_id],
-            )
-            .await?;
-
-        row.map(stored_mind_map_share_from_row).transpose()
-    }
-
-    async fn complete_mind_map_share_upload(
-        &self,
-        map_id: &str,
-        share_id: &str,
-        update: MindMapShareUploadUpdate,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "UPDATE mind_map_shares
-                 SET s3_version_id = $1,
-                     checksum_sha256 = $2,
-                     status = $3,
-                     updated_at = NOW()
-                 WHERE map_id = $4 AND id = $5",
-                &[
-                    &update.s3_version_id,
-                    &update.checksum_sha256,
-                    &update.status.as_str(),
-                    &map_id,
-                    &share_id,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn set_mind_map_share_revoked(
-        &self,
-        map_id: &str,
-        share_id: &str,
-        revoked: bool,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "UPDATE mind_map_shares
-                 SET revoked = $1,
-                     status = CASE WHEN $1 THEN 'revoked' ELSE status END,
-                     updated_at = NOW()
-                 WHERE map_id = $2 AND id = $3",
-                &[&revoked, &map_id, &share_id],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn list_mind_map_share_attachments(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<StoredMindMapShareAttachment>, AppError> {
-        let rows = self
-            .client
-            .query(
-                "SELECT id, share_id, source_attachment_id, node_id, name, sanitized_name,
-                        content_type, size_bytes, s3_key, s3_version_id, uploaded_at,
-                        encryption_meta, checksum_sha256, status
-                 FROM mind_map_share_attachments
-                 WHERE share_id = $1 AND status <> 'deleted'
-                 ORDER BY uploaded_at DESC",
-                &[&share_id],
-            )
-            .await?;
-
-        rows.into_iter()
-            .map(stored_mind_map_share_attachment_from_row)
-            .collect()
-    }
-
-    async fn create_mind_map_share_attachment(
-        &self,
-        attachment: NewMindMapShareAttachment,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO mind_map_share_attachments (
-                    id, share_id, source_attachment_id, node_id, name, sanitized_name,
-                    content_type, size_bytes, s3_key, s3_version_id, uploaded_at,
-                    encryption_meta, checksum_sha256, status
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6,
-                    $7, $8, $9, $10, $11,
-                    $12, $13, $14
-                 )",
-                &[
-                    &attachment.id,
-                    &attachment.share_id,
-                    &attachment.source_attachment_id,
-                    &attachment.node_id,
-                    &attachment.name,
-                    &attachment.sanitized_name,
-                    &attachment.content_type,
-                    &attachment.size_bytes,
-                    &attachment.s3_key,
-                    &attachment.s3_version_id,
-                    &attachment.uploaded_at,
-                    &Json(&attachment.encryption_meta),
-                    &attachment.checksum_sha256,
-                    &attachment.status.as_str(),
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get_mind_map_share_attachment(
-        &self,
-        share_id: &str,
-        attachment_id: &str,
-    ) -> Result<Option<StoredMindMapShareAttachment>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT id, share_id, source_attachment_id, node_id, name, sanitized_name,
-                        content_type, size_bytes, s3_key, s3_version_id, uploaded_at,
-                        encryption_meta, checksum_sha256, status
-                 FROM mind_map_share_attachments
-                 WHERE share_id = $1 AND id = $2 AND status <> 'deleted'
-                 LIMIT 1",
-                &[&share_id, &attachment_id],
-            )
-            .await?;
-
-        row.map(stored_mind_map_share_attachment_from_row).transpose()
-    }
-
-    async fn complete_mind_map_share_attachment_upload(
-        &self,
-        share_id: &str,
-        attachment_id: &str,
-        update: MindMapShareAttachmentUploadUpdate,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "UPDATE mind_map_share_attachments
-                 SET s3_version_id = $1,
-                     checksum_sha256 = $2,
-                     status = $3
-                 WHERE share_id = $4 AND id = $5 AND status <> 'deleted'",
-                &[
-                    &update.s3_version_id,
-                    &update.checksum_sha256,
-                    &update.status.as_str(),
-                    &share_id,
-                    &attachment_id,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn list_shared_user_groups_for_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<StoredSharedUserGroup>, AppError> {
-        let rows = self
-            .client
-            .query(
-                "SELECT id, owner_user_id, owner_username, name, description, members_json, created_at, updated_at
-                 FROM user_groups
-                 ORDER BY updated_at DESC",
-                &[],
-            )
-            .await?;
-
-        let groups = rows
-            .into_iter()
-            .map(stored_shared_user_group_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(groups
-            .into_iter()
-            .filter(|group| group.owner_user_id == user_id || group.members.iter().any(|member| member.user_id == user_id))
-            .collect())
-    }
-
-    async fn create_shared_user_group(&self, group: NewSharedUserGroup) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO user_groups (
-                    id, owner_user_id, owner_username, name, description, members_json, created_at, updated_at
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8
-                 )",
-                &[
-                    &group.id,
-                    &group.owner_user_id,
-                    &group.owner_username,
-                    &group.name,
-                    &group.description,
-                    &Json(&group.members),
-                    &group.created_at,
-                    &group.updated_at,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get_shared_user_group(&self, id: &str) -> Result<Option<StoredSharedUserGroup>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT id, owner_user_id, owner_username, name, description, members_json, created_at, updated_at
-                 FROM user_groups
-                 WHERE id = $1
-                 LIMIT 1",
-                &[&id],
-            )
-            .await?;
-
-        row.map(stored_shared_user_group_from_row).transpose()
-    }
-
-    async fn update_shared_user_group(
-        &self,
-        id: &str,
-        owner_user_id: &str,
-        update: SharedUserGroupUpdate,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "UPDATE user_groups
-                 SET name = $1,
-                     description = $2,
-                     members_json = $3,
-                     updated_at = $4
-                 WHERE id = $5 AND owner_user_id = $6",
-                &[
-                    &update.name,
-                    &update.description,
-                    &Json(&update.members),
-                    &update.updated_at,
-                    &id,
-                    &owner_user_id,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn delete_shared_user_group(&self, id: &str, owner_user_id: &str) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "DELETE FROM user_groups WHERE id = $1 AND owner_user_id = $2",
-                &[&id, &owner_user_id],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn list_plaintext_maps_for_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<StoredPlainTextMap>, AppError> {
-        let groups = self.list_shared_user_groups_for_user(user_id).await?;
-        let rows = self
-            .client
-            .query(
-                "SELECT id, owner_user_id, owner_username, title, summary, content_json,
-                        direct_user_shares_json, group_shares_json, created_at, updated_at
-                 FROM plaintext_maps
-                 ORDER BY updated_at DESC",
-                &[],
-            )
-            .await?;
-
-        let maps = rows
-            .into_iter()
-            .map(stored_plaintext_map_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(maps
-            .into_iter()
-            .filter(|map| plaintext_map_visible_to_user(map, user_id, &groups))
-            .collect())
-    }
-
-    async fn create_plaintext_map(&self, map: NewPlainTextMap) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO plaintext_maps (
-                    id, owner_user_id, owner_username, title, summary, content_json,
-                    direct_user_shares_json, group_shares_json, created_at, updated_at
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6,
-                    $7, $8, $9, $10
-                 )",
-                &[
-                    &map.id,
-                    &map.owner_user_id,
-                    &map.owner_username,
-                    &map.title,
-                    &map.summary,
-                    &Json(&map.content_json),
-                    &Json(&map.direct_user_shares),
-                    &Json(&map.group_shares),
-                    &map.created_at,
-                    &map.updated_at,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get_plaintext_map(&self, id: &str) -> Result<Option<StoredPlainTextMap>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT id, owner_user_id, owner_username, title, summary, content_json,
-                        direct_user_shares_json, group_shares_json, created_at, updated_at
-                 FROM plaintext_maps
-                 WHERE id = $1
-                 LIMIT 1",
-                &[&id],
-            )
-            .await?;
-
-        row.map(stored_plaintext_map_from_row).transpose()
-    }
-
-    async fn update_plaintext_map(
-        &self,
-        id: &str,
-        update: PlainTextMapUpdate,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "UPDATE plaintext_maps
-                 SET title = $1,
-                     summary = $2,
-                     content_json = $3,
-                     direct_user_shares_json = $4,
-                     group_shares_json = $5,
-                     updated_at = $6
-                 WHERE id = $7",
-                &[
-                    &update.title,
-                    &update.summary,
-                    &Json(&update.content_json),
-                    &Json(&update.direct_user_shares),
-                    &Json(&update.group_shares),
-                    &update.updated_at,
-                    &id,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn delete_plaintext_map(&self, id: &str, owner_user_id: &str) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "DELETE FROM plaintext_maps WHERE id = $1 AND owner_user_id = $2",
-                &[&id, &owner_user_id],
-            )
-            .await?;
-
-        Ok(())
-    }
 }
 
 fn stored_user_from_row(row: Row) -> Result<StoredUser, AppError> {
-    let subscription_tier_raw: String = row.get("subscription_tier");
-
     Ok(StoredUser {
         id: row.get("id"),
         username: row.get("username"),
@@ -1921,7 +1002,7 @@ fn stored_user_from_row(row: Row) -> Result<StoredUser, AppError> {
         pq_priv_encrypted: row.get("pq_priv_encrypted"),
         key_version: row.get::<_, i32>("key_version") as u32,
         created_at: row.get("created_at"),
-        subscription_tier: parse_subscription_tier(&subscription_tier_raw),
+        subscription_tier: parse_subscription_tier(&row.get::<_, String>("subscription_tier")),
         stripe_customer_id: row.get("stripe_customer_id"),
         stripe_subscription_id: row.get("stripe_subscription_id"),
         stripe_subscription_status: row.get("stripe_subscription_status"),
@@ -1940,20 +1021,6 @@ fn stored_user_from_row(row: Row) -> Result<StoredUser, AppError> {
     })
 }
 
-fn admin_feedback_from_row(row: Row) -> Result<AdminFeedbackRecord, AppError> {
-    Ok(AdminFeedbackRecord {
-        public_id: row.get("id"),
-        name: row.get("name"),
-        email: row.get("email"),
-        subject: row.get("subject"),
-        message: row.get("message"),
-        page_url: row.get("page_url"),
-        created_at: row.get("created_at"),
-        is_archived: row.get("is_archived"),
-        archived_at: row.get("archived_at"),
-    })
-}
-
 fn admin_audit_from_row(row: Row) -> Result<AdminAuditEvent, AppError> {
     Ok(AdminAuditEvent {
         id: None,
@@ -1969,13 +1036,11 @@ fn admin_audit_from_row(row: Row) -> Result<AdminAuditEvent, AppError> {
 }
 
 fn admin_user_from_row(row: Row) -> Result<AdminUserRecord, AppError> {
-    let subscription_tier_raw: String = row.get("subscription_tier");
-
     Ok(AdminUserRecord {
         id: row.get("id"),
         username: row.get("username"),
         created_at: row.get("created_at"),
-        subscription_tier: parse_subscription_tier(&subscription_tier_raw),
+        subscription_tier: parse_subscription_tier(&row.get::<_, String>("subscription_tier")),
         stripe_customer_id: row.get("stripe_customer_id"),
         stripe_subscription_id: row.get("stripe_subscription_id"),
         stripe_subscription_status: row.get("stripe_subscription_status"),
@@ -2009,59 +1074,9 @@ fn stored_mind_map_from_row(row: Row) -> Result<StoredMindMap, AppError> {
         version_history: row.get::<_, Json<Vec<VersionSnapshot>>>("version_history").0,
         vault_color: row.get("vault_color"),
         vault_note_encrypted: row.get("vault_note_encrypted"),
-        vault_sharing_mode: row.get("vault_sharing_mode"),
         vault_encryption_mode: row.get("vault_encryption_mode"),
         max_versions: row.get::<_, i32>("max_versions") as u32,
         vault_labels: row.get::<_, Json<Vec<String>>>("vault_labels").0,
-    })
-}
-
-fn stored_shared_user_group_from_row(row: Row) -> Result<StoredSharedUserGroup, AppError> {
-    Ok(StoredSharedUserGroup {
-        id: row.get("id"),
-        owner_user_id: row.get("owner_user_id"),
-        owner_username: row.get("owner_username"),
-        name: row.get("name"),
-        description: row.get("description"),
-        members: row.get::<_, Json<Vec<GroupMember>>>("members_json").0,
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    })
-}
-
-fn stored_plaintext_map_from_row(row: Row) -> Result<StoredPlainTextMap, AppError> {
-    Ok(StoredPlainTextMap {
-        id: row.get("id"),
-        owner_user_id: row.get("owner_user_id"),
-        owner_username: row.get("owner_username"),
-        title: row.get("title"),
-        summary: row.get("summary"),
-        content_json: row.get::<_, Json<serde_json::Value>>("content_json").0,
-        direct_user_shares: row.get::<_, Json<Vec<DirectUserShare>>>("direct_user_shares_json").0,
-        group_shares: row.get::<_, Json<Vec<GroupShare>>>("group_shares_json").0,
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    })
-}
-
-fn plaintext_map_visible_to_user(
-    map: &StoredPlainTextMap,
-    user_id: &str,
-    groups: &[StoredSharedUserGroup],
-) -> bool {
-    if map.owner_user_id == user_id {
-        return true;
-    }
-
-    if map.direct_user_shares.iter().any(|share| share.user_id == user_id) {
-        return true;
-    }
-
-    map.group_shares.iter().any(|share| {
-        groups.iter().any(|group| {
-            group.id == share.group_id
-                && (group.owner_user_id == user_id || group.members.iter().any(|member| member.user_id == user_id))
-        })
     })
 }
 
@@ -2089,50 +1104,6 @@ fn stored_mind_map_attachment_from_row(row: Row) -> Result<StoredMindMapAttachme
     })
 }
 
-fn stored_mind_map_share_from_row(row: Row) -> Result<StoredMindMapShare, AppError> {
-    Ok(StoredMindMapShare {
-        id: row.get("id"),
-        map_id: row.get("map_id"),
-        share_name: row.get("share_name"),
-        scope: ShareScope::from_str(&row.get::<_, String>("share_scope")),
-        s3_key: row.get("s3_key"),
-        s3_version_id: row.get("s3_version_id"),
-        created_by: row.get("created_by"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-        expires_at: row.get("expires_at"),
-        revoked: row.get("revoked"),
-        include_attachments: row.get("include_attachments"),
-        passphrase_hint: row.get("passphrase_hint"),
-        content_type: row.get("content_type"),
-        size_bytes: row.get("size_bytes"),
-        encryption_meta: row.get::<_, Json<serde_json::Value>>("encryption_meta").0,
-        checksum_sha256: row.get("checksum_sha256"),
-        status: ShareStatus::from_str(&row.get::<_, String>("status")),
-    })
-}
-
-fn stored_mind_map_share_attachment_from_row(
-    row: Row,
-) -> Result<StoredMindMapShareAttachment, AppError> {
-    Ok(StoredMindMapShareAttachment {
-        id: row.get("id"),
-        share_id: row.get("share_id"),
-        source_attachment_id: row.get("source_attachment_id"),
-        node_id: row.get("node_id"),
-        name: row.get("name"),
-        sanitized_name: row.get("sanitized_name"),
-        content_type: row.get("content_type"),
-        size_bytes: row.get("size_bytes"),
-        s3_key: row.get("s3_key"),
-        s3_version_id: row.get("s3_version_id"),
-        uploaded_at: row.get("uploaded_at"),
-        encryption_meta: row.get::<_, Json<serde_json::Value>>("encryption_meta").0,
-        checksum_sha256: row.get("checksum_sha256"),
-        status: AttachmentStatus::from_str(&row.get::<_, String>("status")),
-    })
-}
-
 fn user_account_settings_from_row(row: Row) -> Result<UserAccountSettings, AppError> {
     Ok(UserAccountSettings {
         locale: row.get("locale"),
@@ -2140,56 +1111,11 @@ fn user_account_settings_from_row(row: Row) -> Result<UserAccountSettings, AppEr
         date_format: row.get("date_format"),
         accessibility_reduce_motion: row.get("accessibility_reduce_motion"),
         sync_appearance_across_devices: row.get("sync_appearance_across_devices"),
-        default_share_expiry_days: row.get("default_share_expiry_days"),
-        default_include_attachments_on_share: row.get("default_include_attachments_on_share"),
         default_map_layout: row.get("default_map_layout"),
         default_map_theme: row.get("default_map_theme"),
         default_export_format: row.get("default_export_format"),
         default_node_style_preset: row.get("default_node_style_preset"),
         user_labels_json: row.try_get("user_labels_json").unwrap_or_else(|_| "[]".to_string()),
         updated_at: row.get("updated_at"),
-    })
-}
-
-fn user_notification_settings_from_row(row: Row) -> Result<UserNotificationSettings, AppError> {
-    Ok(UserNotificationSettings {
-        inbox_enabled: row.get("inbox_enabled"),
-        email_enabled: row.get("email_enabled"),
-        push_enabled: row.get("push_enabled"),
-        desktop_enabled: row.get("desktop_enabled"),
-        digest_enabled: row.get("digest_enabled"),
-        quiet_hours_start: row.get("quiet_hours_start"),
-        quiet_hours_end: row.get("quiet_hours_end"),
-        allow_preview_local_only: row.get("allow_preview_local_only"),
-        share_created: row.get("share_created"),
-        share_revoked: row.get("share_revoked"),
-        attachment_upload_failures: row.get("attachment_upload_failures"),
-        billing_notices: row.get("billing_notices"),
-        security_alerts: row.get("security_alerts"),
-        admin_messages: row.get("admin_messages"),
-        collaboration_mentions: row.get("collaboration_mentions"),
-        updated_at: row.get("updated_at"),
-    })
-}
-
-fn notification_event_from_row(row: Row) -> Result<StoredNotificationEvent, AppError> {
-    let priority_raw: String = row.get("priority");
-
-    Ok(StoredNotificationEvent {
-        id: row.get("id"),
-        user_id: row.get("user_id"),
-        event_type: row.get("event_type"),
-        category: row.get("category"),
-        priority: NotificationPriority::from_str(&priority_raw),
-        actor_user_id: row.get("actor_user_id"),
-        object_type: row.get("object_type"),
-        object_id: row.get("object_id"),
-        object_label_safe: row.get("object_label_safe"),
-        reason_code: row.get("reason_code"),
-        payload_json: row.get::<_, Json<serde_json::Value>>("payload_json").0,
-        created_at: row.get("created_at"),
-        read_at: row.get("read_at"),
-        saved_at: row.get("saved_at"),
-        done_at: row.get("done_at"),
     })
 }

@@ -23,7 +23,7 @@ export const mindmapsApi = {
   uploadBlob: (id: string, blob: Uint8Array) =>
     api.postBytes<{ version_id: string }>(
       `/mindmaps/${id}/upload`,
-      new Blob([new Uint8Array(blob).buffer], { type: 'application/octet-stream' }),
+      blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength) as ArrayBuffer,
       'application/octet-stream',
     ),
   downloadBlob: (id: string, version_id?: string) =>

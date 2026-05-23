@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
-import SubscriptionDialog from '../components/SubscriptionDialog';
 import { UnlockModal } from '../components/UnlockModal';
 import {
   decryptBytesForShare,
@@ -83,7 +82,6 @@ export function SharedVaultPage() {
   const [importMsg, setImportMsg] = useState('');
   const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [planPrompt, setPlanPrompt] = useState<PlanErrorPrompt | null>(null);
-  const [showSubscription, setShowSubscription] = useState(false);
 
   useEffect(() => {
     if (!shareId) {
@@ -310,15 +308,6 @@ export function SharedVaultPage() {
                 <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                   <p className="font-semibold text-amber-50">{planPrompt.title}</p>
                   <p className="mt-1 text-amber-100/90">{planPrompt.message}</p>
-                  {planPrompt.shouldOpenSubscription && (
-                    <button
-                      type="button"
-                      onClick={() => setShowSubscription(true)}
-                      className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
-                    >
-                      {planPrompt.ctaLabel}
-                    </button>
-                  )}
                 </div>
               )}
 
@@ -415,7 +404,6 @@ export function SharedVaultPage() {
       {showUnlockModal && accessToken && !sessionKeys && (
         <UnlockModal onUnlocked={() => setShowUnlockModal(false)} />
       )}
-      <SubscriptionDialog open={showSubscription} onClose={() => setShowSubscription(false)} />
     </div>
   );
 }

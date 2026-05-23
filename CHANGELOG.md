@@ -9,10 +9,20 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Added
 
 ### Changed
+- **CI Policy** — Removed the server-repo offline parity workflow and clarified that offline parity checks are only required in the FOSS repo or for explicit shared offline-capability changes.
+- **Security Procedure** — Documented the GitHub Actions security gate as the committed-secrets scan in `.github/workflows/security-guard.yml` and called out stable action pinning expectations in the Copilot instructions.
+- **Release Versioning** — Aligned the backend crate version with the frontend app and desktop host at `0.3.24` so the build artifacts share the same release number again.
+- **Hosted Runtime Reliability** — Hardened the hosted server routes so browser deep links (`/login`, `/register`) resolve through the SPA fallback instead of returning 404, and so storage/version listing endpoints degrade gracefully when Garage cannot provide object-version metadata.
+- **Object Upload Compatibility** — Accepted opaque S3/Garage version IDs returned from uploads instead of requiring UUID-shaped IDs, which fixes hosted uploads against the current Garage backend.
 
 ### Removed
 
 ### Validation
+- `cargo check --manifest-path backend/Cargo.toml` in native WSL workspace → clean.
+- `cargo test --manifest-path backend/Cargo.toml db::minio::tests -- --nocapture` in native WSL workspace → passed.
+- `pnpm run build` in `frontend_app` → passed.
+- `docker build -f backend/Dockerfile -t mindmapvault-server:local .` → passed.
+- `node tests/performance/load-test.mjs --base-url http://127.0.0.1:8090 --users 200 --concurrency 200 --cleanup` → passed.
 
 ## [0.3.25] - 2026-05-03
 

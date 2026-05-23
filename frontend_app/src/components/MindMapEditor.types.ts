@@ -6,8 +6,13 @@ export interface NodeAttachmentViewerAsset {
   name: string;
 }
 
+export type MindMapEditorMode = 'desktop' | 'mobile';
+export type MindMapEditorModePreference = 'auto' | MindMapEditorMode;
+
 export interface MindMapEditorProps {
   initialTree: MindMapTree | null;
+  initialShowShortcuts?: boolean;
+  disableAutoPanToSelection?: boolean;
   externalNodeAttachments?: Record<string, NodeAttachmentRef[]>;
   title: string;
   onSave: (tree: MindMapTree, title: string) => Promise<void>;
@@ -30,10 +35,8 @@ export interface MindMapEditorProps {
   onOpenSecurePanel?: (tab: 'attachments' | 'shares') => void;
   onNodeFileDrop?: (nodeId: string, files: File[]) => Promise<NodeAttachmentRef[]>;
   onOpenNodeAttachment?: (attachment: NodeAttachmentRef) => Promise<void> | void;
+  onFetchNodeAttachmentContent?: (attachment: NodeAttachmentRef) => Promise<{ name: string; contentType: string; blob: Blob } | null>;
   onDeleteNodeAttachment?: (attachment: NodeAttachmentRef) => Promise<void> | void;
   onLoadNodeAttachmentPreview?: (attachment: NodeAttachmentRef) => Promise<string | null>;
   onLoadNodeAttachmentViewer?: (attachment: NodeAttachmentRef) => Promise<NodeAttachmentViewerAsset | null>;
 }
-
-export type MindMapEditorMode = 'desktop' | 'mobile';
-export type MindMapEditorModePreference = 'auto' | MindMapEditorMode;

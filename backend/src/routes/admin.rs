@@ -13,7 +13,7 @@ use crate::{
     db::{
         minio::MinioClient,
         sql_store::{
-            AdminFeedbackRecord, AdminUserAdminUpdate, AdminUserRecord, DynSqlStore,
+            AdminUserAdminUpdate, AdminUserRecord, DynSqlStore,
             ManualSubscriptionUpdate, StoredMindMap,
         },
     },
@@ -26,7 +26,6 @@ use crate::{
     },
 };
 
-const DEFAULT_FEEDBACK_LIMIT: i64 = 50;
 const DEFAULT_AUDIT_LIMIT: usize = 50;
 
 #[derive(Clone)]
@@ -44,8 +43,6 @@ pub fn router(state: AdminState) -> Router {
     .route("/users/{id}/access-grants", post(update_user_access_grants))
     .route("/users/{id}/plan-override", post(update_user_plan_override))
     .route("/users/{id}/delete-account", post(delete_user_account))
-    .route("/feedback/{id}/archive", post(set_feedback_archive_state))
-    .route("/feedback/{id}/delete", post(delete_feedback))
         .with_state(state)
 }
 
@@ -54,7 +51,6 @@ struct AdminOverviewResponse {
     generated_at: DateTime<Utc>,
     metrics: AdminMetrics,
     users: Vec<AdminUserSummary>,
-    feedback: Vec<AdminFeedbackSummary>,
     audit_events: Vec<AdminAuditSummary>,
 }
 
@@ -67,8 +63,6 @@ struct AdminMetrics {
     active_subscriptions: usize,
     total_vaults: usize,
     total_used_bytes: i64,
-    feedback_count: u64,
-    archived_feedback_count: usize,
 }
 
 #[derive(Serialize)]
@@ -97,19 +91,6 @@ struct AdminUserSummary {
     vault_count: usize,
     used_bytes: i64,
     storage_limit_bytes: i64,
-}
-
-#[derive(Serialize)]
-struct AdminFeedbackSummary {
-    public_id: String,
-    name: Option<String>,
-    email: Option<String>,
-    subject: String,
-    message: String,
-    page_url: Option<String>,
-    created_at: DateTime<Utc>,
-    is_archived: bool,
-    archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -164,11 +145,6 @@ struct AdminPlanOverrideRequest {
 struct AdminAccessGrantsRequest {
     #[serde(default)]
     access_grants: Vec<UserAccessGrant>,
-}
-
-#[derive(Deserialize)]
-struct AdminFeedbackArchiveRequest {
-    archived: bool,
 }
 
 async fn get_overview(
@@ -386,74 +362,9 @@ async fn delete_user_account(
     Ok(Json(build_overview(&state).await?))
 }
 
-async fn set_feedback_archive_state(
-    State(state): State<AdminState>,
-    Path(feedback_id): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<AdminFeedbackArchiveRequest>,
-) -> Result<Json<AdminOverviewResponse>, AppError> {
-    authorize_admin(&state, &headers).await?;
-
-    {
-        let store = &state.db;
-        if !store.set_feedback_archived(&feedback_id, body.archived).await? {
-            return Err(AppError::NotFound("feedback not found".to_string()));
-        }
-    }
-
-    write_audit_event(
-        &state,
-        make_audit_event(
-            "feedback",
-            &feedback_id,
-            if body.archived { "feedback_archived" } else { "feedback_restored" },
-            if body.archived {
-                format!("Archived feedback {feedback_id}")
-            } else {
-                format!("Restored feedback {feedback_id}")
-            },
-            None,
-        ),
-    )
-    .await?;
-
-    Ok(Json(build_overview(&state).await?))
-}
-
-async fn delete_feedback(
-    State(state): State<AdminState>,
-    Path(feedback_id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<AdminOverviewResponse>, AppError> {
-    authorize_admin(&state, &headers).await?;
-
-    {
-        let store = &state.db;
-        if !store.delete_feedback_submission(&feedback_id).await? {
-            return Err(AppError::NotFound("feedback not found".to_string()));
-        }
-    }
-
-    write_audit_event(
-        &state,
-        make_audit_event(
-            "feedback",
-            &feedback_id,
-            "feedback_deleted",
-            format!("Deleted feedback {feedback_id}"),
-            None,
-        ),
-    )
-    .await?;
-
-    Ok(Json(build_overview(&state).await?))
-}
-
 async fn build_overview(state: &AdminState) -> Result<AdminOverviewResponse, AppError> {
     let store = &state.db;
     let users = store.list_admin_users().await?;
-    let feedback = store.list_admin_feedback(DEFAULT_FEEDBACK_LIMIT as usize).await?;
-    let feedback_count = store.count_feedback_submissions().await?;
     let audit_events = store.list_admin_audit_events(DEFAULT_AUDIT_LIMIT).await?;
 
     let storage = load_sql_user_storage(store, &state.minio, &users).await?;
@@ -479,8 +390,6 @@ async fn build_overview(state: &AdminState) -> Result<AdminOverviewResponse, App
             .count(),
         total_vaults,
         total_used_bytes,
-        feedback_count,
-        archived_feedback_count: feedback.iter().filter(|item| item.is_archived).count(),
     };
 
     Ok(AdminOverviewResponse {
@@ -491,7 +400,6 @@ async fn build_overview(state: &AdminState) -> Result<AdminOverviewResponse, App
             .zip(storage.into_iter())
             .map(|(user, storage)| map_admin_user(user, storage, now))
             .collect(),
-        feedback: feedback.into_iter().map(map_admin_feedback).collect(),
         audit_events: audit_events.into_iter().map(map_admin_audit).collect(),
     })
 }
@@ -625,22 +533,6 @@ async fn delete_owned_blobs(
             }
         }
 
-        let shares = store.list_mind_map_shares(&map.id).await?;
-        for share in shares {
-            let share_attachments = store.list_mind_map_share_attachments(&share.id).await?;
-            for attachment in share_attachments {
-                match minio.delete_object(&attachment.s3_key).await {
-                    Ok(()) | Err(AppError::NotFound(_)) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-
-            match minio.delete_object(&share.s3_key).await {
-                Ok(()) | Err(AppError::NotFound(_)) => {}
-                Err(error) => return Err(error),
-            }
-        }
-
         match minio.delete_object(&map.minio_object_key).await {
             Ok(()) | Err(AppError::NotFound(_)) => {}
             Err(error) => return Err(error),
@@ -731,20 +623,6 @@ fn map_admin_user(user: AdminUserRecord, storage: UserStorageSummary, now: DateT
         vault_count: storage.vault_count,
         used_bytes: storage.used_bytes,
         storage_limit_bytes: effective_tier.storage_limit_bytes(),
-    }
-}
-
-fn map_admin_feedback(feedback: AdminFeedbackRecord) -> AdminFeedbackSummary {
-    AdminFeedbackSummary {
-        public_id: feedback.public_id,
-        name: feedback.name,
-        email: feedback.email,
-        subject: feedback.subject,
-        message: feedback.message,
-        page_url: feedback.page_url,
-        created_at: feedback.created_at,
-        is_archived: feedback.is_archived,
-        archived_at: feedback.archived_at,
     }
 }
 

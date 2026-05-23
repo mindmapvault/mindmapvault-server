@@ -1,11 +1,9 @@
 import { memo, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
 import { mindmapsApi } from '../api/mindmaps';
-import { confirmCheckoutSession } from '../api/subscription';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { ThemePanel } from '../components/ThemePanel';
-import SubscriptionDialog from '../components/SubscriptionDialog';
 import { LogoWithText } from '../components/Logo';
 import { UnlockModal } from '../components/UnlockModal';
 import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
@@ -36,6 +34,7 @@ import {
   type VaultPreviewSummary,
 } from '../utils/vaultPreview';
 import { decryptAttachmentForOwner } from '../crypto/encryptedVault';
+// packageJson intentionally omitted when not used in this view
 
 interface LocalStorageDirInfo {
   path: string;
@@ -97,10 +96,6 @@ function getLocalVaultColor(vaultId: string, fallback?: string): string {
 
 function setLocalVaultColor(vaultId: string, color: string): void {
   localStorage.setItem(vaultColorStorageKey(vaultId), normalizeHexColor(color));
-}
-
-function formatPlanTierLabel(planTier?: string): string {
-  return planTier === 'paid' ? 'Pro' : 'Free';
 }
 
 function normalizeSharingMode(input?: string): VaultSharingMode {
@@ -236,7 +231,6 @@ const VaultCard = memo(function VaultCard({
   onAddUserLabel,
   onSaveMeta,
 }: VaultCardProps) {
-  const [statusDialog, setStatusDialog] = useState<null | 'sharing' | 'encryption'>(null);
   const persistedColor = normalizeHexColor(map.vault_color);
   const persistedMax = Math.max(1, map.max_versions ?? 50);
   const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
@@ -244,12 +238,6 @@ const VaultCard = memo(function VaultCard({
   const persistedLabels = normalizeVaultLabels(map.vault_labels);
   const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
   const blurPreview = isSharedVault;
-  const sharingToneClass = isSharedVault
-    ? 'border-accent/40 bg-accent/10 text-slate-100'
-    : 'border-slate-600 bg-slate-800/70 text-slate-300';
-  const encryptionToneClass = persistedEncryptionMode === 're-encrypted'
-    ? 'border-amber-400/30 bg-amber-400/10 text-amber-200'
-    : 'border-slate-600 bg-slate-800/70 text-slate-300';
   const dirty =
     map.draftNote !== map.vaultNote ||
     map.draftColor !== persistedColor ||
@@ -343,21 +331,6 @@ const VaultCard = memo(function VaultCard({
                 </svg>
               </button>
             )}
-            {!isLocalMode && (
-              <button
-                onClick={() => onNavigate(`/vaults/${map.id}?secure=shares`)}
-                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300"
-                title="Share exports"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="18" cy="5" r="3"/>
-                  <circle cx="6" cy="12" r="3"/>
-                  <circle cx="18" cy="19" r="3"/>
-                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                </svg>
-              </button>
-            )}
             {dirty && (
               <button
                 onClick={() => { void onSaveMeta(map); }}
@@ -434,7 +407,7 @@ const VaultCard = memo(function VaultCard({
           )}
         </div>
 
-        <div className={`grid grid-cols-1 gap-3${!isLocalMode ? ' sm:grid-cols-2 xl:grid-cols-4' : ' sm:grid-cols-2 xl:grid-cols-3'}`}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs text-slate-400">
             Card color
             <input
@@ -445,69 +418,6 @@ const VaultCard = memo(function VaultCard({
               title="Vault card color"
             />
           </label>
-
-          <div className="rounded-md border border-slate-600 bg-surface px-3 py-2">
-            <p className="text-xs text-slate-400">Sharing state</p>
-            <button
-              type="button"
-              onClick={() => setStatusDialog('sharing')}
-              className={`mt-2 flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition hover:border-accent/50 hover:bg-slate-800/80 ${sharingToneClass}`}
-              title="Open sharing details"
-            >
-              <span className="flex items-center gap-2">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  {isSharedVault ? (
-                    <>
-                      <circle cx="18" cy="5" r="3"/>
-                      <circle cx="6" cy="12" r="3"/>
-                      <circle cx="18" cy="19" r="3"/>
-                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-                      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                    </>
-                  ) : (
-                    <>
-                      <rect x="3" y="11" width="18" height="10" rx="2"/>
-                      <path d="M7 11V8a5 5 0 0 1 10 0v3"/>
-                    </>
-                  )}
-                </svg>
-                <span className="text-[11px] font-medium">{isSharedVault ? 'Shared vault' : 'Private vault'}</span>
-              </span>
-              <svg className="h-4 w-4 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="rounded-md border border-slate-600 bg-surface px-3 py-2">
-            <p className="text-xs text-slate-400">Encryption state</p>
-            <button
-              type="button"
-              onClick={() => setStatusDialog('encryption')}
-              className={`mt-2 flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition hover:border-accent/50 hover:bg-slate-800/80 ${encryptionToneClass}`}
-              title="Open encryption details"
-            >
-              <span className="flex items-center gap-2">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  {persistedEncryptionMode === 're-encrypted' ? (
-                    <>
-                      <path d="M12 3l7 4v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V7l7-4z"/>
-                      <path d="M9 12l2 2 4-4"/>
-                    </>
-                  ) : (
-                    <>
-                      <rect x="3" y="11" width="18" height="10" rx="2"/>
-                      <path d="M7 11V8a5 5 0 0 1 10 0v3"/>
-                    </>
-                  )}
-                </svg>
-                <span className="text-[11px] font-medium">{persistedEncryptionMode === 're-encrypted' ? 'Differently encrypted' : 'Standard'}</span>
-              </span>
-              <svg className="h-4 w-4 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-          </div>
 
           {!isLocalMode && (
             <label className="text-xs text-slate-400">
@@ -574,93 +484,6 @@ const VaultCard = memo(function VaultCard({
           {dirty && <span className="text-xs text-amber-300">Unsaved settings</span>}
         </div>
       </div>
-
-      {statusDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setStatusDialog(null)}>
-          <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-surface-1 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Vault status</p>
-                <h3 className="mt-1 text-lg font-semibold text-white">
-                  {statusDialog === 'sharing' ? 'Sharing details' : 'Encryption details'}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setStatusDialog(null)}
-                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-800 hover:text-slate-300"
-                title="Close dialog"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-
-            {statusDialog === 'sharing' ? (
-              <div className="mt-4 space-y-4 text-sm text-slate-300">
-                <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${sharingToneClass}`}>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    {isSharedVault ? (
-                      <>
-                        <circle cx="18" cy="5" r="3"/>
-                        <circle cx="6" cy="12" r="3"/>
-                        <circle cx="18" cy="19" r="3"/>
-                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                      </>
-                    ) : (
-                      <>
-                        <rect x="3" y="11" width="18" height="10" rx="2"/>
-                        <path d="M7 11V8a5 5 0 0 1 10 0v3"/>
-                      </>
-                    )}
-                  </svg>
-                  {isSharedVault ? 'Shared vault' : 'Private vault'}
-                </div>
-                <p>
-                  {isSharedVault
-                    ? 'This vault currently has active encrypted share exports. Recipients need the share passphrase to decrypt the exported bundle client-side.'
-                    : 'This vault has no active share exports. Nothing is accessible to other users until you explicitly create an encrypted share.'}
-                </p>
-                <div className="rounded-xl border border-slate-700 bg-surface px-4 py-3 text-xs text-slate-400">
-                  <p>{activeShareCount} active share link{activeShareCount === 1 ? '' : 's'} detected.</p>
-                  <p className="mt-2">Shared exports never expose plaintext notes or map content directly from the server.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 space-y-4 text-sm text-slate-300">
-                <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${encryptionToneClass}`}>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    {persistedEncryptionMode === 're-encrypted' ? (
-                      <>
-                        <path d="M12 3l7 4v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V7l7-4z"/>
-                        <path d="M9 12l2 2 4-4"/>
-                      </>
-                    ) : (
-                      <>
-                        <rect x="3" y="11" width="18" height="10" rx="2"/>
-                        <path d="M7 11V8a5 5 0 0 1 10 0v3"/>
-                      </>
-                    )}
-                  </svg>
-                  {persistedEncryptionMode === 're-encrypted' ? 'Differently encrypted' : 'Standard encryption'}
-                </div>
-                <p>
-                  {persistedEncryptionMode === 're-encrypted'
-                    ? 'This vault is marked with a non-standard encryption classification. Treat it as using a separate protected workflow from your default private vault setup.'
-                    : 'This vault uses the standard client-side encrypted vault workflow. Titles, notes, and map payloads stay encrypted before reaching backend storage.'}
-                </p>
-                <div className="rounded-xl border border-slate-700 bg-surface px-4 py-3 text-xs text-slate-400">
-                  <p>Client-side encryption stays in effect for vault content.</p>
-                  <p className="mt-2">The server stores encrypted metadata and encrypted blobs, not plaintext map content.</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </article>
   );
 }, (prev, next) => {
@@ -683,13 +506,12 @@ const VaultCard = memo(function VaultCard({
 
 export function VaultsPage() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
   const { username, sessionKeys, logout } = useAuthStore();
   const mode = useModeStore((s) => s.mode);
   const isLocalMode = mode === 'local';
   const { labels: userLabels, addLabel: addUserLabel, updateLabelColor: updateUserLabelColor } = useUserLabels();
   const themeMode = useThemeStore((state) => state.mode);
-  const storage = useMemo(() => getStorage(isLocalMode ? 'local' : 'server'), [isLocalMode]);
+  const storage = useMemo(() => getStorage(), []);
   const hasKeys = !!sessionKeys;
 
   const [maps, setMaps] = useState<MapWithTitle[]>([]);
@@ -718,8 +540,6 @@ export function VaultsPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
-  const [showSubscription, setShowSubscription] = useState(false);
-  const [checkoutNotice, setCheckoutNotice] = useState('');
   const [pendingVaultDeletion, setPendingVaultDeletion] = useState<PendingVaultDeletion | null>(null);
   const [deletingVaultId, setDeletingVaultId] = useState<string | null>(null);
   const [activeShareCounts, setActiveShareCounts] = useState<Record<string, number>>({});
@@ -1060,71 +880,6 @@ export function VaultsPage() {
     }
   }, [hasKeys, loadMaps]);
 
-  useEffect(() => {
-    const subscribeIntent = searchParams.get('subscribe');
-    if (subscribeIntent !== 'pro') {
-      return;
-    }
-
-    setShowSubscription(true);
-
-    const next = new URLSearchParams(searchParams);
-    next.delete('subscribe');
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
-
-  useEffect(() => {
-    const checkoutState = searchParams.get('checkout');
-    const sessionId = searchParams.get('session_id');
-
-    if (!checkoutState) {
-      return;
-    }
-
-    const clearCheckoutParams = () => {
-      const next = new URLSearchParams(searchParams);
-      next.delete('checkout');
-      next.delete('session_id');
-      setSearchParams(next, { replace: true });
-    };
-
-    if (checkoutState === 'cancel') {
-      setCheckoutNotice('Checkout was cancelled.');
-      clearCheckoutParams();
-      return;
-    }
-
-    if (checkoutState !== 'success' || !sessionId) {
-      return;
-    }
-
-    let active = true;
-    setCheckoutNotice('Finalizing subscription...');
-
-    void confirmCheckoutSession(sessionId)
-      .then(() => {
-        if (!active) return;
-        setCheckoutNotice('Subscription activated. Unlock the vault to refresh encrypted data.');
-        void refreshStorage();
-        if (hasKeys) {
-          void loadMaps();
-        }
-      })
-      .catch((err) => {
-        if (!active) return;
-        setCheckoutNotice(err instanceof Error ? err.message : 'Failed to finalize subscription');
-      })
-      .finally(() => {
-        if (active) {
-          clearCheckoutParams();
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [hasKeys, loadMaps, refreshStorage, searchParams, setSearchParams]);
-
   const loadLocalStoragePath = useCallback(async () => {
     if (!isLocalMode) return;
     try {
@@ -1386,12 +1141,7 @@ export function VaultsPage() {
   const usedBytes = storageSummary?.total_bytes ?? 0;
   const attachedFileCount = storageSummary?.attachment_count ?? 0;
   const attachedFileBytes = storageSummary?.attachment_bytes ?? 0;
-  const cloudLimitBytes = storageSummary?.plan_limit_bytes ?? storageSummary?.free_tier_bytes ?? 10 * 1024 * 1024;
-  const cloudPlanTier = storageSummary?.plan_tier ?? 'free';
-  const cloudPlanLabel = formatPlanTierLabel(cloudPlanTier);
-  const usedPercent = cloudLimitBytes > 0 ? Math.min(100, (usedBytes / cloudLimitBytes) * 100) : 0;
-  const remainingBytes = Math.max(0, cloudLimitBytes - usedBytes);
-  const overageBytes = Math.max(0, usedBytes - cloudLimitBytes);
+  
 
   return (
     <>
@@ -1404,45 +1154,17 @@ export function VaultsPage() {
               <LogoWithText size={28} />
             </div>
             <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
-              {!isLocalMode && (
-                <button
-                  onClick={() => setShowSubscription(true)}
-                  className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm transition sm:flex-none sm:justify-start sm:px-3 sm:py-1.5"
-                  style={{
-                    border: '1px solid var(--border-light)',
-                    color: 'var(--text-secondary)',
-                    background: 'var(--surface-1)',
-                  }}
-                  title={`Current cloud plan: ${cloudPlanLabel}`}
-                >
-                  <span
-                    className="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]"
-                    style={cloudPlanTier === 'paid'
-                      ? {
-                          border: '1px solid rgba(16, 185, 129, 0.28)',
-                          background: 'rgba(16, 185, 129, 0.1)',
-                          color: '#047857',
-                        }
-                      : {
-                          border: '1px solid var(--border-light)',
-                          background: 'var(--surface-2)',
-                          color: 'var(--text-secondary)',
-                        }}
-                  >
-                    {cloudPlanLabel}
-                  </span>
-                  <span className="truncate">Subscription</span>
-                </button>
-              )}
               <span className="hidden text-sm text-slate-400 sm:inline">{username}</span>
               <ThemePanel />
-              <button
-                onClick={() => navigate('/change-password')}
-                title={isLocalMode ? 'Change your local password' : 'Change your account password'}
-                className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white sm:py-1.5"
-              >
-                Change password
-              </button>
+              {isLocalMode && (
+                <button
+                  onClick={() => navigate('/change-password')}
+                  title="Change your local password"
+                  className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white sm:py-1.5"
+                >
+                  Change password
+                </button>
+              )}
               <button
                 onClick={logout}
                 title={isLocalMode ? 'Lock this local profile' : 'Log out'}
@@ -1561,36 +1283,14 @@ export function VaultsPage() {
             <div className="mb-6 rounded-xl border border-slate-700 bg-surface-1 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-slate-200">Total storage used</h2>
-                {isLocalMode ? (
-                  <span className="text-xs text-slate-400">
-                    {fmtBytes(usedBytes)} used in offline folder
-                  </span>
-                ) : (
-                  <span className="text-xs text-slate-400">
-                    {fmtBytes(usedBytes)} / {fmtBytes(cloudLimitBytes)} cloud limit ({cloudPlanLabel}, {usedPercent.toFixed(1)}%)
-                  </span>
-                )}
+                <span className="text-xs text-slate-400">
+                  {fmtBytes(usedBytes)} used in local offline storage
+                </span>
               </div>
-              {!isLocalMode && (
-                <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                  <div
-                    className={overageBytes > 0 ? 'h-full rounded-full bg-red-500' : 'h-full rounded-full bg-accent'}
-                    style={{ width: `${usedPercent.toFixed(2)}%` }}
-                  />
-                </div>
-              )}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                 <span>{storageSummary.vaults.length} vaults</span>
                 {attachedFileCount > 0 && <span>{attachedFileCount} attached file{attachedFileCount === 1 ? '' : 's'} using {fmtBytes(attachedFileBytes)}</span>}
-                {isLocalMode ? (
-                  <span>Informational only — offline saves are never blocked</span>
-                ) : (
-                  <>
-                    <span>{usedPercent.toFixed(1)}% used</span>
-                    <span>{fmtBytes(remainingBytes)} left</span>
-                    {overageBytes > 0 && <span className="text-red-400">Over limit by {fmtBytes(overageBytes)}</span>}
-                  </>
-                )}
+                
               </div>
             </div>
           )}
@@ -1632,14 +1332,6 @@ export function VaultsPage() {
                 <div className="mt-3 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-200">
                   <p className="font-medium text-red-100">{createPlanPrompt?.title ?? 'Create failed'}</p>
                   <p className="mt-1 text-red-200">{createPlanPrompt?.message ?? createError}</p>
-                  {createPlanPrompt?.shouldOpenSubscription && !isLocalMode && (
-                    <button
-                      onClick={() => setShowSubscription(true)}
-                      className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
-                    >
-                      {createPlanPrompt.ctaLabel}
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -1648,12 +1340,6 @@ export function VaultsPage() {
           {error && (
             <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
               {error}
-            </div>
-          )}
-
-          {checkoutNotice && (
-            <div className="mb-4 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-slate-100">
-              {checkoutNotice}
             </div>
           )}
 
@@ -1738,7 +1424,6 @@ export function VaultsPage() {
           </div>
         </div>
       )}
-      <SubscriptionDialog open={showSubscription} onClose={() => setShowSubscription(false)} />
       <ConfirmDialog
         open={!!pendingVaultDeletion}
         title="Delete vault"

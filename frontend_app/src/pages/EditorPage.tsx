@@ -5,8 +5,6 @@ import { mindmapsApi } from '../api/mindmaps';
 import EncryptedVaultDialog, { type SecureVaultTab } from '../components/EncryptedVaultDialog';
 import { DesktopMindMapEditor } from '../components/MindMapEditor';
 import { flattenAll } from '../components/MindMapHelpers';
-import { MobileMindMapEditor } from '../components/MobileMindMapEditor';
-import SubscriptionDialog from '../components/SubscriptionDialog';
 import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
 import { UnlockModal } from '../components/UnlockModal';
 import {
@@ -21,12 +19,11 @@ import { getStorage } from '../storage';
 import { fromBase64, toBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
-import { useAdaptiveEditorMode } from '../hooks/useAdaptiveEditorMode';
-import type { NodeAttachmentViewerAsset } from '../components/MindMapEditor.types';
 import type { AttachmentMetadata, MapShareOwnerSummary, MindMapTree, NodeAttachmentRef, VersionDetail } from '../types';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { createEncryptedFilePreview } from '../utils/filePreview';
 import { treeToMarkdown } from '../utils/markdownExport';
+import { downloadBlob } from '../utils/download';
 import {
   createCloudTreeVaultPreview,
   isVaultPreviewAttachmentMeta,
@@ -111,20 +108,13 @@ export function EditorPage() {
   const { sessionKeys } = useAuthStore();
   const mode = useModeStore((s) => s.mode);
   const isLocalMode = mode === 'local';
-  const {
-    mode: editorMode,
-    autoMode,
-    preference: editorModePreference,
-    setPreference: setEditorModePreference,
-  } = useAdaptiveEditorMode();
-  const storage = useMemo(() => getStorage(isLocalMode ? 'local' : 'server'), [isLocalMode]);
+  const storage = useMemo(() => getStorage(), []);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saveMsg, setSaveMsg] = useState('');
   const [planPrompt, setPlanPrompt] = useState<PlanErrorPrompt | null>(null);
-  const [showSubscription, setShowSubscription] = useState(false);
 
   const [title, setTitle] = useState('');
   const [savedTitle, setSavedTitle] = useState('');
@@ -210,14 +200,7 @@ export function EditorPage() {
   const saveBytesToFile = useCallback((bytes: Uint8Array, fileName: string, contentType: string) => {
     const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const blob = new Blob([payload], { type: contentType });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
+    void downloadBlob(blob, fileName);
   }, []);
 
   const refreshSecureData = useCallback(async () => {
@@ -516,53 +499,12 @@ export function EditorPage() {
     return versionToken ? `${safeTitle}-${versionToken}` : safeTitle;
   }, [title, versionLabel]);
 
-  // ── Download ─────────────────────────────────────────────────────────────────────
-  const handleDownloadEncrypted = useCallback(async (fileBaseName?: string) => {
-    if (!id) return;
-    try {
-      const encrypted = await storage.downloadBlob(id);
-      const encryptedBuffer = encrypted.buffer.slice(
-        encrypted.byteOffset,
-        encrypted.byteOffset + encrypted.byteLength,
-      ) as ArrayBuffer;
-      const blob = new Blob([encryptedBuffer], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${buildExportFileBaseName(fileBaseName)}.crypt`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Download failed');
-    }
-  }, [buildExportFileBaseName, id, storage]);
-
-  const handleDownloadJson = useCallback((tree: MindMapTree, currentTitle: string) => {
-    const json = JSON.stringify({ title: currentTitle, tree }, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${buildExportFileBaseName(currentTitle)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [buildExportFileBaseName]);
+  // ── Export ───────────────────────────────────────────────────────────────────────
 
   const handleExportMarkdown = useCallback((tree: MindMapTree, currentTitle: string) => {
     const md = treeToMarkdown(tree.root, currentTitle);
     const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${buildExportFileBaseName(currentTitle)}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    void downloadBlob(blob, `${buildExportFileBaseName(currentTitle)}.md`);
   }, [buildExportFileBaseName]);
 
   const handleUploadFiles = useCallback(async (files: FileList) => {
@@ -601,7 +543,42 @@ export function EditorPage() {
   }, [id, isLocalMode, refreshSecureData, selectedNodeId, sessionKeys]);
 
   const uploadEncryptedNodeFiles = useCallback(async (nodeId: string, files: File[]): Promise<NodeAttachmentRef[]> => {
-    if (!id || !sessionKeys || isLocalMode) return [];
+    if (!id || !sessionKeys) return [];
+
+    if (isLocalMode) {
+      const created: NodeAttachmentRef[] = [];
+      setAttachmentUpload({ busy: true, label: 'Preparing local attachments…' });
+      setSecureError(null);
+      setPlanPrompt(null);
+      try {
+        for (const file of files) {
+          setAttachmentUpload({ busy: true, label: `Adding ${file.name}…` });
+          const plaintext = new Uint8Array(await file.arrayBuffer());
+          const preview = await createEncryptedFilePreview(file);
+          created.push({
+            attachment_id: `local-${crypto.randomUUID()}`,
+            preview_attachment_id: null,
+            name: file.name,
+            content_type: file.type || 'application/octet-stream',
+            size_bytes: file.size,
+            preview_content_type: preview.contentType,
+            preview_kind: preview.kind,
+            uploaded_at: new Date().toISOString(),
+            inline_data_base64: toBase64(plaintext),
+            inline_preview_data_base64: toBase64(preview.bytes),
+          });
+        }
+
+        setSaveMsg(`${files.length} local attachment${files.length === 1 ? '' : 's'} added`);
+        setTimeout(() => setSaveMsg(''), 3000);
+        return created;
+      } catch (err) {
+        setSecureError(err instanceof Error ? err.message : 'Failed to prepare local node attachment');
+        return [];
+      } finally {
+        setAttachmentUpload({ busy: false });
+      }
+    }
 
     const created: NodeAttachmentRef[] = [];
     setAttachmentUpload({ busy: true, label: 'Encrypting file previews…' });
@@ -726,7 +703,18 @@ export function EditorPage() {
   }, [id, isLocalMode]);
 
   const handleOpenNodeAttachment = useCallback(async (attachment: NodeAttachmentRef) => {
-    if (!id || !sessionKeys || isLocalMode) return;
+    if (!id || !sessionKeys) return;
+
+    if (isLocalMode) {
+      if (!attachment.inline_data_base64) {
+        setSecureError('Local attachment payload is unavailable.');
+        return;
+      }
+      const bytes = fromBase64(attachment.inline_data_base64);
+      saveBytesToFile(bytes, attachment.name, attachment.content_type || 'application/octet-stream');
+      return;
+    }
+
     setSecureError(null);
     try {
       const download = await encryptedVaultApi.getAttachmentDownload(id, attachment.attachment_id);
@@ -740,8 +728,68 @@ export function EditorPage() {
     }
   }, [id, isLocalMode, saveBytesToFile, sessionKeys]);
 
+  const handleFetchNodeAttachmentContent = useCallback(async (attachment: NodeAttachmentRef): Promise<{ name: string; contentType: string; blob: Blob } | null> => {
+    if (!id || !sessionKeys) return null;
+
+    if (isLocalMode) {
+      if (!attachment.inline_data_base64) return null;
+      const bytes = fromBase64(attachment.inline_data_base64);
+      const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      const contentType = attachment.content_type || 'application/octet-stream';
+      return {
+        name: attachment.name,
+        contentType,
+        blob: new Blob([payload], { type: contentType }),
+      };
+    }
+
+    try {
+      const download = await encryptedVaultApi.getAttachmentDownload(id, attachment.attachment_id);
+      const bytes = await encryptedVaultApi.downloadUrl(download.download_url);
+      const plaintext = download.encrypted
+        ? await decryptAttachmentForOwner(bytes, download.encryption_meta, sessionKeys.masterKey)
+        : bytes;
+      const payload = plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer;
+      const contentType = download.content_type || attachment.content_type || 'application/octet-stream';
+      return {
+        name: download.name || attachment.name,
+        contentType,
+        blob: new Blob([payload], { type: contentType }),
+      };
+    } catch (err) {
+      setSecureError(err instanceof Error ? err.message : 'Failed to load node attachment');
+      return null;
+    }
+  }, [id, isLocalMode, sessionKeys]);
+
   const handleLoadNodeAttachmentPreview = useCallback(async (attachment: NodeAttachmentRef): Promise<string | null> => {
-    if (!id || !sessionKeys || isLocalMode) return null;
+    if (!id || !sessionKeys) return null;
+
+    if (isLocalMode) {
+      const isImageAttachment = (attachment.content_type ?? '').startsWith('image/');
+      const previewSourceId = attachment.attachment_id;
+      const cached = previewBlobUrlCacheRef.current[previewSourceId];
+      if (cached) return cached;
+
+      const payloadBase64 = isImageAttachment
+        ? attachment.inline_data_base64
+        : attachment.inline_preview_data_base64;
+      if (!payloadBase64) return null;
+
+      const bytes = fromBase64(payloadBase64);
+      const payload = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer;
+      const blob = new Blob([payload], {
+        type: isImageAttachment
+          ? (attachment.content_type || 'image/png')
+          : (attachment.preview_content_type || 'image/svg+xml'),
+      });
+      const previewUrl = URL.createObjectURL(blob);
+      previewBlobUrlCacheRef.current[previewSourceId] = previewUrl;
+      return previewUrl;
+    }
 
     const isImageAttachment = (attachment.content_type ?? '').startsWith('image/');
     const previewSourceId = isImageAttachment ? attachment.attachment_id : attachment.preview_attachment_id;
@@ -775,46 +823,19 @@ export function EditorPage() {
     }
   }, [id, isLocalMode, sessionKeys]);
 
-  const handleLoadNodeAttachmentViewer = useCallback(async (attachment: NodeAttachmentRef): Promise<NodeAttachmentViewerAsset | null> => {
-    if (!id || !sessionKeys || isLocalMode) return null;
-
-    const cacheKey = `viewer:${attachment.attachment_id}`;
-    const cached = previewBlobUrlCacheRef.current[cacheKey];
-    if (cached) {
-      return {
-        url: cached,
-        contentType: attachment.content_type || 'application/octet-stream',
-        name: attachment.name,
-      };
-    }
-
-    try {
-      const download = await encryptedVaultApi.getAttachmentDownload(id, attachment.attachment_id);
-      const bytes = await encryptedVaultApi.downloadUrl(download.download_url);
-      const plaintext = download.encrypted
-        ? await decryptAttachmentForOwner(bytes, download.encryption_meta, sessionKeys.masterKey)
-        : bytes;
-      const payload = plaintext.buffer.slice(
-        plaintext.byteOffset,
-        plaintext.byteOffset + plaintext.byteLength,
-      ) as ArrayBuffer;
-      const contentType = download.content_type || attachment.content_type || 'application/octet-stream';
-      const blob = new Blob([payload], { type: contentType });
-      const url = URL.createObjectURL(blob);
-      previewBlobUrlCacheRef.current[cacheKey] = url;
-      return {
-        url,
-        contentType,
-        name: download.name || attachment.name,
-      };
-    } catch (err) {
-      setSecureError(err instanceof Error ? err.message : 'Failed to load attachment preview');
-      return null;
-    }
-  }, [id, isLocalMode, sessionKeys]);
-
   const handleDeleteNodeAttachment = useCallback(async (attachment: NodeAttachmentRef) => {
-    if (!id || isLocalMode) return;
+    if (!id) return;
+
+    if (isLocalMode) {
+      const cacheKey = attachment.attachment_id;
+      const cachedPreviewUrl = previewBlobUrlCacheRef.current[cacheKey];
+      if (cachedPreviewUrl) {
+        URL.revokeObjectURL(cachedPreviewUrl);
+        delete previewBlobUrlCacheRef.current[cacheKey];
+      }
+      return;
+    }
+
     setSecureError(null);
     try {
       const previewCacheKeys = [attachment.attachment_id, attachment.preview_attachment_id].filter((value): value is string => Boolean(value));
@@ -963,8 +984,6 @@ export function EditorPage() {
     );
   }
 
-  const EditorComponent = editorMode === 'mobile' ? MobileMindMapEditor : DesktopMindMapEditor;
-
   // ── Editor ──────────────────────────────────────────────────────────────────
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
@@ -975,18 +994,10 @@ export function EditorPage() {
               <p className="font-semibold text-amber-50">{planPrompt.title}</p>
               <p className="mt-1 text-amber-100/90">{planPrompt.message}</p>
             </div>
-            {planPrompt.shouldOpenSubscription && (
-              <button
-                onClick={() => setShowSubscription(true)}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
-              >
-                {planPrompt.ctaLabel}
-              </button>
-            )}
           </div>
         </div>
       )}
-      <EditorComponent
+      <DesktopMindMapEditor
         key={editorKey}
         initialTree={initialTree}
         externalNodeAttachments={externalNodeAttachments}
@@ -1001,8 +1012,6 @@ export function EditorPage() {
         renamingTitle={renamingTitle}
         onBack={() => navigate('/vaults')}
         onShowHistory={() => { if (!isLocalMode) setShowHistory(true); }}
-        onDownloadEncrypted={handleDownloadEncrypted}
-        onDownloadJson={handleDownloadJson}
         onExportMarkdown={handleExportMarkdown}
         versionLabel={versionLabel}
         versionTooltip={versionTooltip}
@@ -1011,28 +1020,10 @@ export function EditorPage() {
         onOpenSecurePanel={openSecurePanel}
         onNodeFileDrop={(nodeId, files) => uploadEncryptedNodeFiles(nodeId, files)}
         onOpenNodeAttachment={(attachment) => { void handleOpenNodeAttachment(attachment); }}
+        onFetchNodeAttachmentContent={(attachment) => handleFetchNodeAttachmentContent(attachment)}
         onDeleteNodeAttachment={(attachment) => { void handleDeleteNodeAttachment(attachment); }}
         onLoadNodeAttachmentPreview={(attachment) => handleLoadNodeAttachmentPreview(attachment)}
-        onLoadNodeAttachmentViewer={(attachment) => handleLoadNodeAttachmentViewer(attachment)}
       />
-      <div className="pointer-events-none absolute bottom-4 right-4 z-40">
-        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/10 bg-slate-950/85 p-1 text-xs text-white shadow-2xl backdrop-blur">
-          {(['auto', 'desktop', 'mobile'] as const).map((option) => {
-            const active = editorModePreference === option;
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setEditorModePreference(option)}
-                className={`rounded-full px-3 py-1.5 transition ${active ? 'bg-white text-slate-950' : 'text-white/80 hover:bg-white/10 hover:text-white'}`}
-                title={option === 'auto' ? `Auto currently uses ${autoMode}` : `Use ${option} editor`}
-              >
-                {option === 'auto' ? `Auto: ${autoMode}` : option}
-              </button>
-            );
-          })}
-        </div>
-      </div>
       {!isLocalMode && showHistory && (
         <VersionHistoryPanel
           className="mm-version-panel--overlay"
@@ -1066,7 +1057,6 @@ export function EditorPage() {
           onRevokeShare={(share) => { void handleRevokeShare(share); }}
         />
       )}
-      {!isLocalMode && <SubscriptionDialog open={showSubscription} onClose={() => setShowSubscription(false)} />}
     </div>
   );
 }

@@ -21,8 +21,8 @@ export function getLocalStorage(): StorageAdapter {
   return localAdapter;
 }
 
-/** Returns the adapter for the given mode. */
-export function getStorage(mode: 'server' | 'local'): StorageAdapter {
+/** Returns the adapter for the given mode. Defaults to server mode when omitted. */
+export function getStorage(mode: 'server' | 'local' = 'server'): StorageAdapter {
   return mode === 'local' ? getLocalStorage() : getServerStorage();
 }
 

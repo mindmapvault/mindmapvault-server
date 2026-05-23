@@ -113,10 +113,6 @@ export interface AccountCapabilitiesResponse {
   plan_tier: 'free' | 'paid';
   storage_limit_bytes: number;
   max_attachment_size_bytes: number;
-  max_active_shares: number;
-  can_create_public_shares: boolean;
-  can_include_attachments_in_shares: boolean;
-  can_use_plaintext_collaboration: boolean;
   can_export_large_maps: boolean;
   can_use_admin_controls: boolean;
 }
@@ -127,8 +123,6 @@ export interface UserAccountSettings {
   date_format: 'iso' | 'us' | 'eu' | string;
   accessibility_reduce_motion: boolean;
   sync_appearance_across_devices: boolean;
-  default_share_expiry_days: number;
-  default_include_attachments_on_share: boolean;
   default_map_layout: 'mindmap' | 'tree' | 'outline' | 'kanban' | string;
   default_map_theme: 'system' | 'light' | 'dark' | 'focus' | string;
   default_export_format: 'cryptmind' | 'json' | 'markdown' | 'png' | string;
@@ -143,8 +137,6 @@ export interface UpdateUserAccountSettingsRequest {
   date_format?: string;
   accessibility_reduce_motion?: boolean;
   sync_appearance_across_devices?: boolean;
-  default_share_expiry_days?: number;
-  default_include_attachments_on_share?: boolean;
   default_map_layout?: string;
   default_map_theme?: string;
   default_export_format?: string;
@@ -395,6 +387,8 @@ export interface NodeAttachmentRef {
   preview_content_type?: string | null;
   preview_kind?: 'image' | 'card';
   uploaded_at: string;
+  inline_data_base64?: string;
+  inline_preview_data_base64?: string;
 }
 
 export interface MindMapTreeNode {

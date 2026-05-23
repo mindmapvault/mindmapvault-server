@@ -7,13 +7,10 @@ use aws_sdk_s3::{
     error::ProvideErrorMetadata,
     primitives::ByteStream,
     presigning::PresigningConfig,
-    types::{BucketVersioningStatus, VersioningConfiguration},
     Client as S3Client,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use uuid::Uuid;
-
 use crate::{config::AppConfig, error::AppError};
 
 /// A single stored version of a mind map blob in MinIO.
@@ -44,13 +41,6 @@ impl MinioClient {
         if version_id.is_empty() {
             return Err(AppError::BadRequest("version_id is required".to_string()));
         }
-
-        // MinIO returns UUID-shaped version identifiers in the x-amz-version-id
-        // response header. We trust that header from the successful PUT instead of
-        // performing an immediate read-after-write HEAD, which proved unstable under
-        // high concurrency.
-        Uuid::parse_str(&version_id)
-            .map_err(|_| AppError::BadRequest(format!("invalid version id '{version_id}'")))?;
 
         Ok(version_id)
     }
@@ -94,48 +84,47 @@ impl MinioClient {
 
     pub async fn connect(cfg: &AppConfig) -> anyhow::Result<Self> {
         let creds = Credentials::new(
-            &cfg.minio_access_key,
-            &cfg.minio_secret_key,
+            &cfg.s3_access_key,
+            &cfg.s3_secret_key,
             None,
             None,
             "mindmapvault-static",
         );
 
         let aws_cfg = aws_config::defaults(BehaviorVersion::latest())
-            .region(Region::new(cfg.minio_region.clone()))
+            .region(Region::new(cfg.s3_region.clone()))
             .credentials_provider(creds)
             .load()
             .await;
 
-        // Override the endpoint to point at MinIO instead of AWS.
+        // Override the endpoint to point at the configured S3-compatible backend.
         let s3_cfg = S3ConfigBuilder::from(&aws_cfg)
-            .endpoint_url(&cfg.minio_endpoint)
-            .force_path_style(true) // MinIO requires path-style addressing
+            .endpoint_url(&cfg.s3_endpoint)
+            .force_path_style(true)
             .build();
 
         let client = S3Client::from_conf(s3_cfg);
-        let presign_client = if cfg.minio_public_endpoint.trim().is_empty() {
+        let presign_client = if cfg.s3_public_endpoint.trim().is_empty() {
             client.clone()
         } else {
             let public_s3_cfg = S3ConfigBuilder::from(&aws_cfg)
-                .endpoint_url(cfg.minio_public_endpoint.trim())
+                .endpoint_url(cfg.s3_public_endpoint.trim())
                 .force_path_style(true)
                 .build();
             S3Client::from_conf(public_s3_cfg)
         };
 
-        // Ensure bucket exists and versioning is enabled.
-        let bucket = cfg.minio_bucket.clone();
+        // Ensure bucket exists.
+        let bucket = cfg.s3_bucket.clone();
         Self::ensure_bucket(&client, &bucket).await?;
-        Self::ensure_versioning(&client, &bucket).await?;
 
-        tracing::info!("Connected to MinIO at {} (bucket: {}, versioning: enabled)", cfg.minio_endpoint, bucket);
+        tracing::info!("Connected to S3 endpoint at {} (bucket: {})", cfg.s3_endpoint, bucket);
 
         Ok(Self {
             client,
             presign_client,
             bucket,
-            presign_expiry: Duration::from_secs(cfg.minio_presign_expiry_secs),
+            presign_expiry: Duration::from_secs(cfg.s3_presign_expiry_secs),
         })
     }
 
@@ -145,27 +134,10 @@ impl MinioClient {
             Ok(_) => Ok(()),
             Err(_) => {
                 client.create_bucket().bucket(bucket).send().await?;
-                tracing::info!("Created MinIO bucket '{bucket}'");
+                tracing::info!("Created S3 bucket '{bucket}'");
                 Ok(())
             }
         }
-    }
-
-    /// Enables object versioning on the bucket (idempotent).
-    async fn ensure_versioning(client: &S3Client, bucket: &str) -> anyhow::Result<()> {
-        let versioning_cfg = VersioningConfiguration::builder()
-            .status(BucketVersioningStatus::Enabled)
-            .build();
-
-        client
-            .put_bucket_versioning()
-            .bucket(bucket)
-            .versioning_configuration(versioning_cfg)
-            .send()
-            .await?;
-
-        tracing::info!("Versioning enabled on bucket '{bucket}'");
-        Ok(())
     }
 
     /// Generates a presigned PUT URL. The browser will receive the assigned
@@ -187,7 +159,7 @@ impl MinioClient {
         Ok(presigned.uri().to_string())
     }
 
-    /// Uploads an encrypted blob through the backend using the internal MinIO
+    /// Uploads an encrypted blob through the backend using the internal S3
     /// endpoint and returns the assigned object version ID.
     pub async fn upload_blob(
         &self,
@@ -207,13 +179,13 @@ impl MinioClient {
 
         let version_id = output
             .version_id()
-            .ok_or_else(|| AppError::Storage("MinIO did not return a version id".to_string()))?;
+            .ok_or_else(|| AppError::Storage("S3 backend did not return a version id".to_string()))?;
 
         Self::validate_uploaded_version_id(version_id)
     }
 
     /// Downloads an encrypted blob through the backend using the internal
-    /// MinIO endpoint. When `version_id` is provided, that historical version
+    /// S3 endpoint. When `version_id` is provided, that historical version
     /// is streamed instead of the latest object.
     pub async fn download_blob(
         &self,
@@ -437,7 +409,19 @@ impl MinioClient {
     pub async fn delete_object(&self, object_key: &str) -> Result<(), AppError> {
         // With versioning enabled, delete_object only inserts a delete marker.
         // We explicitly delete every version instead.
-        let versions = self.list_object_versions(object_key).await?;
+        let versions = match self.list_object_versions(object_key).await {
+            Ok(versions) => versions,
+            Err(_) => {
+                self.client
+                    .delete_object()
+                    .bucket(&self.bucket)
+                    .key(object_key)
+                    .send()
+                    .await
+                    .map_err(|e| AppError::Storage(e.to_string()))?;
+                return Ok(());
+            }
+        };
 
         for v in versions {
             self.client
@@ -512,11 +496,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_malformed_version_id() {
-        let error = MinioClient::validate_uploaded_version_id("nonexistent-version-id").unwrap_err();
+    fn accepts_garage_hex_version_id() {
+        let version_id = "4e80be07b7c7a0a45c056ad43d3cbe807c7c5704ab5579328fc1da91140b5927";
 
-        assert!(matches!(error, AppError::BadRequest(_)));
-        assert_eq!(error.to_string(), "bad request: invalid version id 'nonexistent-version-id'");
+        let validated = MinioClient::validate_uploaded_version_id(version_id).unwrap();
+
+        assert_eq!(validated, version_id);
+    }
+
+    #[test]
+    fn accepts_arbitrary_non_empty_version_id() {
+        let version_id = "nonexistent-version-id";
+
+        let validated = MinioClient::validate_uploaded_version_id(version_id).unwrap();
+
+        assert_eq!(validated, version_id);
     }
 
     #[test]
@@ -526,4 +520,5 @@ mod tests {
         assert!(matches!(error, AppError::BadRequest(_)));
         assert_eq!(error.to_string(), "bad request: version_id is required");
     }
+
 }

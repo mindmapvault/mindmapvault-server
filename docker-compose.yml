@@ -17,36 +17,29 @@ services:
       timeout: 5s
       retries: 10
 
-  minio:
-    image: minio/minio:RELEASE.2026-04-22T22-12-26Z
-    container_name: mindmapvault-server-minio
+  garage:
+    image: dxflrs/garage:v2.3.0
+    container_name: mindmapvault-server-garage
     restart: unless-stopped
-    command: server /data --console-address ':9001'
+    command: /garage server --single-node --default-bucket
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      # Shared local credentials for the Garage S3 endpoint.
+      GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_ACCESS_KEY:-garage-access-key}
+      GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_SECRET_KEY:-garage-secret-key}
+      GARAGE_DEFAULT_BUCKET: ${GARAGE_BUCKET:-mindmapvault}
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - '9000:3900'
+      - '3901:3901'
+      - '3903:3903'
     volumes:
-      - minio-data:/data
+      - ./docker/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      test: ['CMD', '/garage', '-c', '/etc/garage.toml', 'status']
       interval: 10s
       timeout: 5s
       retries: 10
-
-  minio-init:
-    image: minio/mc:RELEASE.2026-04-16T18-13-26Z
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >-
-      /bin/sh -c
-      "mc alias set local http://minio:9000 minioadmin minioadmin &&
-      mc mb --ignore-existing local/mindmapvault &&
-      mc version enable local/mindmapvault"
-    restart: 'no'
 
   server:
     image: ${SERVER_IMAGE:-mindmapvault-server:local}
@@ -55,15 +48,48 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
+      garage:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    env_file:
-      - ./backend/.env
+    # Edit the values below directly for local container runs.
+    # The backend `.env` file is kept only for direct source-based runs.
+    environment:
+      # Backend bind address inside the container.
+      HOST: 0.0.0.0
+      PORT: 8090
+      DB_ENGINE: postgres
+
+      # PostgreSQL connection details for the compose-managed database.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mindmapvault
+      POSTGRES_PORT: 5432
+      POSTGRES_DSN: postgresql://postgres:postgres@postgres:5432/mindmapvault
+
+      # S3-compatible object storage settings for Garage.
+      S3_ENDPOINT: http://garage:3900
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-garage-access-key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-garage-secret-key}
+      S3_BUCKET: ${S3_BUCKET:-mindmapvault}
+      S3_BASE_URL: ${S3_BASE_URL:-http://localhost:9000}
+      S3_REGION: ${S3_REGION:-garage}
+      S3_PRESIGN_EXPIRY_SECS: ${S3_PRESIGN_EXPIRY_SECS:-3600}
+
+      # JWT and admin token values for the local backend.
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt-secret}
+      JWT_ACCESS_EXPIRY_SECS: ${JWT_ACCESS_EXPIRY_SECS:-900}
+      JWT_REFRESH_EXPIRY_SECS: ${JWT_REFRESH_EXPIRY_SECS:-2592000}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-change-me-admin-token}
+
+      # Browser origins allowed to call the API during local development.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:1420,http://tauri.localhost,https://tauri.localhost}
+
+      # Verbose local logs for troubleshooting.
+      RUST_LOG: ${RUST_LOG:-backend=debug,tower_http=info}
     ports:
       - '8090:8090'
 
 volumes:
   postgres-data:
-  minio-data:
+  garage-meta:
+  garage-data:

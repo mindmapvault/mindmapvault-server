@@ -29,3 +29,5 @@ postgres-data/
 # Editor
 .vscode/
 !.vscode/mcp.json
+
+copilot-instructions.md

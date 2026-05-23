@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { authApi } from '../api/auth';
-import { LegalDocumentDialog, type LegalDocument } from '../components/LegalDocumentDialog';
 import { LogoBlock } from '../components/Logo';
 import { aesEncrypt } from '../crypto/aes';
 import { DEFAULT_ARGON2_PARAMS, deriveMasterAesKey, deriveMasterKey, deriveAuthToken } from '../crypto/kdf';
@@ -11,6 +10,10 @@ import { isTauri } from '../storage';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 import type { SessionKeys } from '../types';
+
+const HOSTED_APP_BASE = 'https://app.mindmapvault.com';
+const HOSTED_LOGIN_URL = `${HOSTED_APP_BASE}/login`;
+const HOSTED_REGISTER_URL = `${HOSTED_APP_BASE}/register`;
 
 function validateUsername(value: string) {
   if (!value) {
@@ -48,10 +51,8 @@ export function RegisterPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [legalDocumentOpen, setLegalDocumentOpen] = useState<LegalDocument | null>(null);
   const postAuthRedirect = useMemo(() => getSafeRedirectPath(searchParams), [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -75,10 +76,6 @@ export function RegisterPage() {
     }
     if (password.length < 12) {
       setError('Password must be at least 12 characters');
-      return;
-    }
-    if (!acceptedTerms) {
-      setError('You must accept the Terms of Service before creating an account');
       return;
     }
 
@@ -190,26 +187,6 @@ export function RegisterPage() {
               />
             </div>
 
-            <label className="flex items-start gap-3 rounded-lg border border-slate-700 bg-surface px-3 py-3 text-sm text-slate-300">
-              <input
-                type="checkbox"
-                checked={acceptedTerms}
-                onChange={(e) => setAcceptedTerms(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-slate-500 bg-surface text-accent focus:ring-accent"
-              />
-              <span className="leading-6">
-                I agree to the{' '}
-                <button type="button" onClick={() => setLegalDocumentOpen('terms')} className="text-accent hover:underline">
-                  Terms of Service
-                </button>
-                {' '}and acknowledge the{' '}
-                <button type="button" onClick={() => setLegalDocumentOpen('privacy')} className="text-accent hover:underline">
-                  Privacy & GDPR Notice
-                </button>
-                .
-              </span>
-            </label>
-
             {error && (
               <p className="rounded-lg border border-red-800 bg-red-900/30 px-3 py-2 text-sm text-red-400">
                 {error}
@@ -218,7 +195,7 @@ export function RegisterPage() {
 
             <button
               type="submit"
-              disabled={loading || !username || !password || !confirm || !acceptedTerms}
+              disabled={loading || !username || !password || !confirm}
               className="w-full rounded-lg bg-accent py-2.5 font-medium text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? (
@@ -250,6 +227,18 @@ export function RegisterPage() {
           </Link>
         </p>
 
+        <p className="mt-2 text-center text-xs text-slate-500">
+          Prefer the hosted SaaS version?{' '}
+          <a href={HOSTED_LOGIN_URL} className="text-accent hover:underline">
+            Sign in there
+          </a>
+          {' '}or{' '}
+          <a href={HOSTED_REGISTER_URL} className="text-accent hover:underline">
+            create a hosted account
+          </a>
+          .
+        </p>
+
         {isDesktop && (
           <p className="mt-2 text-center text-xs text-slate-500">
             <button
@@ -265,8 +254,6 @@ export function RegisterPage() {
           </p>
         )}
       </div>
-
-      <LegalDocumentDialog document={legalDocumentOpen} onClose={() => setLegalDocumentOpen(null)} />
     </div>
   );
 }

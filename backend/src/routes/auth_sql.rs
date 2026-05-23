@@ -17,7 +17,7 @@ use crate::{
     error::AppError,
     middleware::auth::{AuthenticatedUser, JwtService},
     models::{
-        access::{AccessPlan, AccessSource, SubscriptionMode, UiSurface, UserAccessGrant},
+        access::{AccessSource, SubscriptionMode, UiSurface, UserAccessGrant},
         attachment::AttachmentStatus,
         mindmap::VersionSnapshot,
         settings::{UpdateUserAccountSettingsRequest, UserAccountSettings},
@@ -143,7 +143,6 @@ async fn register(
             access_grants: vec![UserAccessGrant {
                 subscription_mode: SubscriptionMode::PrivateEncrypted,
                 ui_surface: UiSurface::EncryptedVaultApp,
-                plan: AccessPlan::Free,
                 source: AccessSource::LegacyBase,
                 granted_at: now,
                 expires_at: None,
@@ -326,7 +325,6 @@ async fn get_storage(
             .sum::<i64>();
         attachment_bytes += map_attachment_bytes;
         total_bytes += map_attachment_bytes;
-        total_bytes += load_map_share_storage_bytes(&state.db, &map.id).await?;
     }
 
     let plan_limit_bytes = subscription_tier.storage_limit_bytes();
@@ -357,10 +355,6 @@ async fn get_capabilities(
         plan_tier: subscription_tier.as_str().to_string(),
         storage_limit_bytes: subscription_tier.storage_limit_bytes(),
         max_attachment_size_bytes: subscription_tier.max_attachment_size_bytes(),
-        max_active_shares: subscription_tier.max_active_shares(),
-        can_create_public_shares: subscription_tier.can_create_public_shares(),
-        can_include_attachments_in_shares: subscription_tier.can_include_attachments_in_shares(),
-        can_use_plaintext_collaboration: subscription_tier.can_use_plaintext_collaboration(),
         can_export_large_maps: subscription_tier.can_export_large_maps(),
         can_use_admin_controls: subscription_tier.can_use_admin_controls(),
     }))
@@ -404,17 +398,6 @@ async fn update_settings(
     }
     if let Some(value) = body.sync_appearance_across_devices {
         settings.sync_appearance_across_devices = value;
-    }
-    if let Some(value) = body.default_share_expiry_days {
-        if !(1..=365).contains(&value) {
-            return Err(AppError::BadRequest(
-                "default_share_expiry_days must be between 1 and 365".to_string(),
-            ));
-        }
-        settings.default_share_expiry_days = value;
-    }
-    if let Some(value) = body.default_include_attachments_on_share {
-        settings.default_include_attachments_on_share = value;
     }
     if let Some(value) = body.default_map_layout {
         settings.default_map_layout = normalize_choice(
@@ -558,22 +541,6 @@ async fn delete_owned_blobs(
             }
         }
 
-        let shares = store.list_mind_map_shares(&map.id).await?;
-        for share in shares {
-            let share_attachments = store.list_mind_map_share_attachments(&share.id).await?;
-            for attachment in share_attachments {
-                match minio.delete_object(&attachment.s3_key).await {
-                    Ok(()) | Err(AppError::NotFound(_)) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-
-            match minio.delete_object(&share.s3_key).await {
-                Ok(()) | Err(AppError::NotFound(_)) => {}
-                Err(error) => return Err(error),
-            }
-        }
-
         match minio.delete_object(&map.minio_object_key).await {
             Ok(()) | Err(AppError::NotFound(_)) => {}
             Err(error) => return Err(error),
@@ -603,29 +570,6 @@ fn known_version_ids(
     }
 
     version_ids
-}
-
-async fn load_map_share_storage_bytes(
-    db: &DynSqlStore,
-    map_id: &str,
-) -> Result<i64, AppError> {
-    let shares = db.list_mind_map_shares(map_id).await?;
-    let mut share_bytes = 0_i64;
-
-    for share in shares {
-        if share.status == crate::models::share::ShareStatus::Available {
-            share_bytes += share.size_bytes;
-        }
-
-        let attachments = db.list_mind_map_share_attachments(&share.id).await?;
-        share_bytes += attachments
-            .into_iter()
-            .filter(|attachment| attachment.status == AttachmentStatus::Available)
-            .map(|attachment| attachment.size_bytes)
-            .sum::<i64>();
-    }
-
-    Ok(share_bytes)
 }
 
 /// POST /api/auth/rotate-credentials

@@ -6,13 +6,20 @@ pub struct AppConfig {
     pub port: u16,
     pub sql_dsn: String,
     pub postgres_dsn: String,
-    pub minio_endpoint: String,
-    pub minio_public_endpoint: String,
-    pub minio_access_key: String,
-    pub minio_secret_key: String,
-    pub minio_bucket: String,
-    pub minio_region: String,
-    pub minio_presign_expiry_secs: u64,
+    #[serde(alias = "minio_endpoint")]
+    pub s3_endpoint: String,
+    #[serde(alias = "minio_public_endpoint")]
+    pub s3_public_endpoint: String,
+    #[serde(alias = "minio_access_key")]
+    pub s3_access_key: String,
+    #[serde(alias = "minio_secret_key")]
+    pub s3_secret_key: String,
+    #[serde(alias = "minio_bucket")]
+    pub s3_bucket: String,
+    #[serde(alias = "minio_region")]
+    pub s3_region: String,
+    #[serde(alias = "minio_presign_expiry_secs")]
+    pub s3_presign_expiry_secs: u64,
     pub jwt_secret: String,
     pub jwt_access_expiry_secs: u64,
     pub jwt_refresh_expiry_secs: u64,
@@ -34,9 +41,9 @@ impl AppConfig {
             .set_default("port", 8080)?
             .set_default("sql_dsn", "")?
             .set_default("postgres_dsn", "")?
-            .set_default("minio_public_endpoint", "")?
-            .set_default("minio_region", "us-east-1")?
-            .set_default("minio_presign_expiry_secs", 3600)?
+            .set_default("s3_public_endpoint", "")?
+            .set_default("s3_region", "us-east-1")?
+            .set_default("s3_presign_expiry_secs", 3600)?
             .set_default("jwt_access_expiry_secs", 900)?
             .set_default("jwt_refresh_expiry_secs", 2_592_000)?
             .set_default("cors_allowed_origins", "http://localhost:5173,http://tauri.localhost,https://tauri.localhost,http://localhost:8090,https://mindmapvault.com,https://www.mindmapvault.com,https://app.mindmapvault.com,https://mindmap.marazfamily.eu,https://admin.mindmapvault.com")?

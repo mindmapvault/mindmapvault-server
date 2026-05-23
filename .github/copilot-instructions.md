@@ -82,10 +82,18 @@ Frontend parity contract files:
 - `frontend_app/offline_capability_contract.json`
 - `frontend_app/offline_scan_allowlist.txt`
 
-Required parity check command:
+Required security check command:
 
-- `node scripts/check_frontend_offline_parity.mjs`
 - `node scripts/check_no_committed_secrets.mjs`
+
+Offline parity checks are handled in the FOSS repo and are not required for server-only changes in this repository.
+
+## GitHub Actions Security Procedure
+
+- keep workflow actions pinned to current stable major versions, such as `actions/checkout@v4` and `docker/build-push-action@v6`
+- run the committed-secrets scan on every PR and main-branch push through `.github/workflows/security-guard.yml`
+- avoid adding new workflow steps that print tokens, passwords, access keys, or private URLs into logs
+- if a change touches authentication, storage, or deployment automation, review the corresponding workflow before merging
 
 ## Documentation Rules
 
@@ -109,7 +117,7 @@ After each implementation iteration, verify:
 5. Documentation: update repo docs and `mindmapvault-www` docs if cross-product behavior changed.
 6. Validation: run relevant checks for changed surfaces (`backend`, `frontend_app`, `frontend_admin`, `desktop/src-tauri`) and fix regressions before proceeding.
 7. Automation: ensure `.github/workflows` stays consistent with repository structure and validation requirements.
-8. Parity: run `node scripts/check_frontend_offline_parity.mjs` to ensure FOSS offline capability parity and privacy rules remain intact.
+8. Parity: only required when a change explicitly affects offline capability in shared app code; otherwise it is not needed for server-only work in this repo.
 9. Secrets: run `node scripts/check_no_committed_secrets.mjs` and remove any committed secret-like values before merge.
 
 ## Frontend Parity Rules (Server vs FOSS)

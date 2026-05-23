@@ -12,10 +12,6 @@ export type Subscription = {
   paid_yearly_price_label?: string;
   paid_yearly_limit_bytes?: number;
   max_attachment_size_bytes?: number;
-  max_active_shares?: number;
-  can_create_public_shares?: boolean;
-  can_include_attachments_in_shares?: boolean;
-  can_use_plaintext_collaboration?: boolean;
   can_export_large_maps?: boolean;
   can_use_admin_controls?: boolean;
 };

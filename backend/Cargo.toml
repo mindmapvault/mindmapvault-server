@@ -1,6 +1,6 @@
 [package]
 name = "backend"
-version = "0.3.11"
+version = "0.3.24"
 edition = "2021"
 
 [dependencies]
@@ -33,9 +33,6 @@ bson = { version = "2", features = ["chrono-0_4"] }
 thiserror = "2"
 anyhow = "1"
 
-# Validation
-validator = { version = "0.19", features = ["derive"] }
-
 # Tracing / logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -53,16 +50,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # Base64
 base64 = "0.22"
 
+[target.'cfg(not(windows))'.dependencies]
 # Profiling (optional at runtime via env)
 pprof = { version = "0.8", features = ["flamegraph"] }
 jemallocator = "0.5"
 jemalloc-ctl = "0.5"
-
-# Rate limiting
-tower_governor = "0.4"
-
-# HTTP client (health checks)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 [dev-dependencies]
 axum-test = "15"

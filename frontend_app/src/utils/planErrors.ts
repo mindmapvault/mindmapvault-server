@@ -3,8 +3,6 @@ import { ApiError } from '../api/client';
 export interface PlanErrorPrompt {
   title: string;
   message: string;
-  ctaLabel: string;
-  shouldOpenSubscription: boolean;
 }
 
 function formatBytes(bytes?: number): string {
@@ -32,8 +30,6 @@ export function getPlanErrorPrompt(error: unknown): PlanErrorPrompt | null {
       message: canUpgrade
         ? `This write would push your ${formatTier(error.currentTier)} plan above its ${limit} cloud limit. You are currently using ${current}.`
         : `This write would exceed your current cloud storage limit of ${limit}. You are currently using ${current}.`,
-      ctaLabel: canUpgrade ? 'Open subscription' : 'Review plan',
-      shouldOpenSubscription: true,
     };
   }
 
@@ -41,8 +37,6 @@ export function getPlanErrorPrompt(error: unknown): PlanErrorPrompt | null {
     return {
       title: 'Attachment too large for this plan',
       message: `This attachment is larger than the ${formatTier(error.currentTier)} limit of ${formatBytes(error.limitValue)}.`,
-      ctaLabel: 'Open subscription',
-      shouldOpenSubscription: true,
     };
   }
 
@@ -50,8 +44,6 @@ export function getPlanErrorPrompt(error: unknown): PlanErrorPrompt | null {
     return {
       title: 'Share attachments need Pro',
       message: 'Upgrade to the paid plan to include encrypted attachments in public share links.',
-      ctaLabel: 'Open subscription',
-      shouldOpenSubscription: true,
     };
   }
 
@@ -59,8 +51,6 @@ export function getPlanErrorPrompt(error: unknown): PlanErrorPrompt | null {
     return {
       title: 'Active share limit reached',
       message: `Your current plan allows up to ${error.limitValue ?? 'the configured'} active encrypted shares per vault.`,
-      ctaLabel: 'Open subscription',
-      shouldOpenSubscription: true,
     };
   }
 
@@ -68,8 +58,6 @@ export function getPlanErrorPrompt(error: unknown): PlanErrorPrompt | null {
     return {
       title: 'Plan limit reached',
       message: error.message,
-      ctaLabel: 'Open subscription',
-      shouldOpenSubscription: true,
     };
   }
 

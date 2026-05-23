@@ -1,0 +1,18 @@
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+consistency_mode = "consistent"
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "garage:3901"
+rpc_secret = "6b5b8f17f99d90f4dc8d56f4ac7a7fb0f20a31d697f6adf6bba2a35a7ec2cc2e"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "0.0.0.0:3903"
+admin_token = "mindmapvault-garage-admin-token"

@@ -1,0 +1,11 @@
+.git
+.gitignore
+.venv
+**/node_modules
+**/dist
+**/target
+**/.DS_Store
+**/*.log
+backend/.env
+.env
+.vscode

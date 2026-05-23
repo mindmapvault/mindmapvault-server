@@ -1,15 +1,12 @@
-import { useState } from 'react';
 import type { ClipboardEvent, DragEvent, RefObject } from 'react';
 import type { NodeAttachmentRef } from '../types';
-import DynamicLucideIcon from './DynamicLucideIcon';
-import type { NodeAttachmentViewerAsset } from './MindMapEditor.types';
+import { handleDelegatedLinkClick } from '../utils/openExternal';
 
 interface MindMapNotesDialogProps {
   open: boolean;
   notesDropActive: boolean;
   nodeTitle: string;
   hasNodeNotes: boolean;
-  nodeIcons: string[];
   nodeTags: Array<{ name: string; color: string }>;
   attachmentCount: number;
   attachmentLabel: string;
@@ -21,15 +18,14 @@ interface MindMapNotesDialogProps {
   notesText: string;
   notesPreviewHtml: string;
   notesRef: RefObject<HTMLTextAreaElement>;
-  notesImageInputRef: RefObject<HTMLInputElement>;
+  notesAttachmentInputRef: RefObject<HTMLInputElement>;
   onClose: () => void;
   onDragOver: (e: DragEvent<HTMLDivElement>) => void;
   onDragLeave: (e: DragEvent<HTMLDivElement>) => void;
   onDrop: (e: DragEvent<HTMLDivElement>) => void;
   onOpenAttachment?: (attachment: NodeAttachmentRef) => void;
   onDeleteAttachment?: (attachment: NodeAttachmentRef) => void;
-  onLoadAttachmentViewer?: (attachment: NodeAttachmentRef) => Promise<NodeAttachmentViewerAsset | null>;
-  onAddPictureFiles: (files: File[]) => void;
+  onAddAttachmentFiles: (files: File[]) => void;
   onInsertMarkdownAction: (action: 'h1' | 'h2' | 'h3' | 'bold' | 'italic' | 'ul' | 'ol' | 'task' | 'quote' | 'code' | 'link') => void;
   onToggleMarkdownHelp: () => void;
   onNotesTextChange: (value: string) => void;
@@ -43,7 +39,6 @@ export function MindMapNotesDialog({
   notesDropActive,
   nodeTitle,
   hasNodeNotes,
-  nodeIcons,
   nodeTags,
   attachmentCount,
   attachmentLabel,
@@ -55,15 +50,14 @@ export function MindMapNotesDialog({
   notesText,
   notesPreviewHtml,
   notesRef,
-  notesImageInputRef,
+  notesAttachmentInputRef,
   onClose,
   onDragOver,
   onDragLeave,
   onDrop,
   onOpenAttachment,
   onDeleteAttachment,
-  onLoadAttachmentViewer,
-  onAddPictureFiles,
+  onAddAttachmentFiles,
   onInsertMarkdownAction,
   onToggleMarkdownHelp,
   onNotesTextChange,
@@ -71,78 +65,7 @@ export function MindMapNotesDialog({
   onSaveNotes,
   onDeleteNotes,
 }: MindMapNotesDialogProps) {
-  const [attachmentViewer, setAttachmentViewer] = useState<NodeAttachmentViewerAsset | null>(null);
-  const [viewerBusyAttachmentId, setViewerBusyAttachmentId] = useState<string | null>(null);
-
   if (!open) return null;
-
-  const canPreviewAttachment = (attachment: NodeAttachmentRef) => {
-    return attachment.content_type.startsWith('image/') || attachment.content_type === 'application/pdf';
-  };
-
-  const openAttachmentViewer = async (attachment: NodeAttachmentRef, fallbackUrl?: string) => {
-    if (!canPreviewAttachment(attachment)) {
-      onOpenAttachment?.(attachment);
-      return;
-    }
-
-    if (attachment.content_type.startsWith('image/') && fallbackUrl) {
-      setAttachmentViewer({
-        url: fallbackUrl,
-        contentType: attachment.content_type,
-        name: attachment.name,
-      });
-      return;
-    }
-
-    if (!onLoadAttachmentViewer) {
-      onOpenAttachment?.(attachment);
-      return;
-    }
-
-    setViewerBusyAttachmentId(attachment.attachment_id);
-    try {
-      const viewerAsset = await onLoadAttachmentViewer(attachment);
-      if (viewerAsset) {
-        setAttachmentViewer(viewerAsset);
-      } else {
-        onOpenAttachment?.(attachment);
-      }
-    } finally {
-      setViewerBusyAttachmentId(null);
-    }
-  };
-
-  const handlePreviewClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-
-    const image = target.closest('img.mm-notes-inline-image');
-    if (image instanceof HTMLImageElement) {
-      event.preventDefault();
-      event.stopPropagation();
-      setAttachmentViewer({
-        url: image.currentSrc || image.src,
-        contentType: 'image/*',
-        name: image.alt || 'Attachment preview',
-      });
-      return;
-    }
-
-    const anchor = target.closest('a[href^="attachment://"]');
-    if (!(anchor instanceof HTMLAnchorElement)) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const attachmentId = (anchor.getAttribute('href') ?? '').replace(/^attachment:\/\//, '');
-    if (!attachmentId) return;
-
-    const attachment = attachments.find((item) => item.attachment_id === attachmentId);
-    if (attachment) {
-      void openAttachmentViewer(attachment, attachmentPreviewUrls[attachment.attachment_id]);
-    }
-  };
 
   return (
     <>
@@ -165,17 +88,6 @@ export function MindMapNotesDialog({
               {hasNodeNotes && <span className="mm-notes-node-flag">Note</span>}
               {attachmentCount > 0 && <span className="mm-notes-node-flag">{attachmentLabel}</span>}
             </div>
-          </div>
-          <div className="mm-notes-node-preview-row" style={{ gap: 6 }}>
-            {nodeIcons.length > 0 ? (
-              nodeIcons.map((iconName, idx) => (
-                <span key={`${iconName}-${idx}`} className="mm-notes-node-icon">
-                  <DynamicLucideIcon name={iconName} size={14} />
-                </span>
-              ))
-            ) : (
-              <span className="mm-notes-node-preview-muted">No icons</span>
-            )}
           </div>
           <div className="mm-notes-node-preview-row" style={{ flexWrap: 'wrap' }}>
             {nodeTags.length > 0 ? (
@@ -201,24 +113,9 @@ export function MindMapNotesDialog({
                     <button
                       type="button"
                       className="mm-notes-attachment-open"
-                      onClick={() => {
-                        if (attachment.content_type === 'application/pdf') {
-                          void openAttachmentViewer(attachment);
-                          return;
-                        }
-                        onOpenAttachment?.(attachment);
-                      }}
+                      onClick={() => onOpenAttachment?.(attachment)}
                     >
-                      <div
-                        className={`mm-notes-attachment-thumb${previewUrl ? ' is-previewable' : ''}`}
-                        onClick={(event) => {
-                          if (!previewUrl) return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          void openAttachmentViewer(attachment, previewUrl);
-                        }}
-                        title={previewUrl ? 'Open preview' : undefined}
-                      >
+                      <div className="mm-notes-attachment-thumb">
                         {previewUrl ? (
                           <img src={previewUrl} alt={attachment.name} className="mm-notes-attachment-image" />
                         ) : (
@@ -227,7 +124,7 @@ export function MindMapNotesDialog({
                       </div>
                       <div className="mm-notes-attachment-meta">
                         <strong>{attachment.name}</strong>
-                        <span>{Math.max(1, Math.round(attachment.size_bytes / 1024))} KB{viewerBusyAttachmentId === attachment.attachment_id ? ' · Opening preview…' : ''}</span>
+                        <span>{Math.max(1, Math.round(attachment.size_bytes / 1024))} KB</span>
                       </div>
                     </button>
                     {canDeleteAttachment && (
@@ -255,22 +152,21 @@ export function MindMapNotesDialog({
         <div className="mm-notes-markdown-tools">
           <button
             className="mm-notes-md-btn"
-            onClick={() => notesImageInputRef.current?.click()}
-            title="Add picture"
+            onClick={() => notesAttachmentInputRef.current?.click()}
+            title="Attach files"
             type="button"
           >
-            + Picture
+            + File
           </button>
           <input
-            ref={notesImageInputRef}
+            ref={notesAttachmentInputRef}
             type="file"
-            accept="image/*"
             multiple
             style={{ display: 'none' }}
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               if (files.length > 0) {
-                onAddPictureFiles(files);
+                onAddAttachmentFiles(files);
               }
               e.currentTarget.value = '';
             }}
@@ -295,7 +191,7 @@ export function MindMapNotesDialog({
             <div><strong>**bold**</strong>, <em>*italic*</em>, <strong>`code`</strong></div>
             <div><strong>- item</strong> unordered, <strong>1. item</strong> ordered, <strong>- [ ] task</strong> checklist</div>
             <div><strong>&gt; quote</strong> block quote, <strong>[text](url)</strong> links</div>
-            <div>Drop pictures anywhere in this dialog, use <strong>+ Picture</strong>, or paste with <strong>Ctrl+V</strong> to insert image markdown.</div>
+            <div>Drop files anywhere in this dialog, use <strong>+ File</strong>, or paste images with <strong>Ctrl+V</strong> to insert attachment markdown.</div>
           </div>
         )}
         <div className="mm-notes-split">
@@ -308,7 +204,13 @@ export function MindMapNotesDialog({
             />
           </div>
           <div className="mm-notes-preview-pane">
-            <div className="mm-notes-preview" onClick={handlePreviewClick} dangerouslySetInnerHTML={{ __html: notesPreviewHtml }} />
+            <div
+              className="mm-notes-preview"
+              dangerouslySetInnerHTML={{ __html: notesPreviewHtml }}
+              onClick={(e) => {
+                handleDelegatedLinkClick(e as unknown as MouseEvent);
+              }}
+            />
           </div>
         </div>
         <div className="mm-notes-footer">
@@ -317,26 +219,6 @@ export function MindMapNotesDialog({
           <button className="mm-btn mm-btn--danger" style={{ marginLeft: 'auto' }} onClick={onDeleteNotes}>Delete note</button>
         </div>
       </div>
-      {attachmentViewer && (
-        <>
-          <div className="mm-overlay mm-image-preview-overlay" onClick={() => setAttachmentViewer(null)} />
-          <div className="mm-image-preview-dialog" role="dialog" aria-modal="true" aria-label={attachmentViewer.name}>
-            <div className="mm-image-preview-header">
-              <strong>{attachmentViewer.name}</strong>
-              <button className="mm-btn-icon" onClick={() => setAttachmentViewer(null)} title="Close preview">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="mm-image-preview-body">
-              {attachmentViewer.contentType === 'application/pdf' ? (
-                <iframe src={attachmentViewer.url} title={attachmentViewer.name} className="mm-image-preview-pdf" />
-              ) : (
-                <img src={attachmentViewer.url} alt={attachmentViewer.name} className="mm-image-preview-full" />
-              )}
-            </div>
-          </div>
-        </>
-      )}
     </>
   );
 }
