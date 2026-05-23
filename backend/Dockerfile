@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # ── Stage 1: Build web surfaces for the community server image ───────────────
 FROM node:20-bookworm AS web-builder
 
