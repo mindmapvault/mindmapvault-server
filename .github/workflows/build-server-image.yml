@@ -166,7 +166,20 @@ jobs:
           token="${token#\"}"
           token="${token%\'}"
           token="${token#\'}"
-          printf '%s' "$token" | docker login docker.io -u "$username" --password-stdin
+
+          # Ensure no stale Docker Hub auth entry interferes with the fresh login attempt.
+          docker logout docker.io >/dev/null 2>&1 || true
+          docker logout https://index.docker.io/v1/ >/dev/null 2>&1 || true
+
+          # First try the canonical docker.io endpoint.
+          if printf '%s' "$token" | docker login docker.io -u "$username" --password-stdin; then
+            exit 0
+          fi
+
+          echo "Primary Docker Hub login endpoint failed; retrying with index.docker.io/v1/."
+
+          # Retry using the legacy index endpoint accepted by some Docker clients/flows.
+          printf '%s' "$token" | docker login https://index.docker.io/v1/ -u "$username" --password-stdin
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v6
