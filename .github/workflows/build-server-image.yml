@@ -77,6 +77,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate Docker Hub credentials
+        if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          username='${{ secrets.DOCKERHUB_USERNAME }}'
+          token='${{ secrets.DOCKERHUB_TOKEN }}'
+
+          if [ -z "$username" ]; then
+            echo "DOCKERHUB_USERNAME is empty."
+            exit 1
+          fi
+
+          if [ -z "$token" ]; then
+            echo "DOCKERHUB_TOKEN is empty."
+            exit 1
+          fi
+
+          # Docker Hub login expects account/org name only, not repository/image references.
+          if [[ "$username" == *"/"* ]] || [[ "$username" == *":"* ]] || [[ "$username" == *"@"* ]] || [[ "$username" == *"docker.io"* ]]; then
+            echo "DOCKERHUB_USERNAME looks invalid: use only the Docker Hub account/org name (example: kornelko2)."
+            exit 1
+          fi
+
+          # Newlines or spaces in credentials frequently cause malformed Authorization header errors.
+          if [[ "$username" =~ [[:space:]] ]]; then
+            echo "DOCKERHUB_USERNAME contains whitespace; remove spaces/newlines."
+            exit 1
+          fi
+
+          if [[ "$token" =~ [[:space:]] ]]; then
+            echo "DOCKERHUB_TOKEN contains whitespace; regenerate and paste the token without spaces/newlines."
+            exit 1
+          fi
+
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
         uses: docker/login-action@v3
