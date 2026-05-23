@@ -20,6 +20,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **Image Publishing** — Extended the server image workflow so the same GitHub Actions run can publish to Docker Hub and emit clean semver tags like `0.3.24` on versioned releases.
 - **CI Runtime Compatibility** — Opted the image workflow into Node 24 for JavaScript actions (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`) and improved Docker Hub target detection by falling back to `DOCKERHUB_USERNAME` when `DOCKERHUB_NAMESPACE` is not set.
 - **CI Publish Guardrails** — Added Docker Hub credential preflight validation in the image workflow to fail early with actionable messages when `DOCKERHUB_USERNAME` or `DOCKERHUB_TOKEN` are malformed (for example, whitespace or repository strings instead of account name), preventing opaque Docker auth-header failures.
+- **CI Docker Hub Login Reliability** — Replaced Docker Hub `docker/login-action` usage with explicit `docker login --password-stdin` and tightened username/token validation to reduce registry auth-header failures caused by malformed secret values.
 
 ### Removed
 

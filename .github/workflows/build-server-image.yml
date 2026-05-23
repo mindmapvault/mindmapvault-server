@@ -113,12 +113,22 @@ jobs:
             exit 1
           fi
 
-      - name: Log in to Docker Hub
+          if [[ ! "$username" =~ ^[a-z0-9][a-z0-9_-]{1,63}$ ]]; then
+            echo "DOCKERHUB_USERNAME must be a valid Docker Hub account/org slug (lowercase letters, digits, '_' or '-')."
+            exit 1
+          fi
+
+          if [[ ! "$token" =~ ^[[:graph:]]+$ ]]; then
+            echo "DOCKERHUB_TOKEN contains non-printable characters; regenerate and paste a clean token."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub (CLI)
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' '${{ secrets.DOCKERHUB_TOKEN }}' | docker login docker.io -u '${{ secrets.DOCKERHUB_USERNAME }}' --password-stdin
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v6
