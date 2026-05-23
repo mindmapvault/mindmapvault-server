@@ -21,6 +21,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **CI Runtime Compatibility** — Opted the image workflow into Node 24 for JavaScript actions (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`) and improved Docker Hub target detection by falling back to `DOCKERHUB_USERNAME` when `DOCKERHUB_NAMESPACE` is not set.
 - **CI Publish Guardrails** — Added Docker Hub credential preflight validation in the image workflow to fail early with actionable messages when `DOCKERHUB_USERNAME` or `DOCKERHUB_TOKEN` are malformed (for example, whitespace or repository strings instead of account name), preventing opaque Docker auth-header failures.
 - **CI Docker Hub Login Reliability** — Replaced Docker Hub `docker/login-action` usage with explicit `docker login --password-stdin` and tightened username/token validation to reduce registry auth-header failures caused by malformed secret values.
+- **CI Docker Hub Auth Safety** — Switched Docker Hub secret handling in workflow shell steps to environment-variable injection (`env:`) instead of inline expression interpolation, avoiding quoting and escaping edge cases during CI login.
+- **CI Docker Hub Validation** — Relaxed username validation to avoid false negatives for valid Docker Hub account names and added CR/LF sanitization of username/token before Docker login.
 
 ### Removed
 
