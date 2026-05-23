@@ -1,99 +1,83 @@
 # MindMapVault Server
 
-MindMapVault Server is the technical backend component for the MindMapVault platform.
+MindMapVault Server is the community backend package for the MindMapVault platform.
 
-Purpose:
-- provide sync for multi-device clients
-- provide secure sharing workflows
-- enable future collaboration features
-- expose a clear and auditable API contract
+It provides the server-side runtime that supports multi-device sync, secure sharing workflows, and the hosted API contract used by the web client and admin surface.
 
-Positioning:
-- backend service, not the commercial edition itself
-- optional add-on for the community, not a paywall over FOSS
+This repository is intended to be readable, auditable, and deployable as a single packaged server image.
 
-Privacy boundary:
-- designed for zero-knowledge-compatible workflows
-- server must not require plaintext map payloads for standard operations
+## Why This Project
 
-License:
-- AGPL-3.0-or-later (see LICENSE)
+MindMapVault Server exists as a practical backend for the community edition.
 
-Repository status:
-- private during initial structuring
+What this repository provides:
+
+- a Rust API backend for encrypted vault sync and metadata management
+- a packaged `frontend_app` bundle served at `/` in the server image
+- a packaged `frontend_admin` bundle served at `/admin/` in the server image
+- a Docker-based local stack for PostgreSQL, Garage, and the server container
+- a clear API surface that stays compatible with the web client
+
+What this repository does not own:
+
+- SaaS billing, Cloudflare deployment wiring, or other hosted-commercial operations
+- enterprise governance, SSO, audit, or compliance overlays
+- a local-only desktop runtime; that belongs in the FOSS desktop repository
+
+## Privacy Boundary
+
+This project is designed for zero-knowledge-compatible workflows.
+
+Key boundary rules:
+
+- server operations must not require plaintext map payloads for normal use
+- vault content remains encrypted client-side before upload
+- object storage contains encrypted blobs, not decrypted user data
+- logs should not expose plaintext notes, keys, or secrets
+
+Important boundary: this is a backend service, not an anonymity system. Password hygiene, endpoint protection, and safe export handling still matter.
+
+## Architecture Overview
+
+Core components:
+
+1. `backend/` - Rust API, auth, storage, and route handlers
+2. `frontend_app/` - React + TypeScript web client served by the packaged server
+3. `frontend_admin/` - community admin surface served at `/admin/`
+4. `docker-compose.yml` - local PostgreSQL, Garage, and server stack
+5. `tests/` - load tests and regression helpers
+
+High-level flow:
+
+1. The user opens the web client and authenticates against the backend.
+2. The client encrypts vault content locally.
+3. The backend stores encrypted metadata and encrypted blobs.
+4. The admin surface stays separate from the end-user app but is served from the same packaged image.
+
+Related technical notes:
+
+- `docs/SURFACE_OWNERSHIP.md`
+- `mindmapvault-www/docs/internal/PRODUCT_SURFACE_OWNERSHIP.md`
 
 ## Code Ownership And Packaging
 
 This repository is the community server baseline.
 
 - `backend/` owns the API contract and the community runtime image.
-- `frontend_app/` is the end-user web client served by the backend at `/` in the packaged server image.
-- `frontend_admin/` is the community admin surface served by the backend at `/admin/` in the packaged server image.
+- `frontend_app/` is the end-user web client served at `/` in the packaged server image.
+- `frontend_admin/` is the community admin surface served at `/admin/` in the packaged server image.
 - hosted billing, Cloudflare deployment wiring, and other SaaS-only operations belong in `mindmapvault-saas`, not here.
 - enterprise governance, SSO, audit, and compliance overlays belong in `mindmapvault-enterprise-server`, not here.
 
-See `docs/SURFACE_OWNERSHIP.md` for the local rule set and `mindmapvault-www/docs/internal/PRODUCT_SURFACE_OWNERSHIP.md` for the canonical cross-repo split.
+## Getting Started
 
-## Local Configuration
+Prerequisites:
 
-For container-based local development, `docker-compose.yml` is the primary configuration file.
-Edit the values in the `server` service there to change host, database, S3, JWT, CORS, and logging settings.
+- Docker
+- Docker Compose
+- WSL 2 if you want to use the native Windows workflow described below
 
-The backend still auto-loads a local `.env` file when you run it directly from `backend/`, but that file is now only a fallback for source-based runs.
-
-1. Use `docker compose up -d postgres garage server` for the default local stack.
-2. Edit `docker-compose.yml` directly if you want to change backend settings for the compose stack.
-3. If you run the backend from source, create or edit `backend/.env` with only the values you need for that direct run.
-
-Example source-based setup:
-
-```powershell
-Copy-Item .env.example backend/.env
-```
-The `.gitignore` intentionally ignores both `.env` and `backend/.env` so local credentials do not get committed.
-
-## Clone And Build
-
-If you are starting from scratch, clone the repository first and then build the server image:
-
-```powershell
-git clone https://github.com/mindmapvault/mindmapvault-server
-cd mindmapvault-server
-docker build -f backend/Dockerfile -t mindmapvault-server:local .
-```
-
-The same build works from WSL:
-
-```powershell
-wsl.exe -d Ubuntu bash -lc 'git clone https://github.com/mindmapvault/mindmapvault-server && cd mindmapvault-server && docker build -f backend/Dockerfile -t mindmapvault-server:local .'
-```
-
-## Tests
-
-Repository test helpers live under `tests/`.
-
-- `tests/performance/load-test.mjs` runs a JavaScript load test against the backend and defaults to 200 concurrent users.
-
-Run it after starting the local stack:
-
-```powershell
-node tests/performance/load-test.mjs --users 200 --concurrency 200 --no-cleanup
-```
-
-The script registers test users, logs them in, reads account data, updates settings, exercises notifications, creates and edits a vault, and then reads it back. Add `--cleanup` if you want it to attempt vault and profile deletion after the run.
-
-## Local Dependencies
-
-MindMapVault Server expects two infrastructure services:
-
-- PostgreSQL for application data
-- an S3-compatible object store for encrypted blob storage
-
-The repository includes `docker-compose.yml` to start both services and an initialization flow that creates the `mindmapvault` bucket. Garage is supported as the local S3-compatible backend, but it does not implement bucket versioning, so the server skips that step at startup instead of failing on `PutBucketVersioning`.
-
-The compose file is also the main place to edit the backend runtime settings for the local container stack.
-
-Start only the infrastructure services:
+Start the local stack:
 
 ```powershell
 docker compose up -d postgres garage server
@@ -104,111 +88,97 @@ What you get:
 - PostgreSQL on `127.0.0.1:5432`
 - Garage S3 API on `127.0.0.1:9000`
 - Garage admin API on `127.0.0.1:3903`
+- the packaged server on `http://localhost:8090`
 
-Default local values from the compose stack:
-
-- PostgreSQL database: `mindmapvault`
-- PostgreSQL user: `postgres`
-- PostgreSQL password: `postgres`
-
-- S3 access key: `garage-access-key`
-- S3 secret key: `garage-secret-key`
-
-Change the inline values in `docker-compose.yml` before using the stack in a shared or long-lived environment.
-
-## Running The Server Locally
-
-### Source-Based Backend Run
-
-1. Start PostgreSQL and the S3-compatible storage backend:
-
-```powershell
-docker compose up -d postgres garage server
-```
-
-2. Copy the env template to `backend/.env`:
+If you run the backend directly from source, copy the env template to `backend/.env` first:
 
 ```powershell
 Copy-Item .env.example backend/.env
 ```
 
-3. Run the backend from WSL or Linux from the `backend/` directory so `dotenv` picks up `backend/.env`:
+Then run from the `backend/` directory so `dotenv` picks up that file:
 
 ```powershell
 wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server/backend && cargo run'
 ```
 
-### Containerized Run
+## Build And Run
 
-1. Build the single-image Server container:
-
-```powershell
-docker build -f backend/Dockerfile -t mindmapvault-server:local .
-```
-
-If you want to run the same build step from WSL, use:
-
-```powershell
-wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server && docker build -f backend/Dockerfile -t mindmapvault-server:local .'
-```
-
-2. Start the local stack with Docker Compose:
-
-```powershell
-docker compose up -d postgres garage server
-```
-
-If you prefer to launch it from WSL, use:
-
-```powershell
-wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server && docker compose up -d postgres garage server'
-```
-
-3. If you want a direct source-based backend run instead of the container image, copy the env template to `backend/.env`:
-
-```powershell
-Copy-Item .env.example backend/.env
-```
-
-The compose stack starts PostgreSQL, Garage, bucket initialization, and the packaged Server image. The default compose `server` service uses `mindmapvault-server:local`, but you can override it with a published image by setting `SERVER_IMAGE`.
-
-## Docker Image
-
-The community Server repository publishes a single Docker image that contains:
-
-- the Rust backend
-- the built `frontend_app` bundle served at `/`
-- the built `frontend_admin` bundle served at `/admin/`
-
-Build locally from the repository root:
+Build the single-image server package from the repository root:
 
 ```powershell
 docker build -f backend/Dockerfile -t mindmapvault-server:local .
 ```
 
-Run locally with your env file:
+Run the image directly with an env file:
 
 ```powershell
 docker run --env-file .env -p 8090:8090 mindmapvault-server:local
 ```
 
-If you prefer the compose-based local stack, the same image is used by `docker compose up -d`.
+The same image is used by the compose-based local stack.
 
-## GitHub Actions Image Publishing
+## Validation
 
-The workflow in `.github/workflows/build-server-image.yml` builds the same single-image Server package.
+Useful repository checks:
 
-It uses the current common GitHub Actions versions for container builds, including `actions/checkout@v4` and `docker/build-push-action@v6`.
-
-- pull requests: validate the Docker build without pushing
-- pushes to `main`: publish `latest`, `main`, and `sha-<commit>` tags to GHCR
-- version tags like `v1.2.3`: publish semver tags to GHCR
-- manual runs: allow on-demand rebuilds from the Actions tab
-
-Default published image name:
-
-```text
-ghcr.io/<github-owner>/mindmapvault-server
+```powershell
+cargo check --manifest-path backend/Cargo.toml
+cargo test --manifest-path backend/Cargo.toml
+node scripts/check_no_committed_secrets.mjs
 ```
 
-To use the published image, create a repository or environment-specific `.env` file from `.env.example` and run the container with `--env-file`.
+Load test helper:
+
+```powershell
+node tests/performance/load-test.mjs --users 200 --concurrency 200 --no-cleanup
+```
+
+The load test registers users, signs in, exercises account settings, creates and edits a vault, and reads it back. Use `--cleanup` if you want it to delete the test accounts afterward.
+
+## Release Outputs
+
+Typical outputs include:
+
+- a packaged Docker image for the community server
+- a packaged web app bundle for the end-user client
+- a packaged admin surface for operators
+
+Build workflow configuration lives in `.github/workflows/build-server-image.yml`.
+
+The workflow builds the same single-image server package, validates pull requests without pushing, and publishes tags from `main` and versioned releases.
+
+Published image:
+
+```text
+ghcr.io/mindmapvault/mindmapvault-server:latest
+```
+
+Pull it directly with:
+
+```bash
+docker pull ghcr.io/mindmapvault/mindmapvault-server:latest
+```
+
+## Local Configuration
+
+For container-based local development, `docker-compose.yml` is the primary configuration file.
+
+Edit the `server` service values there to change host, database, S3, JWT, CORS, and logging settings.
+
+The backend still auto-loads `backend/.env` when you run it directly from source, but that file is only a fallback for source-based runs.
+
+The compose file also creates the `mindmapvault` bucket during startup. Garage does not implement bucket versioning, so the server skips that step instead of failing on `PutBucketVersioning`.
+
+## Contributing
+
+Please keep changes focused and reviewable.
+
+- preserve encrypted-data boundaries
+- keep backend and frontend contracts aligned
+- document user-visible changes in the changelog
+- run the validation steps relevant to the touched surface
+
+## License
+
+MindMapVault Server is released under the AGPL-3.0-or-later license. See `LICENSE` for details.

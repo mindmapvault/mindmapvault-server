@@ -14,6 +14,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **Release Versioning** — Aligned the backend crate version with the frontend app and desktop host at `0.3.24` so the build artifacts share the same release number again.
 - **Hosted Runtime Reliability** — Hardened the hosted server routes so browser deep links (`/login`, `/register`) resolve through the SPA fallback instead of returning 404, and so storage/version listing endpoints degrade gracefully when Garage cannot provide object-version metadata.
 - **Object Upload Compatibility** — Accepted opaque S3/Garage version IDs returned from uploads instead of requiring UUID-shaped IDs, which fixes hosted uploads against the current Garage backend.
+- **Support UI** — Added a direct link to the public `mindmapvault-server` repository in the in-app support section so users can find documentation, report bugs, and open pull requests from the product UI.
+- **Secrets Scan Reliability** — Tightened `scripts/check_no_committed_secrets.mjs` so local storage/cache key strings in TypeScript no longer trigger false-positive secret detections in CI.
 
 ### Removed
 
@@ -23,6 +25,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - `pnpm run build` in `frontend_app` → passed.
 - `docker build -f backend/Dockerfile -t mindmapvault-server:local .` → passed.
 - `node tests/performance/load-test.mjs --base-url http://127.0.0.1:8090 --users 200 --concurrency 200 --cleanup` → passed.
+- `node scripts/check_no_committed_secrets.mjs` in repo root → passed after scanner rule update.
 
 ## [0.3.25] - 2026-05-03
 

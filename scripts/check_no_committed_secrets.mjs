@@ -18,7 +18,7 @@ const patterns = [
   { name: 'private-key-block', regex: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
   { name: 'aws-access-key-id', regex: /\bAKIA[0-9A-Z]{16}\b/ },
   { name: 'api-token-assignment', regex: /\b([A-Z0-9_]*(API_TOKEN|TOKEN))\s*=\s*(?!replace_with|changeme|xxx|YOUR_)[A-Za-z0-9_-]{20,}\b/ },
-  { name: 'secret-assignment', regex: /\b([A-Z0-9_]*(SECRET|KEY))\s*=\s*(?!replace_with|changeme|xxx|YOUR_)[^\s#]{10,}/ },
+  { name: 'secret-assignment', regex: /\b([A-Z0-9_]*(SECRET|KEY))\s*=\s*(?!replace_with|changeme|xxx|YOUR_)[A-Za-z0-9_+/=]{20,}/ },
   { name: 'jwt-secret-assignment', regex: /\b(JWT_SECRET|REFRESH_TOKEN_SECRET)\s*=\s*(?!replace_with|changeme|xxx|YOUR_)[^\s#]{20,}/ },
 ];
 

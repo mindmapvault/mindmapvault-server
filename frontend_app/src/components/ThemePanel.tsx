@@ -268,7 +268,8 @@ export function ThemePanel() {
               Support
             </span>
             <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
-              Questions and product feedback can be sent directly to admin@mindmapvault.com.
+              Questions and product feedback can be sent directly to admin@mindmapvault.com. For
+              documentation, bug reports, and pull requests, use the public repository.
             </p>
             <a
               href="mailto:admin@mindmapvault.com"
@@ -280,6 +281,19 @@ export function ThemePanel() {
               }}
             >
               Email admin@mindmapvault.com
+            </a>
+            <a
+              href="https://github.com/mindmapvault/mindmapvault-server"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition"
+              style={{
+                background: 'transparent',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-light)',
+              }}
+            >
+              Open project repository
             </a>
           </div>
 
