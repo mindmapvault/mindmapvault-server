@@ -141,7 +141,7 @@ jobs:
           # Docker Hub added CloudFront CDN on 2026-05-20. TLS certs are issued by
           # Amazon Trust Services. Ensure the runner trusts those roots before login.
           curl -fsSL https://www.amazontrust.com/repository/AmazonRootCA1.cer \
-            -o /usr/local/share/ca-certificates/AmazonRootCA1.crt
+            | sudo tee /usr/local/share/ca-certificates/AmazonRootCA1.crt > /dev/null
           sudo update-ca-certificates --fresh
 
       - name: Log in to Docker Hub
