@@ -148,7 +148,7 @@ jobs:
             exit 1
           fi
 
-      - name: Log in to Docker Hub (CLI)
+      - name: Configure Docker Hub auth for push
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -166,20 +166,10 @@ jobs:
           token="${token#\"}"
           token="${token%\'}"
           token="${token#\'}"
+          auth_b64="$(printf '%s' "${username}:${token}" | base64 | tr -d '\n')"
 
-          # Ensure no stale Docker Hub auth entry interferes with the fresh login attempt.
-          docker logout docker.io >/dev/null 2>&1 || true
-          docker logout https://index.docker.io/v1/ >/dev/null 2>&1 || true
-
-          # First try the canonical docker.io endpoint.
-          if printf '%s' "$token" | docker login docker.io -u "$username" --password-stdin; then
-            exit 0
-          fi
-
-          echo "Primary Docker Hub login endpoint failed; retrying with index.docker.io/v1/."
-
-          # Retry using the legacy index endpoint accepted by some Docker clients/flows.
-          printf '%s' "$token" | docker login https://index.docker.io/v1/ -u "$username" --password-stdin
+          export DOCKERHUB_AUTH_B64="$auth_b64"
+            python3 -c 'import json, os; from pathlib import Path; p = Path.home() / ".docker" / "config.json"; p.parent.mkdir(parents=True, exist_ok=True); cfg = {}; raw = p.read_text(encoding="utf-8").strip() if p.exists() else ""; cfg = json.loads(raw) if raw else {}; auths = cfg.setdefault("auths", {}); auth = os.environ["DOCKERHUB_AUTH_B64"]; [auths.__setitem__(r, {"auth": auth}) for r in ("docker.io", "https://index.docker.io/v1/", "registry-1.docker.io")]; p.write_text(json.dumps(cfg), encoding="utf-8")'
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v6

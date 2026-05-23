@@ -25,6 +25,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **CI Docker Hub Validation** — Relaxed username validation to avoid false negatives for valid Docker Hub account names and added CR/LF sanitization of username/token before Docker login.
 - **CI Docker Hub Token Enforcement** — Added PAT-shape validation (`dckr_pat_...`) plus quote stripping and character checks before login so malformed secret values fail with explicit guidance instead of registry authorization-header errors.
 - **CI Docker Hub Login Fallback** — Added a clean Docker Hub logout and dual-endpoint login retry (`docker.io` then `https://index.docker.io/v1/`) to reduce endpoint-specific authorization header failures in CI.
+- **CI Docker Hub Auth Path** — Replaced runtime Docker Hub login handshakes with explicit Docker auth-config injection for Docker Hub registries in CI, avoiding repeated `malformed HTTP Authorization header` failures during login while preserving authenticated push behavior.
 
 ### Removed
 
