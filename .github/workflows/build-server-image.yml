@@ -1,5 +1,8 @@
 name: Build Server Image
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 on:
   pull_request:
     paths:
@@ -37,8 +40,18 @@ jobs:
         shell: bash
         run: |
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
-          if [ -n "${{ vars.DOCKERHUB_NAMESPACE }}" ]; then
-            echo "dockerhub=docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+
+          dockerhub_namespace="${{ vars.DOCKERHUB_NAMESPACE }}"
+          if [ -z "$dockerhub_namespace" ] && [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            dockerhub_namespace="${{ secrets.DOCKERHUB_USERNAME }}"
+          fi
+
+          if [ -n "$dockerhub_namespace" ]; then
+            dockerhub_namespace="${dockerhub_namespace,,}"
+            echo "dockerhub=docker.io/${dockerhub_namespace}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+            echo "dockerhub_enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dockerhub_enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract Docker metadata
@@ -65,7 +78,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request' && vars.DOCKERHUB_NAMESPACE != ''
+        if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -91,6 +104,8 @@ jobs:
             echo "GHCR image: \`${{ steps.image.outputs.ghcr }}\`"
             if [ -n "${{ steps.image.outputs.dockerhub }}" ]; then
               echo "Docker Hub image: \`${{ steps.image.outputs.dockerhub }}\`"
+            else
+              echo "Docker Hub image: not configured (set DOCKERHUB_NAMESPACE or DOCKERHUB_USERNAME/DOCKERHUB_TOKEN)."
             fi
             echo ""
             if [ "${{ github.event_name }}" = "pull_request" ]; then
