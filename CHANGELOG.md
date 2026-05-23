@@ -23,6 +23,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **CI Docker Hub Login Reliability** — Replaced Docker Hub `docker/login-action` usage with explicit `docker login --password-stdin` and tightened username/token validation to reduce registry auth-header failures caused by malformed secret values.
 - **CI Docker Hub Auth Safety** — Switched Docker Hub secret handling in workflow shell steps to environment-variable injection (`env:`) instead of inline expression interpolation, avoiding quoting and escaping edge cases during CI login.
 - **CI Docker Hub Validation** — Relaxed username validation to avoid false negatives for valid Docker Hub account names and added CR/LF sanitization of username/token before Docker login.
+- **CI Docker Hub Token Enforcement** — Added PAT-shape validation (`dckr_pat_...`) plus quote stripping and character checks before login so malformed secret values fail with explicit guidance instead of registry authorization-header errors.
 
 ### Removed
 

@@ -89,6 +89,16 @@ jobs:
           username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '\r\n')"
           token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
 
+          # Trim optional accidental wrapping quotes from secret values.
+          username="${username%\"}"
+          username="${username#\"}"
+          username="${username%\'}"
+          username="${username#\'}"
+          token="${token%\"}"
+          token="${token#\"}"
+          token="${token%\'}"
+          token="${token#\'}"
+
           if [ -z "$username" ]; then
             echo "DOCKERHUB_USERNAME is empty."
             exit 1
@@ -123,8 +133,18 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$username" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "DOCKERHUB_USERNAME contains unsupported characters; use only letters, digits, '_' or '-'."
+            exit 1
+          fi
+
           if [[ ! "$token" =~ ^[[:graph:]]+$ ]]; then
             echo "DOCKERHUB_TOKEN contains non-printable characters; regenerate and paste a clean token."
+            exit 1
+          fi
+
+          if [[ ! "$token" =~ ^dckr_pat_[A-Za-z0-9._-]+$ ]]; then
+            echo "DOCKERHUB_TOKEN must be a Docker Hub Personal Access Token (expected prefix: dckr_pat_)."
             exit 1
           fi
 
@@ -138,6 +158,14 @@ jobs:
           set -euo pipefail
           username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '\r\n')"
           token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
+          username="${username%\"}"
+          username="${username#\"}"
+          username="${username%\'}"
+          username="${username#\'}"
+          token="${token%\"}"
+          token="${token#\"}"
+          token="${token%\'}"
+          token="${token#\'}"
           printf '%s' "$token" | docker login docker.io -u "$username" --password-stdin
 
       - name: Build and optionally push image
