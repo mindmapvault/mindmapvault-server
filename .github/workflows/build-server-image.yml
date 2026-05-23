@@ -42,6 +42,9 @@ jobs:
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
 
           dockerhub_namespace="${{ vars.DOCKERHUB_NAMESPACE }}"
+          if [ -z "$dockerhub_namespace" ]; then
+            dockerhub_namespace="${{ secrets.DOCKERHUB_NAMESPACE }}"
+          fi
 
           if [ -n "$dockerhub_namespace" ]; then
             dockerhub_namespace="${dockerhub_namespace,,}"
@@ -78,6 +81,7 @@ jobs:
         if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
         env:
           DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_NAMESPACE_SECRET: ${{ secrets.DOCKERHUB_NAMESPACE }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         shell: bash
@@ -85,6 +89,9 @@ jobs:
           set -euo pipefail
 
           namespace="$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '\r\n')"
+          if [ -z "$namespace" ]; then
+            namespace="$(printf '%s' "$DOCKERHUB_NAMESPACE_SECRET" | tr -d '\r\n')"
+          fi
           username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '\r\n')"
           token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
 

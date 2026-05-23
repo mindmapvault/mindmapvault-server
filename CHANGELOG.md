@@ -28,6 +28,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **CI Docker Hub Auth Path** — Replaced runtime Docker Hub login handshakes with explicit Docker auth-config injection for Docker Hub registries in CI, avoiding repeated `malformed HTTP Authorization header` failures during login while preserving authenticated push behavior.
 - **CI Docker Publish Workflow** — Realigned the image workflow with Docker's documented GitHub Actions pattern (`docker/login-action`, `docker/metadata-action`, `docker/build-push-action`), upgraded action major versions (`setup-buildx@v4`, `metadata@v6`, `build-push@v7`, `login@v4`), and removed custom Docker auth-config injection.
 - **CI Docker Hub Configuration Guard** — Added explicit validation for `DOCKERHUB_NAMESPACE`, blocked placeholder values like `dockerhub_username`, and kept PAT-format checks to prevent invalid Docker Hub tag targets and malformed publish setups.
+- **CI Docker Hub Namespace Source** — Added fallback support for `DOCKERHUB_NAMESPACE` from repository secrets when the variable is not set, so existing secret-based setups continue to publish correctly.
 
 ### Removed
 
