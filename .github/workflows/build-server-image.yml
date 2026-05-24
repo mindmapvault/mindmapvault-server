@@ -38,29 +38,14 @@ jobs:
         run: |
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
 
-          dockerhub_namespace="${{ vars.DOCKERHUB_NAMESPACE }}"
-          if [ -z "$dockerhub_namespace" ]; then
-            dockerhub_namespace="${{ secrets.DOCKERHUB_NAMESPACE }}"
-          fi
-
-          if [ -n "$dockerhub_namespace" ]; then
-            dockerhub_namespace="${dockerhub_namespace,,}"
-            echo "dockerhub=docker.io/${dockerhub_namespace}/mindmapvault-server" >> "$GITHUB_OUTPUT"
-            echo "dockerhub_enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "dockerhub_enabled=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: |
             ${{ steps.image.outputs.ghcr }}
-            ${{ steps.image.outputs.dockerhub }}
           tags: |
             type=ref,event=branch
-            type=ref,event=tag
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,prefix=sha-
@@ -73,92 +58,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Validate Docker Hub config
-        if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
-        env:
-          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
-          DOCKERHUB_NAMESPACE_SECRET: ${{ secrets.DOCKERHUB_NAMESPACE }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          namespace="$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '\r\n')"
-          if [ -z "$namespace" ]; then
-            namespace="$(printf '%s' "$DOCKERHUB_NAMESPACE_SECRET" | tr -d '\r\n')"
-          fi
-          username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '\r\n')"
-          token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '\r\n')"
-
-          if [ -z "$namespace" ]; then
-            echo "DOCKERHUB_NAMESPACE is empty. Set repository variable DOCKERHUB_NAMESPACE (example: kornelko2)."
-            exit 1
-          fi
-
-          if [ -z "$username" ]; then
-            echo "DOCKERHUB_USERNAME is empty."
-            exit 1
-          fi
-
-          if [ -z "$token" ]; then
-            echo "DOCKERHUB_TOKEN is empty."
-            exit 1
-          fi
-
-          # Docker Hub login expects account/org name only, not repository/image references.
-          if [[ "$username" == *"/"* ]] || [[ "$username" == *":"* ]] || [[ "$username" == *"@"* ]] || [[ "$username" == *"docker.io"* ]]; then
-            echo "DOCKERHUB_USERNAME looks invalid: use only the Docker Hub account/org name (example: kornelko2)."
-            exit 1
-          fi
-
-          # Newlines or spaces in credentials frequently cause malformed Authorization header errors.
-          if [[ "$username" =~ [[:space:]] ]]; then
-            echo "DOCKERHUB_USERNAME contains whitespace; remove spaces/newlines."
-            exit 1
-          fi
-
-          if [[ "$token" =~ [[:space:]] ]]; then
-            echo "DOCKERHUB_TOKEN contains whitespace; regenerate and paste the token without spaces/newlines."
-            exit 1
-          fi
-
-          if [[ "$namespace" == "dockerhub_username" ]] || [[ "$username" == "dockerhub_username" ]]; then
-            echo "Docker Hub is configured with placeholder value 'dockerhub_username'. Use your real namespace and username (example: kornelko2)."
-            exit 1
-          fi
-
-          if [[ ! "$token" =~ ^dckr_pat_[A-Za-z0-9._-]+$ ]]; then
-            echo "DOCKERHUB_TOKEN must be a Docker Hub Personal Access Token (expected prefix: dckr_pat_)."
-            exit 1
-          fi
-
-      - name: Store Docker Hub credentials
-        if: github.event_name != 'pull_request' && steps.image.outputs.dockerhub_enabled == 'true'
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          user="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
-          pat="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '[:space:]')"
-          auth="$(printf '%s:%s' "$user" "$pat" | base64 -w 0)"
-          mkdir -p ~/.docker
-          # Write credentials directly to config.json using jq, bypassing the
-          # Docker daemon auth flow that fails against registry-1.docker.io in CI.
-          # docker/build-push-action (BuildKit) reads auths from this file directly.
-          if [ -f ~/.docker/config.json ]; then
-            jq --arg a "$auth" \
-              '.auths["https://index.docker.io/v1/"] = {"auth": $a}' \
-              ~/.docker/config.json > ~/.docker/config.json.tmp
-            mv ~/.docker/config.json.tmp ~/.docker/config.json
-          else
-            printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"}}}' "$auth" \
-              > ~/.docker/config.json
-          fi
-          echo "Docker Hub credentials stored for user: $user"
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v7
@@ -178,11 +77,7 @@ jobs:
             echo "## Server Image"
             echo ""
             echo "GHCR image: \`${{ steps.image.outputs.ghcr }}\`"
-            if [ -n "${{ steps.image.outputs.dockerhub }}" ]; then
-              echo "Docker Hub image: \`${{ steps.image.outputs.dockerhub }}\`"
-            else
-              echo "Docker Hub image: not configured (set DOCKERHUB_NAMESPACE or DOCKERHUB_USERNAME/DOCKERHUB_TOKEN)."
-            fi
+            echo "Docker Hub publishing is handled separately by scripts/publish_dockerhub/publish-to-dockerhub.sh."
             echo ""
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "This run validated the Docker build without pushing an image."

@@ -3,6 +3,7 @@
 .env.local
 backend/.env
 backend/.env.local
+scripts/publish_dockerhub/
 
 # Node / frontend outputs
 node_modules/
@@ -10,6 +11,7 @@ frontend_app/node_modules/
 frontend_admin/node_modules/
 frontend_app/dist/
 frontend_admin/dist/
+dist/
 frontend_app/.wrangler/
 frontend_admin/.wrangler/
 

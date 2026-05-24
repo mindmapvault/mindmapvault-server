@@ -14,21 +14,6 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **Release Versioning** — Aligned the backend crate version with the frontend app and desktop host at `0.3.24` so the build artifacts share the same release number again.
 - **Hosted Runtime Reliability** — Hardened the hosted server routes so browser deep links (`/login`, `/register`) resolve through the SPA fallback instead of returning 404, and so storage/version listing endpoints degrade gracefully when Garage cannot provide object-version metadata.
 - **Object Upload Compatibility** — Accepted opaque S3/Garage version IDs returned from uploads instead of requiring UUID-shaped IDs, which fixes hosted uploads against the current Garage backend.
-- **Support UI** — Added a direct link to the public `mindmapvault-server` repository in the in-app support section so users can find documentation, report bugs, and open pull requests from the product UI.
-- **Secrets Scan Reliability** — Tightened `scripts/check_no_committed_secrets.mjs` so local storage/cache key strings in TypeScript no longer trigger false-positive secret detections in CI.
-- **Deployment Documentation** — Added `docs/DEPLOYMENT.md` as the dedicated Docker Compose operator guide covering prerequisites, recommended containers, configuration, persistence, upgrades, and troubleshooting, and linked the README quick-start to that guide.
-- **Image Publishing** — Extended the server image workflow so the same GitHub Actions run can publish to Docker Hub and emit clean semver tags like `0.3.24` on versioned releases.
-- **CI Runtime Compatibility** — Opted the image workflow into Node 24 for JavaScript actions (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`) and improved Docker Hub target detection by falling back to `DOCKERHUB_USERNAME` when `DOCKERHUB_NAMESPACE` is not set.
-- **CI Publish Guardrails** — Added Docker Hub credential preflight validation in the image workflow to fail early with actionable messages when `DOCKERHUB_USERNAME` or `DOCKERHUB_TOKEN` are malformed (for example, whitespace or repository strings instead of account name), preventing opaque Docker auth-header failures.
-- **CI Docker Hub Login Reliability** — Replaced Docker Hub `docker/login-action` usage with explicit `docker login --password-stdin` and tightened username/token validation to reduce registry auth-header failures caused by malformed secret values.
-- **CI Docker Hub Auth Safety** — Switched Docker Hub secret handling in workflow shell steps to environment-variable injection (`env:`) instead of inline expression interpolation, avoiding quoting and escaping edge cases during CI login.
-- **CI Docker Hub Validation** — Relaxed username validation to avoid false negatives for valid Docker Hub account names and added CR/LF sanitization of username/token before Docker login.
-- **CI Docker Hub Token Enforcement** — Added PAT-shape validation (`dckr_pat_...`) plus quote stripping and character checks before login so malformed secret values fail with explicit guidance instead of registry authorization-header errors.
-- **CI Docker Hub Login Fallback** — Added a clean Docker Hub logout and dual-endpoint login retry (`docker.io` then `https://index.docker.io/v1/`) to reduce endpoint-specific authorization header failures in CI.
-- **CI Docker Hub Auth Path** — Replaced runtime Docker Hub login handshakes with explicit Docker auth-config injection for Docker Hub registries in CI, avoiding repeated `malformed HTTP Authorization header` failures during login while preserving authenticated push behavior.
-- **CI Docker Publish Workflow** — Realigned the image workflow with Docker's documented GitHub Actions pattern (`docker/login-action`, `docker/metadata-action`, `docker/build-push-action`), upgraded action major versions (`setup-buildx@v4`, `metadata@v6`, `build-push@v7`, `login@v4`), and removed custom Docker auth-config injection.
-- **CI Docker Hub Configuration Guard** — Added explicit validation for `DOCKERHUB_NAMESPACE`, blocked placeholder values like `dockerhub_username`, and kept PAT-format checks to prevent invalid Docker Hub tag targets and malformed publish setups.
-- **CI Docker Hub Namespace Source** — Added fallback support for `DOCKERHUB_NAMESPACE` from repository secrets when the variable is not set, so existing secret-based setups continue to publish correctly.
 
 ### Removed
 
@@ -38,7 +23,6 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - `pnpm run build` in `frontend_app` → passed.
 - `docker build -f backend/Dockerfile -t mindmapvault-server:local .` → passed.
 - `node tests/performance/load-test.mjs --base-url http://127.0.0.1:8090 --users 200 --concurrency 200 --cleanup` → passed.
-- `node scripts/check_no_committed_secrets.mjs` in repo root → passed after scanner rule update.
 
 ## [0.3.25] - 2026-05-03
 
