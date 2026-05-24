@@ -292,6 +292,25 @@ load_default() {
   fi
 }
 
+is_valid_docker_image_ref() {
+  local image_ref="$1"
+
+  # Basic safety checks to reject clearly broken or injected values.
+  if [[ -z "${image_ref}" ]]; then
+    return 1
+  fi
+  if [[ "${image_ref}" == *' '* || "${image_ref}" == *'"'* || "${image_ref}" == *"'"* || "${image_ref}" == *'$('* || "${image_ref}" == *')'* || "${image_ref}" == *';'* ]]; then
+    return 1
+  fi
+
+  # Practical image-ref shape validation (repo[:tag] with allowed separators).
+  if [[ "${image_ref}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$ ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
 show_banner
 echo "This script prepares docker-compose.yml, garage.toml, and ${ENV_FILE} in: $(pwd)"
 
@@ -363,7 +382,16 @@ fi
 log_success "Selected mode: ${MODE_CHOICE}"
 
 log_step "4/7" "Configuring image and required secrets"
-SERVER_IMAGE="$(ask_with_default "SERVER_IMAGE" "$(load_default "SERVER_IMAGE" "${DEFAULT_SERVER_IMAGE}")")"
+SERVER_IMAGE_DEFAULT="$(load_default "SERVER_IMAGE" "${DEFAULT_SERVER_IMAGE}")"
+if ! is_valid_docker_image_ref "${SERVER_IMAGE_DEFAULT}"; then
+  log_warn "Found invalid SERVER_IMAGE value in ${ENV_FILE}. Falling back to ${DEFAULT_SERVER_IMAGE}."
+  SERVER_IMAGE_DEFAULT="${DEFAULT_SERVER_IMAGE}"
+fi
+SERVER_IMAGE="$(ask_with_default "SERVER_IMAGE" "${SERVER_IMAGE_DEFAULT}")"
+if ! is_valid_docker_image_ref "${SERVER_IMAGE}"; then
+  log_warn "Provided SERVER_IMAGE is invalid; using safe default ${DEFAULT_SERVER_IMAGE}."
+  SERVER_IMAGE="${DEFAULT_SERVER_IMAGE}"
+fi
 
 EXISTING_POSTGRES_PASSWORD="$(get_env_value "POSTGRES_PASSWORD" "${ENV_FILE}")"
 EXISTING_S3_ACCESS_KEY="$(get_env_value "S3_ACCESS_KEY" "${ENV_FILE}")"
