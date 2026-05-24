@@ -4,6 +4,7 @@ import { authApi } from '../api/auth';
 import { DEFAULT_CLOUD_SERVER_URL, setServerUrl } from '../api/client';
 import { DesktopTauriBadge } from '../components/DesktopTauriBadge';
 import { LogoBlock } from '../components/Logo';
+import { PwaInstallButton } from '../components/PwaInstallButton';
 import { aesDecrypt } from '../crypto/aes';
 import { deriveMasterAesKey, deriveMasterKey, deriveAuthToken } from '../crypto/kdf';
 import { fromBase64 } from '../crypto/utils';
@@ -17,6 +18,7 @@ import packageJson from '../../package.json';
 const HOSTED_APP_BASE = 'https://app.mindmapvault.com';
 const HOSTED_LOGIN_URL = `${HOSTED_APP_BASE}/login`;
 const HOSTED_REGISTER_URL = `${HOSTED_APP_BASE}/register`;
+const PWA_INSTALL_DISMISSED_KEY = 'mindmapvault-pwa-install-dismissed-v1';
 
 function validateUsername(value: string) {
   if (!value) {
@@ -57,6 +59,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showInstallPanel, setShowInstallPanel] = useState(!isDesktop);
   const postAuthRedirect = useMemo(() => getSafeRedirectPath(searchParams), [searchParams]);
   const registrationSucceeded = searchParams.get('registered') === '1';
   const appVersion = packageJson.version;
@@ -73,6 +76,18 @@ export function LoginPage() {
     if (appMode === 'server') return;
     navigate('/local-unlock', { replace: true });
   }, [appMode, isDesktop, navigate]);
+
+  useEffect(() => {
+    if (isDesktop) {
+      setShowInstallPanel(false);
+      return;
+    }
+
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || ((window.navigator as Navigator & { standalone?: boolean }).standalone === true);
+    const dismissed = localStorage.getItem(PWA_INSTALL_DISMISSED_KEY) === '1';
+    setShowInstallPanel(!isStandalone && !dismissed);
+  }, [isDesktop]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,7 +150,7 @@ export function LoginPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center px-4">
+    <div className={`relative flex min-h-screen items-center justify-center px-4 ${!isDesktop ? 'pb-44 sm:pb-36' : ''}`}>
       {/* Hero background illustration */}
       <img
         src="/vault-mindmap-hero.svg"
@@ -179,6 +194,23 @@ export function LoginPage() {
       >
         APP v{appVersion}
       </div>
+
+      {!isDesktop && showInstallPanel && (
+        <div className="absolute bottom-4 left-1/2 z-10 w-[calc(100%-2rem)] max-w-md -translate-x-1/2">
+          <div className={`rounded-2xl border px-4 py-3 backdrop-blur ${
+            themeMode === 'light'
+              ? 'border-slate-300 bg-white/80 shadow-sm'
+              : 'border-slate-700 bg-surface-1/75 shadow-lg'
+          }`}>
+            <p className="text-sm font-semibold text-slate-100">Install MindMapVault app</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              This adds an app-like shortcut (PWA) on this device for a faster, cleaner experience.
+              Your vault data stays on your server account; this does not create an offline local vault.
+            </p>
+            <PwaInstallButton large showDismiss className="mt-3 w-full" onDismissed={() => setShowInstallPanel(false)} />
+          </div>
+        </div>
+      )}
 
       <div className="relative z-[1] w-full max-w-sm">
         {/* Logo */}
@@ -272,7 +304,7 @@ export function LoginPage() {
         </p>
 
         <p className="mt-2 text-center text-xs text-slate-500">
-          Prefer the hosted SaaS version?{' '}
+          Prefer the hosted in Cloud?{' '}
           <a href={HOSTED_LOGIN_URL} className="text-accent hover:underline">
             Sign in there
           </a>

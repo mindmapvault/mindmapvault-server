@@ -4,8 +4,11 @@ import './index.css';
 import App from './App';
 import { ConnectorProvider } from './app-core/connectors/provider';
 import { createConnectorRegistry } from './platform/bootstrap';
+import { registerSW } from 'virtual:pwa-register';
 
 const connectorRegistry = createConnectorRegistry();
+
+registerSW();
 
 // Apply persisted theme synchronously before first render to avoid flash.
 (function applyStoredTheme() {

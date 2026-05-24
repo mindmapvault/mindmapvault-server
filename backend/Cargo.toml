@@ -1,6 +1,6 @@
 [package]
 name = "backend"
-version = "0.3.24"
+version = "0.3.26"
 edition = "2021"
 
 [dependencies]
@@ -16,7 +16,7 @@ tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_j
 
 # MinIO / S3
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1"
+aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
 aws-credential-types = "1"
 
 # JWT & hashing
@@ -52,9 +52,8 @@ base64 = "0.22"
 
 [target.'cfg(not(windows))'.dependencies]
 # Profiling (optional at runtime via env)
-pprof = { version = "0.8", features = ["flamegraph"] }
+pprof = { version = "0.15", features = ["flamegraph"] }
 jemallocator = "0.5"
-jemalloc-ctl = "0.5"
 
 [dev-dependencies]
 axum-test = "15"

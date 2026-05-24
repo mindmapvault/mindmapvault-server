@@ -9,13 +9,30 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Added
 
 ### Changed
-- **CI Policy** — Removed the server-repo offline parity workflow and clarified that offline parity checks are only required in the FOSS repo or for explicit shared offline-capability changes.
-- **Security Procedure** — Documented the GitHub Actions security gate as the committed-secrets scan in `.github/workflows/security-guard.yml` and called out stable action pinning expectations in the Copilot instructions.
-- **Release Versioning** — Aligned the backend crate version with the frontend app and desktop host at `0.3.24` so the build artifacts share the same release number again.
-- **Hosted Runtime Reliability** — Hardened the hosted server routes so browser deep links (`/login`, `/register`) resolve through the SPA fallback instead of returning 404, and so storage/version listing endpoints degrade gracefully when Garage cannot provide object-version metadata.
-- **Object Upload Compatibility** — Accepted opaque S3/Garage version IDs returned from uploads instead of requiring UUID-shaped IDs, which fixes hosted uploads against the current Garage backend.
+- **Backend Dependency Security** — Updated backend dependency resolution to clear RustSec findings by moving to patched AWS SDK transitive crates (`aws-config`/`aws-sdk-s3` resolved forward), upgrading `pprof` to `0.15`, and removing `jemalloc-ctl` from the diagnostics path.
+- **Diagnostics Endpoint Behavior** — `/api/mindmaps/maintenance/allocator-stats` now returns a deterministic "disabled in this build" response instead of querying allocator internals through `jemalloc-ctl`.
 
 ### Removed
+
+### Validation
+- `cargo check --manifest-path backend/Cargo.toml` in WSL workspace → passed.
+- `cargo audit -q --manifest-path backend/Cargo.toml` in WSL workspace → passed (`BACKEND_AUDIT_PASS`).
+
+## [0.3.26] - 2026-05-24
+
+### Added
+- **PWA Addon (Server UI)** — Added installable PWA support to the self-hosted `frontend_app`, including service worker registration, web app manifest generation, and install prompts for browser users.
+- **Login Install Prompt UX** — Added a centered floating install panel on the login screen with explicit `Install app` and `Dismiss` actions and explanatory copy about PWA behavior.
+
+### Changed
+- **CI Policy** — Removed the server-repo offline parity workflow and clarified that offline parity checks are only required in the FOSS repo or for explicit shared offline-capability changes.
+- **Security Procedure** — Documented the GitHub Actions security gate as the committed-secrets scan in `.github/workflows/security-guard.yml` and called out stable action pinning expectations in the Copilot instructions.
+- **Hosted Runtime Reliability** — Hardened the hosted server routes so browser deep links (`/login`, `/register`) resolve through the SPA fallback instead of returning 404, and so storage/version listing endpoints degrade gracefully when Garage cannot provide object-version metadata.
+- **Object Upload Compatibility** — Accepted opaque S3/Garage version IDs returned from uploads instead of requiring UUID-shaped IDs, which fixes hosted uploads against the current Garage backend.
+- **Release Versioning** — Bumped release version from `0.3.24` to `0.3.26` across `backend`, `frontend_app`, and desktop Tauri metadata so build/version labels and release artifacts stay aligned.
+- **PWA Install Prompt Behavior** — Login install prompt now appears once as a single floating panel; dismissing or declining the prompt hides it immediately and persists dismissal via local storage.
+- **Brand Asset Consistency** — Synced server `frontend_app` favicon assets to the same canonical files used by `mindmapvault-www` (including `.ico` and `.png`) and updated login icon references accordingly.
+- **Dev Experience** — Disabled PWA service worker generation in Vite dev mode to remove noisy Workbox glob warnings from `dev-dist` while preserving production PWA generation.
 
 ### Validation
 - `cargo check --manifest-path backend/Cargo.toml` in native WSL workspace → clean.
@@ -23,6 +40,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - `pnpm run build` in `frontend_app` → passed.
 - `docker build -f backend/Dockerfile -t mindmapvault-server:local .` → passed.
 - `node tests/performance/load-test.mjs --base-url http://127.0.0.1:8090 --users 200 --concurrency 200 --cleanup` → passed.
+- `wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server && docker build -f backend/Dockerfile -t mindmapvault-server:local .'` → passed.
+- `wsl.exe -d Ubuntu bash -lc 'cd /mnt/c/Users/korne/vscode/mindmapvault-server && docker compose up -d --force-recreate server && docker compose ps'` → passed.
+- `pnpm build` in `frontend_app` → passed with generated PWA assets (`dist/manifest.webmanifest`, `dist/sw.js`).
 
 ## [0.3.25] - 2026-05-03
 

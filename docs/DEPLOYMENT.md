@@ -249,11 +249,11 @@ docker compose up -d postgres garage server
 If Docker Hub publishing is configured for the repository, you can use the Docker Hub image name instead:
 
 ```powershell
-$env:SERVER_IMAGE = 'docker.io/<dockerhub-namespace>/mindmapvault-server:0.3.24'
+$env:SERVER_IMAGE = 'docker.io/<dockerhub-namespace>/mindmapvault-server:0.3.26'
 docker compose up -d postgres garage server
 ```
 
-On tag pushes like `v0.3.24`, the publish workflow emits version tags like `0.3.24` in addition to the original Git ref tag and `latest` on the default branch.
+On tag pushes like `v0.3.26`, the publish workflow emits version tags like `0.3.26` in addition to the original Git ref tag and `latest` on the default branch.
 
 ## Common Operations
 

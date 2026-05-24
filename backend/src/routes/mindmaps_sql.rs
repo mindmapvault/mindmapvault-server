@@ -9,9 +9,7 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use serde::Deserialize;
-#[cfg(not(windows))]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -71,14 +69,10 @@ pub fn router(state: MindMapsSqlState) -> Router {
     router.with_state(state)
 }
 
-#[cfg(not(windows))]
 #[derive(Debug, Serialize)]
 struct AllocatorStatsResponse {
-    allocated: usize,
-    active: usize,
-    resident: usize,
-    mapped: usize,
-    retained: usize,
+    available: bool,
+    message: String,
 }
 
 #[cfg(not(windows))]
@@ -86,39 +80,9 @@ async fn get_allocator_stats(
     State(_state): State<MindMapsSqlState>,
     _user: AuthenticatedUser,
 ) -> Result<Json<AllocatorStatsResponse>, AppError> {
-    let epoch = jemalloc_ctl::epoch::mib()
-        .map_err(|e| AppError::Internal(format!("failed to access jemalloc epoch: {e}")))?;
-    let allocated = jemalloc_ctl::stats::allocated::mib()
-        .map_err(|e| AppError::Internal(format!("failed to access jemalloc allocated stat: {e}")))?;
-    let active = jemalloc_ctl::stats::active::mib()
-        .map_err(|e| AppError::Internal(format!("failed to access jemalloc active stat: {e}")))?;
-    let resident = jemalloc_ctl::stats::resident::mib()
-        .map_err(|e| AppError::Internal(format!("failed to access jemalloc resident stat: {e}")))?;
-    let mapped = jemalloc_ctl::stats::mapped::mib()
-        .map_err(|e| AppError::Internal(format!("failed to access jemalloc mapped stat: {e}")))?;
-    let retained = jemalloc_ctl::stats::retained::mib()
-        .map_err(|e| AppError::Internal(format!("failed to access jemalloc retained stat: {e}")))?;
-
-    epoch
-        .advance()
-        .map_err(|e| AppError::Internal(format!("failed to refresh jemalloc stats: {e}")))?;
-
     Ok(Json(AllocatorStatsResponse {
-        allocated: allocated
-            .read()
-            .map_err(|e| AppError::Internal(format!("failed to read jemalloc allocated stat: {e}")))?,
-        active: active
-            .read()
-            .map_err(|e| AppError::Internal(format!("failed to read jemalloc active stat: {e}")))?,
-        resident: resident
-            .read()
-            .map_err(|e| AppError::Internal(format!("failed to read jemalloc resident stat: {e}")))?,
-        mapped: mapped
-            .read()
-            .map_err(|e| AppError::Internal(format!("failed to read jemalloc mapped stat: {e}")))?,
-        retained: retained
-            .read()
-            .map_err(|e| AppError::Internal(format!("failed to read jemalloc retained stat: {e}")))?,
+        available: false,
+        message: "allocator stats endpoint is disabled in this build".to_string(),
     }))
 }
 

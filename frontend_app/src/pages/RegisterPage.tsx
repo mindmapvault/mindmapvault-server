@@ -228,7 +228,7 @@ export function RegisterPage() {
         </p>
 
         <p className="mt-2 text-center text-xs text-slate-500">
-          Prefer the hosted SaaS version?{' '}
+          Prefer the hosted in Cloud?{' '}
           <a href={HOSTED_LOGIN_URL} className="text-accent hover:underline">
             Sign in there
           </a>
