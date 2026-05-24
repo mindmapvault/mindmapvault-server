@@ -70,3 +70,53 @@ jobs:
 
       - name: Run dependency audit
         run: pnpm audit
+
+  security-guard-report:
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - no-committed-secrets
+      - backend-rustsec-audit
+      - frontend-dependency-audit
+    steps:
+      - name: Generate workflow report
+        env:
+          NO_COMMITTED_SECRETS_RESULT: ${{ needs.no-committed-secrets.result }}
+          BACKEND_AUDIT_RESULT: ${{ needs.backend-rustsec-audit.result }}
+          FRONTEND_AUDIT_RESULT: ${{ needs.frontend-dependency-audit.result }}
+          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+          GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER_VALUE: ${{ github.run_number }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          GITHUB_REF_NAME_VALUE: ${{ github.ref_name }}
+          GITHUB_ACTOR_VALUE: ${{ github.actor }}
+          GITHUB_SERVER_URL_VALUE: ${{ github.server_url }}
+        run: |
+          report_time="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          overall_status="success"
+          if [ "$NO_COMMITTED_SECRETS_RESULT" != "success" ] || [ "$BACKEND_AUDIT_RESULT" != "success" ] || [ "$FRONTEND_AUDIT_RESULT" != "success" ]; then
+            overall_status="failure"
+          fi
+
+          cat > security-guard-report.md <<EOF
+          # Security Guard Report
+
+          Generated at (UTC): $report_time
+          Repository: $GITHUB_REPOSITORY_NAME
+          Run number: $GITHUB_RUN_NUMBER_VALUE
+          Run ID: $GITHUB_RUN_ID_VALUE
+          Commit: $GITHUB_SHA_VALUE
+          Branch: $GITHUB_REF_NAME_VALUE
+          Triggered by: $GITHUB_ACTOR_VALUE
+          Overall status: $overall_status
+          Run URL: $GITHUB_SERVER_URL_VALUE/$GITHUB_REPOSITORY_NAME/actions/runs/$GITHUB_RUN_ID_VALUE
+
+          ## Job Results
+
+          - no-committed-secrets: $NO_COMMITTED_SECRETS_RESULT
+          - backend-rustsec-audit: $BACKEND_AUDIT_RESULT
+          - frontend-dependency-audit (matrix): $FRONTEND_AUDIT_RESULT
+          EOF
+
+          cat security-guard-report.md >> "$GITHUB_STEP_SUMMARY"

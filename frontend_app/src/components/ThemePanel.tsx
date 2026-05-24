@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { authApi } from '../api/auth';
+import { PwaInstallButton } from './PwaInstallButton';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 import { AutosaveMode, useThemeStore } from '../store/theme';
@@ -175,6 +176,18 @@ export function ThemePanel() {
               {primaryColor}
             </span>
           </div>
+
+          {modeSetting !== 'local' && (
+            <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+              <span
+                className="mb-2 block text-xs font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Install app
+              </span>
+              <PwaInstallButton className="w-full" />
+            </div>
+          )}
 
           <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
             <span

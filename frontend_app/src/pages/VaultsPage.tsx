@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
 import { mindmapsApi } from '../api/mindmaps';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { PwaInstallButton } from '../components/PwaInstallButton';
 import { ThemePanel } from '../components/ThemePanel';
 import { LogoWithText } from '../components/Logo';
 import { UnlockModal } from '../components/UnlockModal';
@@ -1157,7 +1156,6 @@ export function VaultsPage() {
             <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
               <span className="hidden text-sm text-slate-400 sm:inline">{username}</span>
               <ThemePanel />
-              {!isLocalMode && <PwaInstallButton />}
               {isLocalMode && (
                 <button
                   onClick={() => navigate('/change-password')}
