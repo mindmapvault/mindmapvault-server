@@ -3,7 +3,9 @@
 .env.local
 backend/.env
 backend/.env.local
-scripts/publish_dockerhub/
+scripts/publish_dockerhub/.env
+scripts/publish_dockerhub/.env.deploy
+scripts/publish_dockerhub/publish-to-dockerhub.sh
 
 # Node / frontend outputs
 node_modules/
