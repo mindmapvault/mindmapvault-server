@@ -27,10 +27,21 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v3
+
+      - name: Read app version
+        id: app_version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' backend/Cargo.toml | head -n1)"
+          if [ -z "$version" ]; then
+            echo "Failed to read backend version from backend/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
       - name: Compute image coordinates
         id: image
@@ -46,6 +57,8 @@ jobs:
             ${{ steps.image.outputs.ghcr }}
           tags: |
             type=ref,event=branch
+            type=raw,value=${{ steps.app_version.outputs.value }},enable={{is_default_branch}}
+            type=raw,value=v${{ steps.app_version.outputs.value }},enable={{is_default_branch}}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,prefix=sha-
@@ -53,7 +66,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
