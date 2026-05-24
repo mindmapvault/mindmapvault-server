@@ -6,6 +6,9 @@ backend/.env.local
 scripts/publish_dockerhub/.env
 scripts/publish_dockerhub/.env.deploy
 scripts/publish_dockerhub/publish-to-dockerhub.sh
+/.env.deploy
+/.env.deploy.example
+/garage.toml
 
 # Node / frontend outputs
 node_modules/

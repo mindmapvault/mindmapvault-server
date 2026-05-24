@@ -22,9 +22,15 @@ What the setup script does:
 
 - downloads `docker-compose.yml`, `.env.deploy.example`, and `garage.toml`
 - creates or updates `.env.deploy`
-- prompts for values one by one
+- prompts for values one by one in interactive mode
 - auto-generates secure defaults for required secrets when you press Enter
-- optionally runs `docker compose --env-file .env.deploy up -d`
+- uses colored output with explicit progress and waiting status messages
+- supports both `install` and `update` mode
+- in update mode can pull and refresh all three services (`server`, `postgres`, `garage`)
+- optionally runs deployment and post-start health waiting checks
+
+For upgrades, run the same command again and choose `update` mode.
+The script preserves existing env values by default and lets you override or rotate values when needed.
 
 Manual fallback (if you prefer editing the env file yourself):
 
