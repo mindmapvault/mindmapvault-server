@@ -41,7 +41,7 @@ services:
       retries: 10
 
   server:
-    # Pin a version tag for production, e.g. kornelko2/mindmapvault-server:0.3.26
+    # Pin a version tag for production, e.g. kornelko2/mindmapvault-server:v0.3.26
     image: ${SERVER_IMAGE:-kornelko2/mindmapvault-server:latest}
     container_name: mindmapvault-server
     restart: unless-stopped

@@ -73,7 +73,7 @@ Choose `update` mode when prompted.
 If you want to pin a specific image tag, set it when asked for `SERVER_IMAGE`, for example:
 
 ```text
-kornelko2/mindmapvault-server:1.2.4
+kornelko2/mindmapvault-server:v1.2.4
 ```
 
 ---
@@ -135,7 +135,7 @@ Source-of-truth files:
 Maintainers can mirror GHCR tags to Docker Hub with:
 
 ```bash
-./scripts/publish_dockerhub/publish-to-dockerhub.sh 1.2.3
+./scripts/publish_dockerhub/publish-to-dockerhub.sh v1.2.3
 ```
 
 ---

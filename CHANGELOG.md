@@ -11,12 +11,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Changed
 - **Backend Dependency Security** — Updated backend dependency resolution to clear RustSec findings by moving to patched AWS SDK transitive crates (`aws-config`/`aws-sdk-s3` resolved forward), upgrading `pprof` to `0.15`, and removing `jemalloc-ctl` from the diagnostics path.
 - **Diagnostics Endpoint Behavior** — `/api/mindmaps/maintenance/allocator-stats` now returns a deterministic "disabled in this build" response instead of querying allocator internals through `jemalloc-ctl`.
+- **Docker Hub Release Tags** — Standardized published container version tags on the `v<version>` form (`v0.3.26`) and removed the stray bare `0.3.26` tag from Docker Hub so the registry matches Git tag naming and release references.
+- **Deployment Installer Flow** — Verified the Docker Hub deployment installer can download the release bundle, write its config, and bring up a fresh stack successfully after removing the stale fixed-name containers from the previous run.
 
 ### Removed
 
 ### Validation
 - `cargo check --manifest-path backend/Cargo.toml` in WSL workspace → passed.
 - `cargo audit -q --manifest-path backend/Cargo.toml` in WSL workspace → passed (`BACKEND_AUDIT_PASS`).
+- `./scripts/publish_dockerhub/publish-to-dockerhub.sh v0.3.26` in WSL → passed; pushed `kornelko2/mindmapvault-server:v0.3.26` and `latest`, and packaged `dist/mindmapvault-server-v0.3.26-deploy.tar.gz`.
+- Docker Hub API check → confirmed `0.3.26` tag removal and remaining `v0.3.26`, `latest`, and `sha-*` tags.
+- `scripts/publish_dockerhub/setup.sh` in a clean WSL temp directory with the live stack stopped and removed → passed end-to-end and reported all services healthy.
 
 ## [0.3.26] - 2026-05-24
 

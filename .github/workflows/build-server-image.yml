@@ -56,7 +56,7 @@ jobs:
           images: |
             ${{ steps.image.outputs.ghcr }}
           tags: |
-            type=raw,value=${{ steps.app_version.outputs.value }},enable={{is_default_branch}}
+            type=raw,value=v${{ steps.app_version.outputs.value }},enable={{is_default_branch}}
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
