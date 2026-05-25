@@ -38,3 +38,4 @@ postgres-data/
 !.vscode/mcp.json
 
 copilot-instructions.md
+/playwright/
