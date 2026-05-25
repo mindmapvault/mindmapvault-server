@@ -13,6 +13,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - **Diagnostics Endpoint Behavior** — `/api/mindmaps/maintenance/allocator-stats` now returns a deterministic "disabled in this build" response instead of querying allocator internals through `jemalloc-ctl`.
 - **Docker Hub Release Tags** — Standardized published container version tags on the `v<version>` form (`v0.3.26`) and removed the stray bare `0.3.26` tag from Docker Hub so the registry matches Git tag naming and release references.
 - **Deployment Installer Flow** — Verified the Docker Hub deployment installer can download the release bundle, write its config, and bring up a fresh stack successfully after removing the stale fixed-name containers from the previous run.
+- **Public OSS Feature Status** — Added a public `docs/OSS_FEATURES.md` page that lists the shipped OSS server capabilities, marks them as done, and clearly separates the server-only OSS scope from hosted/enterprise out-of-scope features.
 
 ### Removed
 

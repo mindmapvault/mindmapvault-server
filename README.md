@@ -1,6 +1,6 @@
 # MindMapVault Server
 
-MindMapVault Server is the self-hosted, open-source server with full MindMapVault UI. 
+MindMapVault Server is the self-hosted, open-source server with backend and web UI surfaces.
 
 It gives you full infrastructure ownership: your own server, your own storage, no third-party cloud, and the same zero-knowledge encrypted core as the desktop app.
 
@@ -13,7 +13,7 @@ It gives you full infrastructure ownership: your own server, your own storage, n
 - **Single Docker image** — one container runs the API, the web UI, and the admin surface together
 - **AGPL-3 licensed**
 
-What this server does not include: team management, enterprise governance, SSO, or audit controls. Those belong to the enterprise edition.
+What this server does not include: sync, offline client features, team management, enterprise governance, SSO, or audit controls. Those belong to other product lines.
 
 ## Quick Start
 
@@ -36,6 +36,8 @@ What you get:
 - MindMapVault Server on `http://localhost:8090`
 
 **For the full deployment guide** — environment variables, volume mounts, storage setup, upgrades, and production configuration — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+For the public OSS feature status and what is intentionally out of scope, see [`docs/OSS_FEATURES.md`](docs/OSS_FEATURES.md).
 
 ## Privacy Boundary
 
