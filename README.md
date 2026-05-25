@@ -4,6 +4,16 @@ MindMapVault Server is the self-hosted, open-source server with backend and web 
 
 It gives you full infrastructure ownership: your own server, your own storage, no third-party cloud, and the same zero-knowledge encrypted core as the desktop app.
 
+## UI Preview
+
+
+[![MindMapVault product preview](docs/assets/hero-preview.png)](https://www.mindmapvault.com/)
+
+
+## Demo
+
+Interactive demo: https://mindmapvault.github.io/mindmapvault-foss/demo/
+
 ## What It Is
 
 - **Zero-knowledge backend** — vault content is encrypted client-side before upload; the server stores only ciphertext
