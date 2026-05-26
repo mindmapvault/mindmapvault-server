@@ -50,4 +50,4 @@ These capabilities remain reserved for other product lines and are not planned f
 
 - [Surface ownership](SURFACE_OWNERSHIP.md)
 - [Deployment guide](DEPLOYMENT.md)
-- [Current release notes](RELEASE_0.3.26.md)
+- [Current release notes](RELEASE_0.3.27.md)
