@@ -9,21 +9,21 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Added
 
 ### Changed
-- **Backend Dependency Security** — Updated backend dependency resolution to clear RustSec findings by moving to patched AWS SDK transitive crates (`aws-config`/`aws-sdk-s3` resolved forward), upgrading `pprof` to `0.15`, and removing `jemalloc-ctl` from the diagnostics path.
-- **Diagnostics Endpoint Behavior** — `/api/mindmaps/maintenance/allocator-stats` now returns a deterministic "disabled in this build" response instead of querying allocator internals through `jemalloc-ctl`.
-- **Docker Hub Release Tags** — Standardized published container version tags on the `v<version>` form (`v0.3.26`) and removed the stray bare `0.3.26` tag from Docker Hub so the registry matches Git tag naming and release references.
-- **Deployment Installer Flow** — Verified the Docker Hub deployment installer can download the release bundle, write its config, and bring up a fresh stack successfully after removing the stale fixed-name containers from the previous run.
-- **Public OSS Feature Status** — Added a public `docs/OSS_FEATURES.md` page that lists the shipped OSS server capabilities, marks them as done, and clearly separates the server-only OSS scope from hosted/enterprise out-of-scope features.
-- **Server Scope Documentation Alignment** — Updated Server docs to consistently define the OSS Server product as online-only backend + web UI, and to keep sync/offline/collaboration and public API-spec promises out of scope for this repository.
 
 ### Removed
 
 ### Validation
-- `cargo check --manifest-path backend/Cargo.toml` in WSL workspace → passed.
-- `cargo audit -q --manifest-path backend/Cargo.toml` in WSL workspace → passed (`BACKEND_AUDIT_PASS`).
-- `./scripts/publish_dockerhub/publish-to-dockerhub.sh v0.3.26` in WSL → passed; pushed `kornelko2/mindmapvault-server:v0.3.26` and `latest`, and packaged `dist/mindmapvault-server-v0.3.26-deploy.tar.gz`.
-- Docker Hub API check → confirmed `0.3.26` tag removal and remaining `v0.3.26`, `latest`, and `sha-*` tags.
-- `scripts/publish_dockerhub/setup.sh` in a clean WSL temp directory with the live stack stopped and removed → passed end-to-end and reported all services healthy.
+
+## [0.3.27] - 2026-05-26
+
+### Changed
+- **Connector key canonicalization (Server frontend)** — Updated connector typing in `frontend_app/src/app-core/connectors/types.ts` to enforce canonical capability keys for feature and billing checks.
+- **Connector capability defaults** — Updated `frontend_app/src/platform/bootstrap.ts` to use explicit capability handling and deterministic unsupported-feature behavior (`false` instead of permissive/implicit behavior).
+- **Contributor policy alignment** — Added canonical connector capability-key naming guidance to `.github/copilot-instructions.md` for cross-repo consistency.
+- **Release versioning** — Bumped release version from `0.3.26` to `0.3.27` across `backend`, `frontend_app`, and desktop Tauri metadata.
+
+### Validation
+- `pnpm --dir frontend_app build` → passed.
 
 ## [0.3.26] - 2026-05-24
 

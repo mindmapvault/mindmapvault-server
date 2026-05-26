@@ -4,6 +4,19 @@ export const CONNECTOR_API_VERSION = '0.1.0';
 
 export type DeploymentTarget = 'foss' | 'server' | 'saas' | 'enterprise';
 
+export type FeatureKey =
+  | 'realtime-collaboration'
+  | 'cloud-version-history'
+  | 'public-share-links'
+  | 'billing-upgrade'
+  | 'admin-controls';
+
+export type BillingFeatureKey =
+  | 'large-exports'
+  | 'advanced-attachments'
+  | 'team-collaboration'
+  | 'admin-controls';
+
 export type StorageConnector = StorageAdapter;
 
 export interface UserIdentity {
@@ -27,7 +40,7 @@ export interface AuthConnector {
 
 export interface BillingConnector {
   getPlan(): 'free' | 'paid' | 'enterprise';
-  isFeatureEnabled(feature: string): boolean;
+  isFeatureEnabled(feature: BillingFeatureKey): boolean;
   openUpgradeFlow(): void;
 }
 
@@ -36,7 +49,7 @@ export interface CollaborationConnector {
 }
 
 export interface FeatureFlagConnector {
-  hasFeature(feature: string): boolean;
+  hasFeature(feature: FeatureKey): boolean;
 }
 
 export interface TelemetryConnector {

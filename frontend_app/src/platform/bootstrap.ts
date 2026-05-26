@@ -45,7 +45,7 @@ export function createConnectorRegistry(): ConnectorRegistry {
     },
     billing: {
       getPlan: () => 'free',
-      isFeatureEnabled: () => true,
+      isFeatureEnabled: () => false,
       openUpgradeFlow: () => {
         // Server/community default: no upgrade action.
       },
@@ -54,7 +54,7 @@ export function createConnectorRegistry(): ConnectorRegistry {
       enabled: false,
     },
     features: {
-      hasFeature: (feature) => feature !== 'realtime-collaboration',
+      hasFeature: () => false,
     },
     telemetry: {
       track: () => {
