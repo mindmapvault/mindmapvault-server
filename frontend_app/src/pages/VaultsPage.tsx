@@ -1,4 +1,4 @@
-import { memo, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
 import { mindmapsApi } from '../api/mindmaps';
@@ -6,7 +6,10 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { ThemePanel } from '../components/ThemePanel';
 import { LogoWithText } from '../components/Logo';
 import { UnlockModal } from '../components/UnlockModal';
-import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
+
+const VersionHistoryPanel = lazy(() =>
+  import('../components/VersionHistoryPanel').then((m) => ({ default: m.VersionHistoryPanel })),
+);
 import { hybridEncap } from '../crypto/kem';
 import { decryptTitle, encryptTree, encryptTitle } from '../crypto/vault';
 import { toBase64 } from '../crypto/utils';
@@ -25,6 +28,8 @@ import type {
 } from '../types';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { obsidianMarkdownToTree } from '../utils/markdownImport';
+import { freemindToTree } from '../utils/freemindImport';
+import { wisemappingToTree } from '../utils/wisemappingImport';
 import {
   getVaultPreviewStats,
   getVaultPreviewTheme,
@@ -181,8 +186,6 @@ interface VaultCardProps {
   activeShareCount: number;
   previewState?: VaultPreviewState;
   previewPanelStyle: CSSProperties;
-  previewFrameStyle: CSSProperties;
-  previewImageShellStyle: CSSProperties;
   previewOverlayStyle: CSSProperties;
   previewOverlayBadgeStyle: CSSProperties;
   onNavigate: (path: string) => void;
@@ -212,8 +215,6 @@ const VaultCard = memo(function VaultCard({
   activeShareCount,
   previewState,
   previewPanelStyle,
-  previewFrameStyle,
-  previewImageShellStyle,
   previewOverlayStyle,
   previewOverlayBadgeStyle,
   onNavigate,
@@ -370,29 +371,29 @@ const VaultCard = memo(function VaultCard({
           </div>
 
           {previewState?.summary ? (
-            <div className="relative overflow-hidden rounded-lg border p-3" style={previewFrameStyle}>
-              <div className={blurPreview ? 'select-none blur-sm opacity-60' : ''}>
-                <div className="flex aspect-[16/9] w-full items-center justify-center rounded-lg border p-3" style={previewImageShellStyle}>
+            <div>
+              <div className="relative overflow-hidden rounded-lg">
+                <div className={blurPreview ? 'select-none blur-sm opacity-60' : ''}>
                   <img
                     src={previewState.summary.image_data_url}
                     alt={`Preview of ${map.title ?? 'vault'}`}
-                    className="h-full w-full rounded-md object-contain"
+                    className="aspect-video w-full object-contain"
                     loading="lazy"
                   />
                 </div>
-                <p className="mt-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                  {previewState.summary.format} screenshot
-                  {previewState.summary.noteCount > 0 ? ` | ${previewState.summary.noteCount} notes` : ''}
-                  {previewState.summary.attachmentCount > 0 ? ` | ${previewState.summary.attachmentCount} files` : ''}
-                </p>
+                {blurPreview && (
+                  <div className="absolute inset-0 flex items-center justify-center" style={previewOverlayStyle}>
+                    <span className="rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em]" style={previewOverlayBadgeStyle}>
+                      Blurred for shared vaults
+                    </span>
+                  </div>
+                )}
               </div>
-              {blurPreview && (
-                <div className="absolute inset-0 flex items-center justify-center" style={previewOverlayStyle}>
-                  <span className="rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em]" style={previewOverlayBadgeStyle}>
-                    Blurred for shared vaults
-                  </span>
-                </div>
-              )}
+              <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                {previewState.summary.format} screenshot
+                {previewState.summary.noteCount > 0 ? ` | ${previewState.summary.noteCount} notes` : ''}
+                {previewState.summary.attachmentCount > 0 ? ` | ${previewState.summary.attachmentCount} files` : ''}
+              </p>
             </div>
           ) : previewState?.error ? (
             <p className="text-xs text-slate-500">Preview unavailable for this vault yet.</p>
@@ -498,10 +499,231 @@ const VaultCard = memo(function VaultCard({
     && prev.previewState === next.previewState
     && prev.userLabels === next.userLabels
     && prev.previewPanelStyle === next.previewPanelStyle
-    && prev.previewFrameStyle === next.previewFrameStyle
-    && prev.previewImageShellStyle === next.previewImageShellStyle
     && prev.previewOverlayStyle === next.previewOverlayStyle
     && prev.previewOverlayBadgeStyle === next.previewOverlayBadgeStyle;
+});
+
+// ─── Table row (compact view) ────────────────────────────────────────────────
+
+interface VaultTableRowProps {
+  map: MapWithTitle;
+  usage?: StorageSummary['vaults'][number];
+  isLocalMode: boolean;
+  renamingId: string | null;
+  renameValue: string;
+  renaming: boolean;
+  userLabels: Array<{ name: string; color: string }>;
+  activeShareCount: number;
+  previewState?: VaultPreviewState;
+  onNavigate: (path: string) => void;
+  onStartRename: (map: MapWithTitle) => void;
+  onRenameValueChange: (value: string) => void;
+  onRenameConfirm: (id: string) => Promise<void>;
+  onRenameCancel: () => void;
+  onOpenHistory: (id: string) => void;
+  onDeleteRequest: (id: string, title: string | null) => void;
+}
+
+const VaultTableRow = memo(function VaultTableRow({
+  map,
+  usage,
+  isLocalMode,
+  renamingId,
+  renameValue,
+  renaming,
+  userLabels,
+  activeShareCount,
+  previewState,
+  onNavigate,
+  onStartRename,
+  onRenameValueChange,
+  onRenameConfirm,
+  onRenameCancel,
+  onOpenHistory,
+  onDeleteRequest,
+}: VaultTableRowProps) {
+  const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
+  const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
+
+  return (
+    <tr className="group border-b border-slate-800 transition-colors last:border-0 hover:bg-white/[0.025]">
+      {/* Color stripe */}
+      <td className="w-1 p-0" style={{ backgroundColor: map.draftColor }} />
+      {/* Thumbnail */}
+      <td className="w-[88px] p-2 pl-2">
+        <button
+          className="block overflow-hidden rounded"
+          onClick={() => onNavigate(`/vaults/${map.id}`)}
+          title={`Open ${map.title ?? 'vault'}`}
+        >
+          {previewState?.summary ? (
+            <img
+              src={previewState.summary.image_data_url}
+              alt=""
+              className="h-[46px] w-20 rounded object-cover"
+              style={isSharedVault ? { filter: 'blur(3px)', opacity: 0.5 } : {}}
+              loading="lazy"
+            />
+          ) : (
+            <div
+              className="flex h-[46px] w-20 items-center justify-center rounded"
+              style={{ background: `${map.draftColor}1a`, border: `1px solid ${map.draftColor}44` }}
+            >
+              <div className="h-2 w-2 rounded-full" style={{ backgroundColor: map.draftColor }} />
+            </div>
+          )}
+        </button>
+      </td>
+
+      {/* Name + labels (inline) — note and full label list appear in a tooltip above the row */}
+      <td className="relative min-w-0 px-3 py-2">
+        {renamingId === map.id ? (
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e) => onRenameValueChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void onRenameConfirm(map.id);
+                if (e.key === 'Escape') onRenameCancel();
+              }}
+              className="w-full rounded border border-accent bg-surface px-2 py-1 text-sm font-medium text-white focus:outline-none"
+            />
+            <button
+              onClick={() => void onRenameConfirm(map.id)}
+              disabled={renaming || !renameValue.trim()}
+              className="rounded bg-accent px-2 py-1 text-xs text-white disabled:opacity-50"
+            >
+              {renaming ? '…' : 'OK'}
+            </button>
+            <button
+              onClick={onRenameCancel}
+              className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:border-slate-500"
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button className="block w-full text-left" onClick={() => onNavigate(`/vaults/${map.id}`)}>
+            <span className="block truncate text-sm font-medium text-white">
+              {map.title ?? <span className="italic text-slate-500">Decrypting…</span>}
+            </span>
+            {map.draftLabels.length > 0 && (
+              <span className="mt-1 flex flex-wrap gap-1">
+                {map.draftLabels.slice(0, 6).map((lbl) => (
+                  <span
+                    key={lbl}
+                    className="rounded-full px-1.5 py-0.5 text-[10px] leading-none text-white"
+                    style={{ backgroundColor: userLabels.find((ul) => ul.name === lbl)?.color ?? 'var(--accent)' }}
+                  >
+                    {lbl}
+                  </span>
+                ))}
+              </span>
+            )}
+          </button>
+        )}
+
+        {/* Tooltip — floats ABOVE the row on hover so it never overlaps sibling rows */}
+        {(map.draftLabels.length > 0 || map.draftNote) && renamingId !== map.id && (
+          <div className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 hidden w-72 max-w-[85vw] rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-2xl group-hover:block">
+            {map.draftLabels.length > 0 && (
+              <div>
+                <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Labels</p>
+                <div className="flex flex-wrap gap-1">
+                  {map.draftLabels.map((lbl) => (
+                    <span
+                      key={lbl}
+                      className="rounded-full px-2 py-0.5 text-xs text-white"
+                      style={{ backgroundColor: userLabels.find((ul) => ul.name === lbl)?.color ?? 'var(--accent)' }}
+                    >
+                      {lbl}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {map.draftNote && (
+              <div className={map.draftLabels.length > 0 ? 'mt-2' : ''}>
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">Note</p>
+                <p className="text-xs leading-relaxed text-slate-300">{map.draftNote}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </td>
+
+      {/* Updated date */}
+      <td className="hidden whitespace-nowrap px-3 py-2 text-xs text-slate-500 sm:table-cell">
+        {formatDateShort(map.updated_at)}
+      </td>
+
+      {/* Stats */}
+      <td className="hidden whitespace-nowrap px-3 py-2 text-xs text-slate-500 lg:table-cell">
+        {previewState?.summary != null
+          ? `${previewState.summary.nodeCount} node${previewState.summary.nodeCount === 1 ? '' : 's'}`
+          : '—'}
+        {!isLocalMode && usage != null && usage.version_count > 0 ? ` · ${usage.version_count} ver` : ''}
+      </td>
+
+      {/* Actions */}
+      <td className="py-2 pr-2">
+        <div className="flex items-center justify-end gap-0.5">
+          <button
+            onClick={() => onNavigate(`/vaults/${map.id}`)}
+            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-200"
+            title="Open vault"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => onStartRename(map)}
+            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300"
+            title="Rename vault"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+          {!isLocalMode && (
+            <button
+              onClick={() => onOpenHistory(map.id)}
+              className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300"
+              title="Version history"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </button>
+          )}
+          <button
+            onClick={() => onDeleteRequest(map.id, map.title)}
+            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-900/30 hover:text-red-400"
+            title="Delete vault"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}, (prev, next) => {
+  const sameRenameContext = prev.renamingId !== prev.map.id
+    ? prev.renamingId === next.renamingId
+    : prev.renamingId === next.renamingId && prev.renameValue === next.renameValue && prev.renaming === next.renaming;
+  return (
+    prev.map === next.map &&
+    prev.usage === next.usage &&
+    prev.isLocalMode === next.isLocalMode &&
+    sameRenameContext &&
+    prev.activeShareCount === next.activeShareCount &&
+    prev.previewState === next.previewState &&
+    prev.userLabels === next.userLabels
+  );
 });
 
 export function VaultsPage() {
@@ -511,6 +733,7 @@ export function VaultsPage() {
   const isLocalMode = mode === 'local';
   const { labels: userLabels, addLabel: addUserLabel, updateLabelColor: updateUserLabelColor } = useUserLabels();
   const themeMode = useThemeStore((state) => state.mode);
+  const toggleThemeMode = useThemeStore((state) => state.toggleMode);
   const storage = useMemo(() => getStorage(), []);
   const hasKeys = !!sessionKeys;
 
@@ -530,6 +753,21 @@ export function VaultsPage() {
   const [importError, setImportError] = useState('');
   const mdImportRef = useRef<HTMLInputElement>(null);
 
+  const [mmImporting, setMmImporting] = useState(false);
+  const [mmImportError, setMmImportError] = useState('');
+  const mmImportRef = useRef<HTMLInputElement>(null);
+
+  const [wxmlImporting, setWxmlImporting] = useState(false);
+  const [wxmlImportError, setWxmlImportError] = useState('');
+  const wxmlImportRef = useRef<HTMLInputElement>(null);
+
+  const [xmindImporting, setXmindImporting] = useState(false);
+  const [xmindImportError, setXmindImportError] = useState('');
+  const xmindImportRef = useRef<HTMLInputElement>(null);
+
+  const [showImportMenu, setShowImportMenu] = useState(false);
+  const importMenuRef = useRef<HTMLDivElement>(null);
+
   const [historyVaultId, setHistoryVaultId] = useState<string | null>(null);
   const [storagePathInfo, setStoragePathInfo] = useState<LocalStorageDirInfo | null>(null);
   const [storagePathInput, setStoragePathInput] = useState('');
@@ -544,6 +782,10 @@ export function VaultsPage() {
   const [deletingVaultId, setDeletingVaultId] = useState<string | null>(null);
   const [activeShareCounts, setActiveShareCounts] = useState<Record<string, number>>({});
   const [previewStates, setPreviewStates] = useState<Record<string, VaultPreviewState>>({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>(
+    () => (localStorage.getItem('mmv-lobby-view') === 'table' ? 'table' : 'grid'),
+  );
 
   const previewPanelStyle = useMemo(() => (
     themeMode === 'light'
@@ -554,31 +796,6 @@ export function VaultsPage() {
       : {
           borderColor: 'rgb(51 65 85 / 1)',
           background: 'rgba(2, 6, 23, 0.4)',
-        }
-  ), [themeMode]);
-
-  const previewFrameStyle = useMemo(() => (
-    themeMode === 'light'
-      ? {
-          borderColor: 'rgba(203, 213, 225, 0.95)',
-          background: 'linear-gradient(180deg, rgba(241,245,249,0.96), rgba(226,232,240,0.92))',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.75)',
-        }
-      : {
-          borderColor: 'rgb(30 41 59 / 1)',
-          background: 'rgba(2, 6, 23, 0.7)',
-        }
-  ), [themeMode]);
-
-  const previewImageShellStyle = useMemo(() => (
-    themeMode === 'light'
-      ? {
-          borderColor: 'rgba(148, 163, 184, 0.35)',
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.95))',
-        }
-      : {
-          borderColor: 'rgb(15 23 42 / 0.8)',
-          background: 'rgba(2, 6, 23, 0.7)',
         }
   ), [themeMode]);
 
@@ -752,24 +969,40 @@ export function VaultsPage() {
   }, [isLocalMode, sessionKeys, storage]);
 
   const mapIdsKey = useMemo(() => maps.map((map) => map.id).join('|'), [maps]);
+  // Only changes when vault identity or server-side updated_at changes — not on draft edits.
+  const mapMetaKey = useMemo(() => maps.map((m) => `${m.id}:${m.updated_at}`).join('|'), [maps]);
+  const mapsRef = useRef(maps);
+  mapsRef.current = maps;
 
   useEffect(() => {
-    if (isLocalMode || !hasKeys || maps.length === 0) {
+    if (!showImportMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (importMenuRef.current && !importMenuRef.current.contains(e.target as Node)) {
+        setShowImportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showImportMenu]);
+
+  useEffect(() => {
+    if (isLocalMode || !hasKeys || !mapIdsKey) {
       return;
     }
 
+    const ids = mapIdsKey.split('|');
     let active = true;
 
     void Promise.all(
-      maps.map(async (map) => {
+      ids.map(async (id) => {
         try {
-          const shares = await encryptedVaultApi.listShares(map.id);
+          const shares = await encryptedVaultApi.listShares(id);
           return {
-            id: map.id,
+            id,
             count: shares.filter((share) => !share.revoked && share.status !== 'revoked').length,
           };
         } catch {
-          return { id: map.id, count: 0 };
+          return { id, count: 0 };
         }
       }),
     ).then((results) => {
@@ -780,9 +1013,10 @@ export function VaultsPage() {
     return () => {
       active = false;
     };
-  }, [hasKeys, isLocalMode, mapIdsKey, maps]);
+  }, [hasKeys, isLocalMode, mapIdsKey]);
 
   useEffect(() => {
+    const maps = mapsRef.current;
     if (isLocalMode || !sessionKeys || maps.length === 0) {
       return;
     }
@@ -858,19 +1092,20 @@ export function VaultsPage() {
       active = false;
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [isLocalMode, maps, sessionKeys, themeMode]);
+  }, [isLocalMode, mapMetaKey, sessionKeys, themeMode]);
 
   useEffect(() => {
     if (!isLocalMode) {
       return;
     }
+    const maps = mapsRef.current;
     const nextStates: Record<string, VaultPreviewState> = {};
     for (const map of maps) {
       const summary = loadCachedVaultPreview(map.id, map.updated_at, themeMode);
       nextStates[map.id] = summary ? { loading: false, summary } : { loading: false };
     }
     setPreviewStates(nextStates);
-  }, [isLocalMode, mapIdsKey, maps]);
+  }, [isLocalMode, mapMetaKey]);
 
   useEffect(() => {
     if (hasKeys) {
@@ -1047,6 +1282,121 @@ export function VaultsPage() {
     }
   };
 
+  const handleImportFreemind = async (file: File) => {
+    if (!sessionKeys) return;
+    setMmImporting(true);
+    setMmImportError('');
+    try {
+      const text = await file.text();
+      const vaultTitle = file.name.replace(/\.mm$/i, '') || 'Imported vault';
+      const parsedRoot = freemindToTree(text, vaultTitle);
+
+      const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
+
+      const titleEnc = await encryptTitle(vaultTitle, sessionKeys.masterKey);
+      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
+        sessionKeys.classicalPubKey,
+        sessionKeys.pqPubKey,
+      );
+      const encBlob = await encryptTree(importedTree, dek);
+
+      const created = await storage.createVault({
+        title_encrypted: titleEnc,
+        eph_classical_public: toBase64(ephClassicalPublic),
+        eph_pq_ciphertext: toBase64(ephPqCiphertext),
+        wrapped_dek: toBase64(wrappedDek),
+      });
+
+      await storage.uploadBlob(created.id, encBlob);
+      const createdDetail = await storage.getVault(created.id);
+      void saveTreeVaultPreview(created.id, createdDetail.updated_at, importedTree);
+
+      navigate(`/vaults/${created.id}`);
+    } catch (err) {
+      setMmImportError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setMmImporting(false);
+      if (mmImportRef.current) mmImportRef.current.value = '';
+    }
+  };
+
+  const handleImportWisemapping = async (file: File) => {
+    if (!sessionKeys) return;
+    setWxmlImporting(true);
+    setWxmlImportError('');
+    try {
+      const text = await file.text();
+      const vaultTitle = file.name.replace(/\.(wxml|xml)$/i, '') || 'Imported vault';
+      const parsedRoot = wisemappingToTree(text, vaultTitle);
+
+      const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
+
+      const titleEnc = await encryptTitle(vaultTitle, sessionKeys.masterKey);
+      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
+        sessionKeys.classicalPubKey,
+        sessionKeys.pqPubKey,
+      );
+      const encBlob = await encryptTree(importedTree, dek);
+
+      const created = await storage.createVault({
+        title_encrypted: titleEnc,
+        eph_classical_public: toBase64(ephClassicalPublic),
+        eph_pq_ciphertext: toBase64(ephPqCiphertext),
+        wrapped_dek: toBase64(wrappedDek),
+      });
+
+      await storage.uploadBlob(created.id, encBlob);
+      const createdDetail = await storage.getVault(created.id);
+      void saveTreeVaultPreview(created.id, createdDetail.updated_at, importedTree);
+
+      navigate(`/vaults/${created.id}`);
+    } catch (err) {
+      setWxmlImportError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setWxmlImporting(false);
+      if (wxmlImportRef.current) wxmlImportRef.current.value = '';
+    }
+  };
+
+  const handleImportXmind = async (file: File) => {
+    if (!sessionKeys) return;
+    setXmindImporting(true);
+    setXmindImportError('');
+    try {
+      const fileData = await file.arrayBuffer();
+      const vaultTitle = file.name.replace(/\.xmind$/i, '') || 'Imported vault';
+      const { xmindToTree } = await import('../utils/xmindImport');
+      const parsedRoot = xmindToTree(fileData, vaultTitle);
+
+      const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
+
+      const titleEnc = await encryptTitle(vaultTitle, sessionKeys.masterKey);
+      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
+        sessionKeys.classicalPubKey,
+        sessionKeys.pqPubKey,
+      );
+      const encBlob = await encryptTree(importedTree, dek);
+
+      const created = await storage.createVault({
+        title_encrypted: titleEnc,
+        eph_classical_public: toBase64(ephClassicalPublic),
+        eph_pq_ciphertext: toBase64(ephPqCiphertext),
+        wrapped_dek: toBase64(wrappedDek),
+      });
+
+      await storage.uploadBlob(created.id, encBlob);
+      const createdDetail = await storage.getVault(created.id);
+      void saveTreeVaultPreview(created.id, createdDetail.updated_at, importedTree);
+
+      navigate(`/vaults/${created.id}`);
+    } catch (err) {
+      setXmindImportError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setXmindImporting(false);
+      if (xmindImportRef.current) xmindImportRef.current.value = '';
+    }
+  };
+
   const handleDelete = async (id: string) => {
     setDeletingVaultId(id);
     try {
@@ -1138,6 +1488,17 @@ export function VaultsPage() {
     [storageSummary],
   );
 
+  const filteredMaps = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return maps;
+    return maps.filter(
+      (m) =>
+        m.title?.toLowerCase().includes(q) ||
+        m.draftNote.toLowerCase().includes(q) ||
+        m.draftLabels.some((l) => l.includes(q)),
+    );
+  }, [maps, searchQuery]);
+
   const usedBytes = storageSummary?.total_bytes ?? 0;
   const attachedFileCount = storageSummary?.attachment_count ?? 0;
   const attachedFileBytes = storageSummary?.attachment_bytes ?? 0;
@@ -1155,6 +1516,22 @@ export function VaultsPage() {
             </div>
             <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
               <span className="hidden text-sm text-slate-400 sm:inline">{username}</span>
+              <button
+                type="button"
+                onClick={toggleThemeMode}
+                title={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                className="rounded-lg border border-slate-600 p-2 text-slate-300 transition hover:border-slate-500 hover:text-white"
+              >
+                {themeMode === 'dark' ? (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                  </svg>
+                )}
+              </button>
               <ThemePanel />
               {isLocalMode && (
                 <button
@@ -1180,27 +1557,73 @@ export function VaultsPage() {
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-xl font-semibold text-white">Your Vaults</h1>
             <div className="flex items-center gap-2">
-              <input
-                ref={mdImportRef}
-                type="file"
-                accept=".md"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void handleImportMarkdown(file);
-                }}
-              />
-              <button
-                onClick={() => mdImportRef.current?.click()}
-                disabled={!hasKeys || importing}
-                title="Import an Obsidian / Markdown file as a new vault"
-                className="flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                {importing ? 'Importing…' : 'Import .md'}
-              </button>
+              {/* Hidden file inputs */}
+              <input ref={mdImportRef} type="file" accept=".md" style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportMarkdown(f); }} />
+              <input ref={mmImportRef} type="file" accept=".mm" style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFreemind(f); }} />
+              <input ref={wxmlImportRef} type="file" accept=".wxml,.xml" style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportWisemapping(f); }} />
+              <input ref={xmindImportRef} type="file" accept=".xmind" style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportXmind(f); }} />
+
+              {/* Import dropdown */}
+              <div ref={importMenuRef} style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setShowImportMenu((v) => !v)}
+                  disabled={!hasKeys || importing || mmImporting || wxmlImporting || xmindImporting}
+                  title="Import a vault from a file"
+                  className="flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  </svg>
+                  {(importing || mmImporting || wxmlImporting || xmindImporting) ? 'Importing…' : 'Import'}
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showImportMenu && (
+                  <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--color-surface-1, #1e293b)', border: '1px solid var(--color-border, #334155)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                    <button
+                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { mdImportRef.current?.click(); setShowImportMenu(false); }}
+                    >
+                      <span className="font-medium">Markdown</span>
+                      <span className="ml-2 text-xs text-slate-500">.md</span>
+                    </button>
+                    <button
+                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { mmImportRef.current?.click(); setShowImportMenu(false); }}
+                    >
+                      <span className="font-medium">FreeMind</span>
+                      <span className="ml-2 text-xs text-slate-500">.mm</span>
+                    </button>
+                    <button
+                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { mmImportRef.current?.click(); setShowImportMenu(false); }}
+                    >
+                      <span className="font-medium">FreePlane</span>
+                      <span className="ml-2 text-xs text-slate-500">.mm</span>
+                    </button>
+                    <button
+                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { wxmlImportRef.current?.click(); setShowImportMenu(false); }}
+                    >
+                      <span className="font-medium">WiseMapping</span>
+                      <span className="ml-2 text-xs text-slate-500">.wxml</span>
+                    </button>
+                    <button
+                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { xmindImportRef.current?.click(); setShowImportMenu(false); }}
+                    >
+                      <span className="font-medium">XMind</span>
+                      <span className="ml-2 text-xs text-slate-500">.xmind</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button
                 onClick={() => setShowCreate(true)}
                 disabled={!hasKeys}
@@ -1217,6 +1640,21 @@ export function VaultsPage() {
           {importError && (
             <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
               Import failed: {importError}
+            </div>
+          )}
+          {mmImportError && (
+            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
+              .mm import failed: {mmImportError}
+            </div>
+          )}
+          {wxmlImportError && (
+            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
+              WiseMapping import failed: {wxmlImportError}
+            </div>
+          )}
+          {xmindImportError && (
+            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
+              XMind import failed: {xmindImportError}
             </div>
           )}
 
@@ -1343,6 +1781,66 @@ export function VaultsPage() {
             </div>
           )}
 
+          {/* Search bar + view toggle — shown only when vaults exist */}
+          {!loading && maps.length > 0 && (
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <div className="relative min-w-[200px] flex-1 sm:max-w-sm">
+                <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                </svg>
+                <input
+                  type="search"
+                  placeholder="Search by name, note or label…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-surface py-2 pl-9 pr-8 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-500 hover:text-slate-300"
+                    title="Clear search"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              <div className="flex overflow-hidden rounded-lg border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => { setViewMode('grid'); localStorage.setItem('mmv-lobby-view', 'grid'); }}
+                  className={`px-3 py-2 transition ${viewMode === 'grid' ? 'bg-accent/20 text-accent' : 'text-slate-400 hover:text-slate-200'}`}
+                  title="Grid view"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setViewMode('table'); localStorage.setItem('mmv-lobby-view', 'table'); }}
+                  className={`border-l border-slate-700 px-3 py-2 transition ${viewMode === 'table' ? 'bg-accent/20 text-accent' : 'text-slate-400 hover:text-slate-200'}`}
+                  title="Table view"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <line x1="3" y1="6" x2="21" y2="6" strokeLinecap="round"/><line x1="3" y1="12" x2="21" y2="12" strokeLinecap="round"/><line x1="3" y1="18" x2="21" y2="18" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {searchQuery.trim() !== '' && !loading && (
+            <p className="mb-3 text-sm text-slate-400">
+              {filteredMaps.length === 0
+                ? `No vaults match "${searchQuery}"`
+                : `${filteredMaps.length} of ${maps.length} vault${maps.length === 1 ? '' : 's'}`}
+            </p>
+          )}
+
           {loading ? (
             <div className="flex items-center justify-center py-20 text-slate-500">
               <svg className="mr-2 h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -1358,9 +1856,54 @@ export function VaultsPage() {
               </svg>
               <p className="mt-3 text-sm">No vaults yet. Create your first one above.</p>
             </div>
+          ) : filteredMaps.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-700 py-16 text-center">
+              <p className="text-sm text-slate-500">No vaults match your search.</p>
+              <button type="button" onClick={() => setSearchQuery('')} className="mt-2 text-xs text-accent hover:underline">
+                Clear search
+              </button>
+            </div>
+          ) : viewMode === 'table' ? (
+            <div className="overflow-hidden rounded-xl border border-slate-700">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-700 bg-surface-1">
+                    <th className="w-1 p-0" />
+                    <th className="w-[88px] py-2 pl-2 text-left text-xs font-medium text-slate-500">Preview</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-slate-500">Name</th>
+                    <th className="hidden px-3 py-2 text-left text-xs font-medium text-slate-500 sm:table-cell">Updated</th>
+                    <th className="hidden px-3 py-2 text-left text-xs font-medium text-slate-500 lg:table-cell">Stats</th>
+                    <th className="py-2 pr-3 text-right text-xs font-medium text-slate-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredMaps.map((m) => (
+                    <VaultTableRow
+                      key={m.id}
+                      map={m}
+                      usage={storageByVault.get(m.id)}
+                      isLocalMode={isLocalMode}
+                      renamingId={renamingId}
+                      renameValue={renameValue}
+                      renaming={renaming}
+                      userLabels={userLabels}
+                      activeShareCount={activeShareCounts[m.id] ?? 0}
+                      previewState={previewStates[m.id]}
+                      onNavigate={navigate}
+                      onStartRename={handleStartRename}
+                      onRenameValueChange={setRenameValue}
+                      onRenameConfirm={handleRenameConfirm}
+                      onRenameCancel={handleRenameCancel}
+                      onOpenHistory={setHistoryVaultId}
+                      onDeleteRequest={(id, title) => setPendingVaultDeletion({ id, title })}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {maps.map((m) => (
+              {filteredMaps.map((m) => (
                 <VaultCard
                   key={m.id}
                   map={m}
@@ -1373,8 +1916,6 @@ export function VaultsPage() {
                   activeShareCount={activeShareCounts[m.id] ?? 0}
                   previewState={previewStates[m.id]}
                   previewPanelStyle={previewPanelStyle}
-                  previewFrameStyle={previewFrameStyle}
-                  previewImageShellStyle={previewImageShellStyle}
                   previewOverlayStyle={previewOverlayStyle}
                   previewOverlayBadgeStyle={previewOverlayBadgeStyle}
                   onNavigate={navigate}
@@ -1404,23 +1945,25 @@ export function VaultsPage() {
           onClick={() => setHistoryVaultId(null)}
         >
           <div onClick={(e) => e.stopPropagation()}>
-            <VersionHistoryPanel
-              className="mm-version-panel--modal"
-              vaultId={historyVaultId}
-              onClose={() => setHistoryVaultId(null)}
-              onLoad={(v: VersionDetail) => {
-                const target = historyVaultId;
-                setHistoryVaultId(null);
-                navigate(`/vaults/${target}?version_id=${encodeURIComponent(v.version_id)}`);
-              }}
-              loadingVersionId={null}
-              onDeleteVersion={async (versionId: string) => {
-                const target = historyVaultId;
-                if (!target) return;
-                await mindmapsApi.deleteVersion(target, versionId);
-                await refreshStorage();
-              }}
-            />
+            <Suspense fallback={null}>
+              <VersionHistoryPanel
+                className="mm-version-panel--modal"
+                vaultId={historyVaultId}
+                onClose={() => setHistoryVaultId(null)}
+                onLoad={(v: VersionDetail) => {
+                  const target = historyVaultId;
+                  setHistoryVaultId(null);
+                  navigate(`/vaults/${target}?version_id=${encodeURIComponent(v.version_id)}`);
+                }}
+                loadingVersionId={null}
+                onDeleteVersion={async (versionId: string) => {
+                  const target = historyVaultId;
+                  if (!target) return;
+                  await mindmapsApi.deleteVersion(target, versionId);
+                  await refreshStorage();
+                }}
+              />
+            </Suspense>
           </div>
         </div>
       )}

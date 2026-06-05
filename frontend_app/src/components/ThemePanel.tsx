@@ -20,11 +20,9 @@ const PRESETS = [
 
 export function ThemePanel() {
   const {
-    mode,
     primaryColor,
     autoLogoutMinutes,
     autosaveMode,
-    toggleMode,
     setPrimaryColor,
     setAutoLogoutMinutes,
     setAutosaveMode,
@@ -98,40 +96,6 @@ export function ThemePanel() {
           className={`absolute right-0 top-10 z-50 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-xl p-4 shadow-2xl ${canDeleteAccount ? 'w-[30rem]' : 'w-64'}`}
           style={{ background: 'var(--surface-1)', border: '1px solid var(--border)' }}
         >
-          {/* Mode toggle */}
-          <div className="mb-4 flex items-center justify-between">
-            <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-              Appearance
-            </span>
-            <button
-              onClick={toggleMode}
-              title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition"
-              style={{
-                background: 'var(--surface-2)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border-light)',
-              }}
-            >
-              {mode === 'dark' ? (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <circle cx="12" cy="12" r="4" />
-                    <path strokeLinecap="round" d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41" />
-                  </svg>
-                  Light mode
-                </>
-              ) : (
-                <>
-                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                  </svg>
-                  Dark mode
-                </>
-              )}
-            </button>
-          </div>
-
           {/* Colour swatches */}
           <div className="mb-3">
             <span

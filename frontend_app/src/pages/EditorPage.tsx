@@ -1,12 +1,16 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
 import { mindmapsApi } from '../api/mindmaps';
-import EncryptedVaultDialog, { type SecureVaultTab } from '../components/EncryptedVaultDialog';
+import type { SecureVaultTab } from '../components/EncryptedVaultDialog';
 import { DesktopMindMapEditor } from '../components/MindMapEditor';
 import { flattenAll } from '../components/MindMapHelpers';
-import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
 import { UnlockModal } from '../components/UnlockModal';
+
+const EncryptedVaultDialog = lazy(() => import('../components/EncryptedVaultDialog'));
+const VersionHistoryPanel = lazy(() =>
+  import('../components/VersionHistoryPanel').then((m) => ({ default: m.VersionHistoryPanel })),
+);
 import {
   createEncryptedShareBundle,
   decryptAttachmentForOwner,
@@ -23,6 +27,9 @@ import type { AttachmentMetadata, MapShareOwnerSummary, MindMapTree, NodeAttachm
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { createEncryptedFilePreview } from '../utils/filePreview';
 import { treeToMarkdown } from '../utils/markdownExport';
+import { treeToFreemind } from '../utils/freemindExport';
+import { treeToFreeplane } from '../utils/freeplaneExport';
+import { treeToWisemapping } from '../utils/wisemappingExport';
 import { downloadBlob } from '../utils/download';
 import {
   createCloudTreeVaultPreview,
@@ -506,6 +513,30 @@ export function EditorPage() {
     const blob = new Blob([md], { type: 'text/markdown' });
     void downloadBlob(blob, `${buildExportFileBaseName(currentTitle)}.md`);
   }, [buildExportFileBaseName]);
+
+  const handleExportFreemind = useCallback((tree: MindMapTree, currentTitle: string) => {
+    const xml = treeToFreemind(tree.root);
+    const blob = new Blob([xml], { type: 'application/xml' });
+    void downloadBlob(blob, `${currentTitle}.mm`);
+  }, []);
+
+  const handleExportFreeplane = useCallback((tree: MindMapTree, currentTitle: string) => {
+    const xml = treeToFreeplane(tree.root);
+    const blob = new Blob([xml], { type: 'application/xml' });
+    void downloadBlob(blob, `${currentTitle}.mm`);
+  }, []);
+
+  const handleExportWisemapping = useCallback((tree: MindMapTree, currentTitle: string) => {
+    const xml = treeToWisemapping(tree.root);
+    const blob = new Blob([xml], { type: 'application/xml' });
+    void downloadBlob(blob, `${currentTitle}.wxml`);
+  }, []);
+
+  const handleExportXmind = useCallback(async (tree: MindMapTree, currentTitle: string) => {
+    const { treeToXmind } = await import('../utils/xmindExport');
+    const blob = treeToXmind(tree.root, currentTitle);
+    void downloadBlob(blob, `${currentTitle}.xmind`);
+  }, []);
 
   const handleUploadFiles = useCallback(async (files: FileList) => {
     if (!id || !sessionKeys || isLocalMode) return;
@@ -1013,6 +1044,10 @@ export function EditorPage() {
         onBack={() => navigate('/vaults')}
         onShowHistory={() => { if (!isLocalMode) setShowHistory(true); }}
         onExportMarkdown={handleExportMarkdown}
+        onExportFreemind={handleExportFreemind}
+        onExportFreeplane={handleExportFreeplane}
+        onExportWisemapping={handleExportWisemapping}
+        onExportXmind={handleExportXmind}
         versionLabel={versionLabel}
         versionTooltip={versionTooltip}
         onTreeChange={setCurrentTree}
@@ -1025,37 +1060,41 @@ export function EditorPage() {
         onLoadNodeAttachmentPreview={(attachment) => handleLoadNodeAttachmentPreview(attachment)}
       />
       {!isLocalMode && showHistory && (
-        <VersionHistoryPanel
-          className="mm-version-panel--overlay"
-          vaultId={id!}
-          onClose={() => setShowHistory(false)}
-          onLoad={loadVersion}
-          loadingVersionId={loadingVersionId}
-          onDeleteVersion={handleDeleteVersion}
-        />
+        <Suspense fallback={null}>
+          <VersionHistoryPanel
+            className="mm-version-panel--overlay"
+            vaultId={id!}
+            onClose={() => setShowHistory(false)}
+            onLoad={loadVersion}
+            loadingVersionId={loadingVersionId}
+            onDeleteVersion={handleDeleteVersion}
+          />
+        </Suspense>
       )}
       {!isLocalMode && (
-        <EncryptedVaultDialog
-          open={secureDialogOpen}
-          initialTab={secureDialogTab}
-          attachments={attachments}
-          shares={shares}
-          selectedNodeId={selectedNodeId}
-          nodeOptions={nodeOptions}
-          loading={secureLoading}
-          error={secureError}
-          uploadState={attachmentUpload}
-          shareBusy={shareBusy}
-          onClose={() => setSecureDialogOpen(false)}
-          onRefresh={() => { void refreshSecureData(); }}
-          onUploadFiles={(files) => { void handleUploadFiles(files); }}
-          onDownloadAttachment={(attachment) => { void handleDownloadAttachment(attachment); }}
-          onDeleteAttachment={(attachment) => { void handleDeleteAttachment(attachment); }}
-          onAssignAttachmentNode={(attachment, nodeId) => { void handleAssignAttachmentNode(attachment, nodeId); }}
-          onCreateShare={(draft) => { void handleCreateShare(draft); }}
-          onCopyShareUrl={(share) => { void handleCopyShareUrl(share); }}
-          onRevokeShare={(share) => { void handleRevokeShare(share); }}
-        />
+        <Suspense fallback={null}>
+          <EncryptedVaultDialog
+            open={secureDialogOpen}
+            initialTab={secureDialogTab}
+            attachments={attachments}
+            shares={shares}
+            selectedNodeId={selectedNodeId}
+            nodeOptions={nodeOptions}
+            loading={secureLoading}
+            error={secureError}
+            uploadState={attachmentUpload}
+            shareBusy={shareBusy}
+            onClose={() => setSecureDialogOpen(false)}
+            onRefresh={() => { void refreshSecureData(); }}
+            onUploadFiles={(files) => { void handleUploadFiles(files); }}
+            onDownloadAttachment={(attachment) => { void handleDownloadAttachment(attachment); }}
+            onDeleteAttachment={(attachment) => { void handleDeleteAttachment(attachment); }}
+            onAssignAttachmentNode={(attachment, nodeId) => { void handleAssignAttachmentNode(attachment, nodeId); }}
+            onCreateShare={(draft) => { void handleCreateShare(draft); }}
+            onCopyShareUrl={(share) => { void handleCopyShareUrl(share); }}
+            onRevokeShare={(share) => { void handleRevokeShare(share); }}
+          />
+        </Suspense>
       )}
     </div>
   );

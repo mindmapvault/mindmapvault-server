@@ -232,11 +232,15 @@ function renderTreeSvgSync(
   buildConnectorMap(tree.root, null, null, connectorColorMap);
 
   // Render connectors.
+  // layoutTree omits children of collapsed nodes, so childLayout can be
+  // undefined when a node is folded. Guard both ends before drawing.
   const connectors: string[] = [];
   const walkConnectors = (node: MindMapTreeNode) => {
     const parentLayout = layout[node.id];
+    if (!parentLayout) return;
     for (const child of node.children) {
       const childLayout = layout[child.id];
+      if (!childLayout) continue; // child hidden because parent is collapsed
       const isLeft = childLayout.x < parentLayout.x;
       const strokeColor = connectorColorMap.get(`${node.id}->${child.id}`) ?? palette.connector;
       const path = bezierPath(

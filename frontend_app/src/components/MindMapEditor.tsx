@@ -81,7 +81,7 @@ interface DragState {
 // ── Component ─────────────────────────────────────────────────────────────────
 export function DesktopMindMapEditor({
   initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
-  onExportMarkdown, titleChanged, onRenameTitle, renamingTitle,
+  onExportMarkdown, onExportFreemind, onExportFreeplane, onExportWisemapping, onExportXmind, titleChanged, onRenameTitle, renamingTitle,
   versionLabel, versionTooltip,
   onTreeChange, onSelectionChange, onNodeFileDrop, onOpenNodeAttachment,
   onFetchNodeAttachmentContent,
@@ -1135,7 +1135,11 @@ export function DesktopMindMapEditor({
       .trim();
     const versionMatch = (versionLabel ?? '').match(/v\s*(\d+)/i);
     const versionToken = versionMatch ? `v${versionMatch[1]}` : null;
-    return versionToken ? `${safeTitle}-${versionToken}` : safeTitle;
+    // Don't append the version token when the title already ends with it
+    // (e.g. title "guide-v3" + versionLabel "v3" → "guide-v3", not "guide-v3-v3")
+    const alreadyEndsWithVersion =
+      versionToken != null && new RegExp(`[-_ ]${versionToken}$`, 'i').test(safeTitle);
+    return (versionToken && !alreadyEndsWithVersion) ? `${safeTitle}-${versionToken}` : safeTitle;
   }, [title, versionLabel]);
 
   // ── PNG export ────────────────────────────────────────────────────────────
@@ -2172,6 +2176,26 @@ export function DesktopMindMapEditor({
                   {onExportMarkdown && (
                     <button className="mm-context-item" onClick={() => { onExportMarkdown({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
                       Markdown (.md)
+                    </button>
+                  )}
+                  {onExportFreemind && (
+                    <button className="mm-context-item" onClick={() => { onExportFreemind({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
+                      FreeMind (.mm)
+                    </button>
+                  )}
+                  {onExportFreeplane && (
+                    <button className="mm-context-item" onClick={() => { onExportFreeplane({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
+                      FreePlane (.mm)
+                    </button>
+                  )}
+                  {onExportWisemapping && (
+                    <button className="mm-context-item" onClick={() => { onExportWisemapping({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
+                      WiseMapping (.wxml)
+                    </button>
+                  )}
+                  {onExportXmind && (
+                    <button className="mm-context-item" onClick={() => { onExportXmind({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
+                      XMind (.xmind)
                     </button>
                   )}
                   <button className="mm-context-item" onClick={() => { exportPng(); setShowExportMenu(false); }}>

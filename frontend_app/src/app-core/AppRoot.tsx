@@ -79,7 +79,14 @@ export default function AppRoot() {
 
   return (
     <BrowserRouter>
-      <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-slate-300">Loading…</div>}>
+      <Suspense fallback={
+        <div className="flex min-h-screen items-center justify-center bg-surface">
+          <svg className="h-8 w-8 animate-spin text-accent" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+          </svg>
+        </div>
+      }>
         <Routes>
           <Route path="/" element={<Navigate to={isDesktop ? defaultRoute : '/login'} replace />} />
           <Route path="/app" element={<Navigate to="/vaults" replace />} />

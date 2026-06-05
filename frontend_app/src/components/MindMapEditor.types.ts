@@ -25,6 +25,10 @@ export interface MindMapEditorProps {
   onDownloadEncrypted?: (fileBaseName?: string) => void;
   onDownloadJson?: (tree: MindMapTree, title: string) => void;
   onExportMarkdown?: (tree: MindMapTree, title: string) => void;
+  onExportFreemind?: (tree: MindMapTree, title: string) => void;
+  onExportFreeplane?: (tree: MindMapTree, title: string) => void;
+  onExportWisemapping?: (tree: MindMapTree, title: string) => void;
+  onExportXmind?: (tree: MindMapTree, title: string) => void;
   titleChanged?: boolean;
   onRenameTitle?: () => void;
   renamingTitle?: boolean;

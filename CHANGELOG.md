@@ -7,12 +7,46 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ## [Unreleased]
 
 ### Added
+- **Lobby search** — instant search bar on the Vaults page filters the displayed vault list by name, vault note, and labels. Searches only metadata already loaded in the lobby; never reads vault contents. Shows a result count badge when filtering is active and a "Clear search" shortcut when no results are found.
+- **Table / list view** — new compact table layout for the Vaults page, toggled by a grid/list icon pair next to the search bar. Each row shows: a 80 × 46 px thumbnail (blurred for shared vaults), vault name with labels and note excerpt, last-updated date, node count and version count. All row actions (open, rename, history, delete) are available inline. Implemented as a memoised `VaultTableRow` component. View preference is session-local.
 
 ### Changed
 
 ### Removed
 
 ### Validation
+
+## [0.3.28] - 2026-06-05
+
+### Added
+- **FreeMind / FreePlane import** — new `freemindImport.ts` utility parses both FreeMind (`.mm`, `version="1.0.1"`) and FreePlane (`.mm`, `version="freeplane 1.x"`) XML. Format is auto-detected from the `<map version>` attribute. Handles FreePlane nodes where the `TEXT` attribute contains a raw HTML document string — prefers `<richcontent TYPE="NODE">` content, falls back to `stripHtml()`. Maps `COLOR`, `BACKGROUND_COLOR`, `FOLDED`, `POSITION`, `LINK`, and `<richcontent TYPE="NOTE">` to the internal node model.
+- **FreeMind export** — new `freemindExport.ts` exports the active mind map as a FreeMind-compatible `.mm` file.
+- **FreePlane export** — new `freeplaneExport.ts` exports the active mind map as a FreePlane-compatible `.mm` file, including `ID="ID_<timestamp><counter>"` attributes required by FreePlane.
+- **WiseMapping import** — new `wisemappingImport.ts` parses WiseMapping `.wxml` files. Resolves root via `topic[central="true"]` or first `<topic>` child. Maps `text`, `bgColor`, `position`, `<note>` (CDATA), `<link url>`, and child `order`.
+- **WiseMapping export** — new `wisemappingExport.ts` exports the active mind map as a WiseMapping-compatible `.wxml` file with `<note><![CDATA[...]]></note>` and `<link url="..."/>`.
+- **XMind import** — new `xmindImport.ts` reads `.xmind` files (ZIP archives). Supports XMind Zen / 2020+ (`content.json`) and XMind 8 / legacy (`content.xml`). Maps `title`, `notes.plain`, `href`, and `style.properties['background-color']` to the internal node model. Requires `fflate` for ZIP parsing.
+- **XMind export** — new `xmindExport.ts` writes a `.xmind` ZIP archive in the XMind Zen JSON format with `content.json` and `META-INF/manifest.xml`. Requires `fflate` for ZIP creation.
+- **WSL dev build script** — `scripts/dev-build.sh` automates container rebuilds in WSL dev environments. Builds the frontend, hot-swaps the server container via `docker compose`, and creates a dedicated `mmvdev` Postgres user/database on first run. Supports `--down` and `--no-cache` flags.
+
+### Changed
+- **Unified import dropdown (Vaults page)** — replaced separate import buttons with a single "Import ▾" dropdown in `VaultsPage.tsx`. Dropdown options: Markdown (.md), FreeMind (.mm), FreePlane (.mm), WiseMapping (.wxml). FreeMind and FreePlane share one file picker; the parser auto-detects the format. Includes a click-outside handler to close the menu.
+- **Export menu additions (Editor)** — added FreeMind (.mm), FreePlane (.mm), WiseMapping (.wxml), and XMind (.xmind) entries to the editor export context menu via new optional props `onExportFreemind`, `onExportFreeplane`, `onExportWisemapping`, `onExportXmind` on `MindMapEditor`.
+- **Markdown import — Obsidian mind map plugin compatibility** — `markdownImport.ts` updated to correctly handle the syntax used by Obsidian Mind Map (lynchjames), Markmap for Obsidian, and Mindmap NextGen:
+  - Task-list items `- [ ] text` / `- [x] text` now set `node.checked`.
+  - Obsidian highlight syntax `==text==` is stripped to plain text.
+  - Images `![alt](url)` are replaced by their alt text.
+  - Obsidian tags (`#tag`) are stripped from node labels.
+  - HTML comment lines (`<!-- markmap: {...} -->` etc.) are skipped entirely.
+  - Obsidian callouts `> [!type] Title` have the `[!type]` marker stripped; the title text is still appended to notes.
+  - Tab indentation in nested lists is treated as 4 spaces (matches Obsidian and VSCode defaults).
+
+### Fixed
+- **Vault preview crash on collapsed nodes** — `walkConnectors` in `vaultPreview.ts` crashed with `TypeError: Cannot read properties of undefined (reading 'x')` when saving a vault that contained nodes with `FOLDED="true"` (e.g. imported from FreePlane). Root cause: `layoutTree` excludes collapsed children from its output map, but `walkConnectors` iterated them anyway. Fix: added `if (!parentLayout) return` and `if (!childLayout) continue` guards. Saves for vaults with collapsed nodes now complete successfully (green diskette indicator).
+
+### Validation
+- `pnpm --dir frontend_app build` → passed (after `pnpm --dir frontend_app install` to pull `fflate`).
+- FreePlane files with `FOLDED="true"` nodes save without console errors.
+- Markdown files exported from Obsidian with task lists, highlights, and callouts import cleanly.
 
 ## [0.3.27] - 2026-05-26
 
