@@ -6,20 +6,33 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.29] - 2026-06-06
+
 ### Added
+- **Dark / light mode toggle in canvas toolbar** — sun/moon button added to the editor toolbar so users can switch themes without leaving the canvas. State is persisted via `useThemeStore` (zustand/persist).
+- **Mobile canvas experience** — when a viewport ≤ 768 px is detected, the full-screen canvas editor switches to a mobile chrome layout:
+  - **Mobile top bar** — vault name (truncated), version label, save-status button, and theme toggle replace the desktop toolbar.
+  - **Mobile bottom action bar** — five-button dock: Back (lobby), Add (child node), Delete (with confirmation step), Fit (zoom-to-fit all nodes), Props (opens the props sheet). The delete button requires a second tap on a Confirm button to execute, preventing accidental deletions.
+  - **Mobile props sheet** — bottom sheet triggered by the Props button; contains: node color swatches (9 presets), Notes / Date / Labels action buttons, progress pill presets (✕ / 0% / 25% / 50% / 75% / 100%), Checkbox toggle, and an Icons button that opens the icon picker as a full-width bottom sheet.
+  - **Mobile labels dialog** — the tags/labels dialog renders as a `position: fixed` bottom sheet with rounded top corners and larger touch targets instead of the desktop's small absolute popup.
+  - **Mobile icon picker** — `MindMapIconPicker` overridden via CSS to render as a `position: fixed` bottom sheet (max 72 vh) when accessed from the mobile props sheet.
+- **Pinch-to-zoom on touch canvas** — two-finger pinch gesture scales the canvas zoom (0.2 × – 4 ×) proportionally to the distance ratio between touchstart and touchmove. Single-finger pan is unaffected.
+- **Responsive toolbar** — desktop toolbar restructured into a single flex row: vault name and version always visible in a left nav section; action buttons fill remaining space and wrap to a second row when the window is too narrow. The second-row separator appears only when wrapping occurs (`box-shadow: inset 0 1px 0`).
+- **Close button on Labels dialog** — the labels / tags dialog now has an × button in the title bar, matching the existing Date Planning dialog pattern.
 - **Lobby search** — instant search bar on the Vaults page filters the displayed vault list by name, vault note, and labels. Searches only metadata already loaded in the lobby; never reads vault contents. Shows a result count badge when filtering is active and a "Clear search" shortcut when no results are found.
-- **Table / list view** — new compact table layout for the Vaults page, toggled by a grid/list icon pair next to the search bar. Each row shows: a 80 × 46 px thumbnail (blurred for shared vaults), vault name with labels and note excerpt, last-updated date, node count and version count. All row actions (open, rename, history, delete) are available inline. Implemented as a memoised `VaultTableRow` component. View preference is session-local.
-- **Clickable vault preview (card view)** — the preview image in card view is now a clickable button that navigates directly into the vault. Shows a subtle hover opacity to signal interactivity.
+- **Table / list view** — new compact table layout for the Vaults page, toggled by a grid/list icon pair next to the search bar. Each row shows a thumbnail, vault name with labels and note excerpt, last-updated date, node count, and version count. All row actions (open, rename, history, delete) available inline. Implemented as a memoised `VaultTableRow` component; view preference is session-local.
+- **Clickable vault preview (card view)** — the preview image in card view is now a clickable button that navigates directly into the vault.
 
 ### Changed
-- **Vault card re-render fix** — eliminated a cascade where editing any single vault's settings (color, note, labels, max versions) caused every vault card to re-render and re-fetch share counts and preview images. Root cause: `useEffect` hooks in `VaultsPage` held direct references to the `maps` state array; any draft mutation produced a new array reference, re-firing all three effects. Fixed by deriving a stable string key (`mapMetaKey`) that only changes when vault identity or server-persisted `updated_at` changes, and reading the current maps array via a `useRef` (latest-ref pattern) inside effects so they never need to depend on the live reference.
-- **Vault preview panel cleanup** — removed nested frame/shell divs that surrounded the preview screenshot in card view, resulting in a single clean rounded container instead of three stacked bordered rectangles.
-- **Table view tooltip fix** — the label/note hover tooltip in table view now renders via a React portal at `document.body` with `position: fixed`, ensuring it always appears above the search bar and any other page elements. Previously the tooltip was clipped by the table wrapper's `overflow: hidden` and appeared behind the search input.
+- **Wheel zoom uses non-passive native listener** — `onWheel` React prop removed from the SVG canvas element. A `useEffect` now attaches a native `wheel` listener with `{ passive: false }` so `e.preventDefault()` works correctly for Ctrl+wheel zoom, eliminating the browser console warning "Unable to preventDefault inside passive event listener".
+- **Appearance (ThemePanel) button hidden on mobile** — the settings cog is not shown in the mobile top bar; only save status and theme toggle are exposed.
+- **Vault card re-render fix** — eliminated a cascade where editing any single vault's settings caused every vault card to re-render. Fixed by deriving a stable `mapMetaKey` and reading the maps array via a `useRef` (latest-ref pattern) inside effects.
+- **Vault preview panel cleanup** — removed nested frame/shell divs that surrounded the preview screenshot in card view.
+- **Table view tooltip fix** — the label/note hover tooltip now renders via a React portal at `document.body` with `position: fixed`, ensuring it always appears above the search bar.
 
 ### Fixed
-- **Attached-file count double-counting** — `attachment_count` and `attachment_bytes` in the storage summary (both `/mindmaps/my/storage` and the account storage endpoint) were counting each file twice: once for the primary attachment and once for the auto-generated encrypted preview thumbnail (`cryptmind_role: "preview"`). Both `load_map_attachment_storage` in `mindmaps_sql.rs` and the inline loop in `auth_sql.rs` now filter out preview records from the user-facing count and bytes. Total bytes (`total_bytes`) still includes preview storage for accurate disk accounting.
-
-### Removed
+- **Passive event listener violation** — `e.preventDefault()` on wheel events inside a React synthetic handler triggered repeated browser warnings. Resolved by switching to a native event listener with `{ passive: false }`.
+- **Attached-file count double-counting** — `attachment_count` and `attachment_bytes` were counting each file twice (primary + auto-generated preview thumbnail). Both `load_map_attachment_storage` in `mindmaps_sql.rs` and the inline loop in `auth_sql.rs` now filter out `cryptmind_role: "preview"` records from user-facing counts.
 
 ### Validation
 - `pnpm exec tsc --noEmit` in `frontend_app` → clean.

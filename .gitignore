@@ -39,3 +39,12 @@ postgres-data/
 
 copilot-instructions.md
 /playwright/
+
+# Frontend experiment branches (local only)
+frontend_app_v2/
+frontend_app_v3_detective_board_experimental/
+frontend_app_v4/
+frontend_app_exp4/
+
+# Internal UX proposal drafts
+docs/toolbar-ux-proposal.html
