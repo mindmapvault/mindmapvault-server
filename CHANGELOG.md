@@ -9,12 +9,21 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Added
 - **Lobby search** — instant search bar on the Vaults page filters the displayed vault list by name, vault note, and labels. Searches only metadata already loaded in the lobby; never reads vault contents. Shows a result count badge when filtering is active and a "Clear search" shortcut when no results are found.
 - **Table / list view** — new compact table layout for the Vaults page, toggled by a grid/list icon pair next to the search bar. Each row shows: a 80 × 46 px thumbnail (blurred for shared vaults), vault name with labels and note excerpt, last-updated date, node count and version count. All row actions (open, rename, history, delete) are available inline. Implemented as a memoised `VaultTableRow` component. View preference is session-local.
+- **Clickable vault preview (card view)** — the preview image in card view is now a clickable button that navigates directly into the vault. Shows a subtle hover opacity to signal interactivity.
 
 ### Changed
+- **Vault card re-render fix** — eliminated a cascade where editing any single vault's settings (color, note, labels, max versions) caused every vault card to re-render and re-fetch share counts and preview images. Root cause: `useEffect` hooks in `VaultsPage` held direct references to the `maps` state array; any draft mutation produced a new array reference, re-firing all three effects. Fixed by deriving a stable string key (`mapMetaKey`) that only changes when vault identity or server-persisted `updated_at` changes, and reading the current maps array via a `useRef` (latest-ref pattern) inside effects so they never need to depend on the live reference.
+- **Vault preview panel cleanup** — removed nested frame/shell divs that surrounded the preview screenshot in card view, resulting in a single clean rounded container instead of three stacked bordered rectangles.
+- **Table view tooltip fix** — the label/note hover tooltip in table view now renders via a React portal at `document.body` with `position: fixed`, ensuring it always appears above the search bar and any other page elements. Previously the tooltip was clipped by the table wrapper's `overflow: hidden` and appeared behind the search input.
+
+### Fixed
+- **Attached-file count double-counting** — `attachment_count` and `attachment_bytes` in the storage summary (both `/mindmaps/my/storage` and the account storage endpoint) were counting each file twice: once for the primary attachment and once for the auto-generated encrypted preview thumbnail (`cryptmind_role: "preview"`). Both `load_map_attachment_storage` in `mindmaps_sql.rs` and the inline loop in `auth_sql.rs` now filter out preview records from the user-facing count and bytes. Total bytes (`total_bytes`) still includes preview storage for accurate disk accounting.
 
 ### Removed
 
 ### Validation
+- `pnpm exec tsc --noEmit` in `frontend_app` → clean.
+- `cargo check` in `backend` → clean.
 
 ## [0.3.28] - 2026-06-05
 

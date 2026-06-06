@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
 import { mindmapsApi } from '../api/mindmaps';
@@ -372,23 +373,30 @@ const VaultCard = memo(function VaultCard({
 
           {previewState?.summary ? (
             <div>
-              <div className="relative overflow-hidden rounded-lg">
-                <div className={blurPreview ? 'select-none blur-sm opacity-60' : ''}>
-                  <img
-                    src={previewState.summary.image_data_url}
-                    alt={`Preview of ${map.title ?? 'vault'}`}
-                    className="aspect-video w-full object-contain"
-                    loading="lazy"
-                  />
-                </div>
-                {blurPreview && (
-                  <div className="absolute inset-0 flex items-center justify-center" style={previewOverlayStyle}>
-                    <span className="rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em]" style={previewOverlayBadgeStyle}>
-                      Blurred for shared vaults
-                    </span>
+              <button
+                type="button"
+                onClick={() => onNavigate(`/vaults/${map.id}`)}
+                className="block w-full cursor-pointer rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                title={`Open ${map.title ?? 'vault'}`}
+              >
+                <div className="relative overflow-hidden rounded-lg transition-opacity hover:opacity-90">
+                  <div className={blurPreview ? 'select-none blur-sm opacity-60' : ''}>
+                    <img
+                      src={previewState.summary.image_data_url}
+                      alt={`Preview of ${map.title ?? 'vault'}`}
+                      className="aspect-video w-full object-contain"
+                      loading="lazy"
+                    />
                   </div>
-                )}
-              </div>
+                  {blurPreview && (
+                    <div className="absolute inset-0 flex items-center justify-center" style={previewOverlayStyle}>
+                      <span className="rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em]" style={previewOverlayBadgeStyle}>
+                        Blurred for shared vaults
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </button>
               <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
                 {previewState.summary.format} screenshot
                 {previewState.summary.noteCount > 0 ? ` | ${previewState.summary.noteCount} notes` : ''}
@@ -544,9 +552,14 @@ const VaultTableRow = memo(function VaultTableRow({
 }: VaultTableRowProps) {
   const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
   const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
+  const hasTooltip = (map.draftLabels.length > 0 || !!map.draftNote) && renamingId !== map.id;
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const tooltipTdRef = useRef<HTMLTableCellElement>(null);
 
   return (
-    <tr className="group border-b border-slate-800 transition-colors last:border-0 hover:bg-white/[0.025]">
+    <>
+    <tr className="border-b border-slate-800 transition-colors last:border-0 hover:bg-white/[0.025]">
       {/* Color stripe */}
       <td className="w-1 p-0" style={{ backgroundColor: map.draftColor }} />
       {/* Thumbnail */}
@@ -575,8 +588,18 @@ const VaultTableRow = memo(function VaultTableRow({
         </button>
       </td>
 
-      {/* Name + labels (inline) — note and full label list appear in a tooltip above the row */}
-      <td className="relative min-w-0 px-3 py-2">
+      {/* Name + labels (inline) — note and full label list appear in a portal tooltip above the row */}
+      <td
+        ref={tooltipTdRef}
+        className="relative min-w-0 px-3 py-2"
+        onMouseEnter={() => {
+          if (!hasTooltip || !tooltipTdRef.current) return;
+          const rect = tooltipTdRef.current.getBoundingClientRect();
+          setTooltipPos({ x: rect.left, y: rect.top });
+          setTooltipVisible(true);
+        }}
+        onMouseLeave={() => setTooltipVisible(false)}
+      >
         {renamingId === map.id ? (
           <div className="flex items-center gap-2">
             <input
@@ -624,33 +647,6 @@ const VaultTableRow = memo(function VaultTableRow({
           </button>
         )}
 
-        {/* Tooltip — floats ABOVE the row on hover so it never overlaps sibling rows */}
-        {(map.draftLabels.length > 0 || map.draftNote) && renamingId !== map.id && (
-          <div className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 hidden w-72 max-w-[85vw] rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-2xl group-hover:block">
-            {map.draftLabels.length > 0 && (
-              <div>
-                <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Labels</p>
-                <div className="flex flex-wrap gap-1">
-                  {map.draftLabels.map((lbl) => (
-                    <span
-                      key={lbl}
-                      className="rounded-full px-2 py-0.5 text-xs text-white"
-                      style={{ backgroundColor: userLabels.find((ul) => ul.name === lbl)?.color ?? 'var(--accent)' }}
-                    >
-                      {lbl}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {map.draftNote && (
-              <div className={map.draftLabels.length > 0 ? 'mt-2' : ''}>
-                <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">Note</p>
-                <p className="text-xs leading-relaxed text-slate-300">{map.draftNote}</p>
-              </div>
-            )}
-          </div>
-        )}
       </td>
 
       {/* Updated date */}
@@ -710,6 +706,37 @@ const VaultTableRow = memo(function VaultTableRow({
         </div>
       </td>
     </tr>
+    {hasTooltip && tooltipVisible && createPortal(
+      <div
+        className="pointer-events-none fixed z-[9999] w-72 max-w-[85vw] rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+        style={{ left: tooltipPos.x, top: tooltipPos.y, transform: 'translateY(-100%) translateY(-8px)' }}
+      >
+        {map.draftLabels.length > 0 && (
+          <div>
+            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Labels</p>
+            <div className="flex flex-wrap gap-1">
+              {map.draftLabels.map((lbl) => (
+                <span
+                  key={lbl}
+                  className="rounded-full px-2 py-0.5 text-xs text-white"
+                  style={{ backgroundColor: userLabels.find((ul) => ul.name === lbl)?.color ?? 'var(--accent)' }}
+                >
+                  {lbl}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {map.draftNote && (
+          <div className={map.draftLabels.length > 0 ? 'mt-2' : ''}>
+            <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">Note</p>
+            <p className="text-xs leading-relaxed text-slate-300">{map.draftNote}</p>
+          </div>
+        )}
+      </div>,
+      document.body,
+    )}
+    </>
   );
 }, (prev, next) => {
   const sameRenameContext = prev.renamingId !== prev.map.id

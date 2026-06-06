@@ -865,8 +865,8 @@ async fn get_storage(
             Err(error) => return Err(error),
         };
         let version_total_bytes: i64 = versions.iter().map(|version| version.size_bytes).sum();
-        let (attachment_count, attachment_bytes) = load_map_attachment_storage(&state.db, &map.id).await?;
-        let total_bytes = version_total_bytes + attachment_bytes;
+        let (attachment_count, attachment_bytes, all_attachment_bytes) = load_map_attachment_storage(&state.db, &map.id).await?;
+        let total_bytes = version_total_bytes + all_attachment_bytes;
         grand_total += total_bytes;
         grand_attachment_count += attachment_count;
         grand_attachment_bytes += attachment_bytes;
@@ -894,19 +894,26 @@ async fn get_storage(
 async fn load_map_attachment_storage(
     db: &DynSqlStore,
     map_id: &str,
-) -> Result<(usize, i64), AppError> {
+) -> Result<(usize, i64, i64), AppError> {
+    // Returns (primary_count, primary_bytes, all_available_bytes).
+    // Preview thumbnails (cryptmind_role == "preview") are excluded from the user-facing
+    // count and bytes but still included in all_available_bytes so total storage is accurate.
     let attachments = db.list_mind_map_attachments(map_id).await?;
-    let attachment_count = attachments
+    let available: Vec<_> = attachments
         .iter()
-        .filter(|attachment| attachment.status == AttachmentStatus::Available)
-        .count();
-    let attachment_bytes = attachments
-        .iter()
-        .filter(|attachment| attachment.status == AttachmentStatus::Available)
-        .map(|attachment| attachment.size_bytes)
-        .sum();
-
-    Ok((attachment_count, attachment_bytes))
+        .filter(|a| a.status == AttachmentStatus::Available)
+        .collect();
+    let all_bytes: i64 = available.iter().map(|a| a.size_bytes).sum();
+    let (primary_count, primary_bytes) = available.iter().fold((0usize, 0i64), |acc, a| {
+        let is_preview = a
+            .encryption_meta
+            .as_ref()
+            .and_then(|m| m.get("cryptmind_role"))
+            .and_then(|r| r.as_str())
+            == Some("preview");
+        if is_preview { acc } else { (acc.0 + 1, acc.1 + a.size_bytes) }
+    });
+    Ok((primary_count, primary_bytes, all_bytes))
 }
 
 async fn find_owned(db: &DynSqlStore, id: &str, user_id: &str) -> Result<StoredMindMap, AppError> {

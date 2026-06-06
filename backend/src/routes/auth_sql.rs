@@ -314,17 +314,23 @@ async fn get_storage(
             .await?;
         total_bytes += versions.iter().map(|version| version.size_bytes).sum::<i64>();
         let attachments = state.db.list_mind_map_attachments(&map.id).await?;
-        attachment_count += attachments
+        let available: Vec<_> = attachments
             .iter()
-            .filter(|attachment| attachment.status == AttachmentStatus::Available)
-            .count();
-        let map_attachment_bytes = attachments
-            .iter()
-            .filter(|attachment| attachment.status == AttachmentStatus::Available)
-            .map(|attachment| attachment.size_bytes)
-            .sum::<i64>();
-        attachment_bytes += map_attachment_bytes;
-        total_bytes += map_attachment_bytes;
+            .filter(|a| a.status == AttachmentStatus::Available)
+            .collect();
+        let all_map_attachment_bytes: i64 = available.iter().map(|a| a.size_bytes).sum();
+        let (primary_count, primary_bytes) = available.iter().fold((0usize, 0i64), |acc, a| {
+            let is_preview = a
+                .encryption_meta
+                .as_ref()
+                .and_then(|m| m.get("cryptmind_role"))
+                .and_then(|r| r.as_str())
+                == Some("preview");
+            if is_preview { acc } else { (acc.0 + 1, acc.1 + a.size_bytes) }
+        });
+        attachment_count += primary_count;
+        attachment_bytes += primary_bytes;
+        total_bytes += all_map_attachment_bytes;
     }
 
     let plan_limit_bytes = subscription_tier.storage_limit_bytes();
