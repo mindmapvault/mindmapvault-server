@@ -42,6 +42,27 @@ export const mindmapsApi = {
     api.delete<{ ok: boolean }>(`/mindmaps/${id}/versions/${encodeURIComponent(versionId)}`),
 };
 
+/**
+ * Delete versions older than `limit` newest ones.  Safe to fire-and-forget:
+ * uses Promise.allSettled so individual delete failures are non-fatal.
+ * Skips the current latest version to avoid deleting the blob that's in use.
+ */
+export async function pruneVersionHistory(
+  id: string,
+  versions: VersionDetail[],
+  limit = 30,
+): Promise<void> {
+  if (versions.length <= limit) return;
+  const sorted = [...versions].sort(
+    (a, b) => new Date(b.last_modified).getTime() - new Date(a.last_modified).getTime(),
+  );
+  const toDelete = sorted.slice(limit).filter((v) => !v.is_latest);
+  if (toDelete.length === 0) return;
+  await Promise.allSettled(
+    toDelete.map((v) => mindmapsApi.deleteVersion(id, v.version_id)),
+  );
+}
+
 /** Upload an encrypted blob directly to a MinIO presigned PUT URL. */
 export async function uploadBlob(presignedUrl: string, blob: Uint8Array): Promise<string | null> {
   const res = await fetch(presignedUrl, {

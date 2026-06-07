@@ -15,6 +15,7 @@ const RegisterPage = lazy(() => import('../pages/RegisterPage').then((module) =>
 const SharedVaultPage = lazy(() => import('../pages/SharedVaultPage').then((module) => ({ default: module.SharedVaultPage })));
 const VaultsPage = lazy(() => import('./pages/VaultsPage').then((module) => ({ default: module.VaultsPage })));
 const ChangePasswordPage = lazy(() => import('../pages/ChangePasswordPage').then((module) => ({ default: module.ChangePasswordPage })));
+const BoardPage = lazy(() => import('../pages/BoardPage').then((module) => ({ default: module.BoardPage })));
 
 function darken(hex: string, amount = 25): string {
   const n = parseInt(hex.replace('#', ''), 16);
@@ -106,6 +107,7 @@ export default function AppRoot() {
           <Route element={<ProtectedRoute />}>
             <Route path="/vaults" element={<VaultsPage />} />
             <Route path="/vaults/:id" element={<EditorPage />} />
+            <Route path="/boards/:id" element={<BoardPage />} />
             <Route path="/projects" element={<ProjectPage />} />
             <Route path="/projects/:id" element={<ProjectPage />} />
             <Route path="/change-password" element={isDesktop ? <ChangePasswordPage /> : <Navigate to="/vaults" replace />} />

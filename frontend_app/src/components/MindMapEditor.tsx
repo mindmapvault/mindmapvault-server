@@ -126,7 +126,7 @@ export function DesktopMindMapEditor({
   const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
   const [attachmentPreviewTitle, setAttachmentPreviewTitle] = useState('');
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null);
-  const [attachmentPreviewType, setAttachmentPreviewType] = useState<'image' | 'pdf' | 'unsupported'>('unsupported');
+  const [attachmentPreviewType, setAttachmentPreviewType] = useState<'image' | 'pdf' | 'audio' | 'unsupported'>('unsupported');
   const [attachmentPreviewContentType, setAttachmentPreviewContentType] = useState<string>('');
   const [attachmentPreviewBusy, setAttachmentPreviewBusy] = useState(false);
 
@@ -175,6 +175,19 @@ export function DesktopMindMapEditor({
 
   // ── Tag dialog ─────────────────────────────────────────────────────────────
   const [showTagDialog, setShowTagDialog] = useState(false);
+
+  // ── Mobile file upload sheet ───────────────────────────────────────────────
+  const [mobileFileUploadOpen, setMobileFileUploadOpen] = useState(false);
+
+  // ── Mobile props sub-view ──────────────────────────────────────────────────
+  const [mobileSubView, setMobileSubView] = useState<null | 'labels'>(null);
+
+  // ── Voice recording ────────────────────────────────────────────────────────
+  const [mobileRecordingOpen, setMobileRecordingOpen] = useState(false);
+  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'recorded'>('idle');
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [recordingName, setRecordingName] = useState('');
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [tagInputValue, setTagInputValue] = useState('');
   const [tagInputColor, setTagInputColor] = useState('#7c3aed');
   const {
@@ -320,6 +333,12 @@ export function DesktopMindMapEditor({
   const notesRef = useRef<HTMLTextAreaElement>(null);
   const notesAttachmentInputRef = useRef<HTMLInputElement>(null);
   const nodeAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const mobileFileInputCameraRef = useRef<HTMLInputElement>(null);
+  const mobileFileInputGalleryRef = useRef<HTMLInputElement>(null);
+  const mobileFileInputAnyRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const [isDirty, setIsDirty] = useState(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -403,8 +422,9 @@ export function DesktopMindMapEditor({
     const contentType = (attachment.content_type || '').toLowerCase();
     const isImage = contentType.startsWith('image/');
     const isPdf = contentType === 'application/pdf' || attachment.name.toLowerCase().endsWith('.pdf');
+    const isAudio = contentType.startsWith('audio/') || /\.(webm|m4a|mp3|ogg|wav|aac|flac|opus)$/i.test(attachment.name);
 
-    if (!isImage && !isPdf) {
+    if (!isImage && !isPdf && !isAudio) {
       await onOpenNodeAttachment?.(attachment);
       return;
     }
@@ -417,7 +437,7 @@ export function DesktopMindMapEditor({
     setAttachmentPreviewBusy(true);
     setAttachmentPreviewOpen(true);
     setAttachmentPreviewTitle(attachment.name || 'Attachment preview');
-    setAttachmentPreviewType(isPdf ? 'pdf' : 'image');
+    setAttachmentPreviewType(isPdf ? 'pdf' : isAudio ? 'audio' : 'image');
     setAttachmentPreviewContentType(attachment.content_type || 'application/octet-stream');
 
     const content = await onFetchNodeAttachmentContent(attachment);
@@ -447,11 +467,27 @@ export function DesktopMindMapEditor({
     }
   }, []);
 
+  useEffect(() => () => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+  }, []);
+
+  const recordingBlobUrl = useMemo(() => {
+    if (!recordingBlob) return null;
+    return URL.createObjectURL(recordingBlob);
+  }, [recordingBlob]);
+
+  useEffect(() => () => {
+    if (recordingBlobUrl) URL.revokeObjectURL(recordingBlobUrl);
+  }, [recordingBlobUrl]);
+
   // ── Layout ────────────────────────────────────────────────────────────────
   const layout = useMemo(() => layoutTree(root), [root]);
 
   const loadAttachmentPreview = useCallback(async (attachment: NodeAttachmentRef) => {
-    if (!attachment.preview_attachment_id || !onLoadNodeAttachmentPreview) return;
+    const isImage = (attachment.content_type ?? '').startsWith('image/');
+    // Images can be previewed using their own attachment_id; non-images need a separate preview_attachment_id.
+    if (!isImage && !attachment.preview_attachment_id) return;
+    if (!onLoadNodeAttachmentPreview) return;
     if (attachmentPreviewUrlsRef.current[attachment.attachment_id]) return;
     if (attachmentPreviewPending.current.has(attachment.attachment_id)) return;
     if (attachmentPreviewFailed.current.has(attachment.attachment_id)) return;
@@ -475,7 +511,8 @@ export function DesktopMindMapEditor({
   useEffect(() => {
     if (!onLoadNodeAttachmentPreview) return;
     for (const attachment of attachmentById.values()) {
-      if (!attachment.preview_attachment_id) continue;
+      const isImage = (attachment.content_type ?? '').startsWith('image/');
+      if (!isImage && !attachment.preview_attachment_id) continue;
       void loadAttachmentPreview(attachment);
     }
   }, [attachmentById, loadAttachmentPreview, onLoadNodeAttachmentPreview]);
@@ -1257,7 +1294,7 @@ export function DesktopMindMapEditor({
       nodeAttachmentInputRef.current?.click();
       showToast('F6 — Attach encrypted file');
     }
-    else if (e.key === 'Escape') { setShowShortcuts(false); setShowColorPicker(false); setShowIconPicker(false); setShowExportMenu(false); setContextMenu(null); setSearchOpen(false); setMultiSelect(new Set()); setShowTagDialog(false); }
+    else if (e.key === 'Escape') { setShowShortcuts(false); setShowColorPicker(false); setShowIconPicker(false); setShowExportMenu(false); setContextMenu(null); setSearchOpen(false); setMultiSelect(new Set()); setShowTagDialog(false); setMobileFileUploadOpen(false); }
     else if (e.key === 'F9' || (e.ctrlKey && e.key === 'z' && !e.shiftKey)) { e.preventDefault(); undo(); showToast('Undo'); }
     else if (e.key === 'F10' || (e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) { e.preventDefault(); redo(); showToast('Redo'); }
     else if (e.key === ' ') { e.preventDefault(); hasBulk ? bulkToggleCollapse() : toggleCollapse(selectedId); showToast('Space — Fold / Unfold'); }
@@ -1570,6 +1607,59 @@ export function DesktopMindMapEditor({
       setFileDropBusyNodeId(null);
     }
   }, [mutate, onNodeFileDrop, root, selectedId, showToast]);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(recordingChunksRef.current, { type: mimeType || 'audio/webm' });
+        setRecordingBlob(blob);
+        setRecordingState('recorded');
+        stream.getTracks().forEach(t => t.stop());
+        if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecordingState('recording');
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => setRecordingSeconds(s => s + 1), 1000);
+    } catch {
+      showToast('Microphone permission denied');
+    }
+  }, [showToast]);
+
+  const stopRecording = useCallback(() => {
+    mediaRecorderRef.current?.stop();
+    if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+  }, []);
+
+  const discardRecording = useCallback(() => {
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+    if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+    setRecordingState('idle');
+    setRecordingBlob(null);
+    setRecordingName('');
+    setRecordingSeconds(0);
+  }, []);
+
+  const saveRecording = useCallback(async () => {
+    if (!recordingBlob) return;
+    const name = recordingName.trim() || `Voice note ${new Date().toLocaleString()}`;
+    const ext = recordingBlob.type.includes('webm') ? 'webm' : 'm4a';
+    const file = new File([recordingBlob], `${name}.${ext}`, { type: recordingBlob.type });
+    setMobileRecordingOpen(false);
+    setRecordingState('idle');
+    setRecordingBlob(null);
+    setRecordingName('');
+    setRecordingSeconds(0);
+    await attachFilesToSelectedNode([file]);
+  }, [attachFilesToSelectedNode, recordingBlob, recordingName]);
 
   const onMouseUpSvg = useCallback(() => {
     // Finish rectangle selection
@@ -2181,6 +2271,10 @@ export function DesktopMindMapEditor({
               e.currentTarget.value = '';
             }}
           />
+          {/* Mobile file inputs — one per source type */}
+          <input ref={mobileFileInputCameraRef} type="file" accept="image/*,video/*" capture="environment" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
+          <input ref={mobileFileInputGalleryRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
+          <input ref={mobileFileInputAnyRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
           <button className="mm-btn" onClick={undo} title="Undo (F9)" disabled={historyIdx <= 0}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
           <button className="mm-btn" onClick={redo} title="Redo (F10)" disabled={historyIdx >= history.length - 1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
           <div className="mm-toolbar-sep" />
@@ -2398,11 +2492,20 @@ export function DesktopMindMapEditor({
               <span>Delete</span>
             </button>
           )}
+          <button
+            className="mm-mobile-btn mm-mobile-btn--record"
+            onClick={() => setMobileRecordingOpen(true)}
+            disabled={selectedId === 'root'}
+            title="Record voice note"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span>Record</span>
+          </button>
           <button className="mm-mobile-btn" onClick={fitView} title="Fit all nodes in view">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg>
             <span>Fit</span>
           </button>
-          <button className={`mm-mobile-btn${mobilePropsOpen ? ' mm-mobile-btn--active' : ''}`} onClick={() => setMobilePropsOpen((v) => !v)} title="Node properties">
+          <button className={`mm-mobile-btn${mobilePropsOpen ? ' mm-mobile-btn--active' : ''}`} onClick={() => { setMobilePropsOpen((v) => !v); setMobileSubView(null); }} title="Node properties">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="11" y2="18"/><circle cx="17" cy="18" r="3"/><line x1="19.12" y1="20.12" x2="21" y2="22"/></svg>
             <span>Props</span>
           </button>
@@ -2412,77 +2515,174 @@ export function DesktopMindMapEditor({
       {/* ── Mobile props sheet ──────────────────────────────────────── */}
       {isMobile && mobilePropsOpen && (
         <div className="mm-mobile-props" role="dialog" aria-label="Node properties">
-          <div className="mm-mobile-props-header">
-            <span className="mm-mobile-props-title">{selNode ? selNode.text.split('\n')[0].slice(0, 32) || 'Node' : 'Node'}</span>
-            <button className="mm-btn-icon" onClick={() => setMobilePropsOpen(false)} title="Close">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-          <div className="mm-mobile-props-section">
-            <span className="mm-mobile-props-label">COLOR</span>
-            <div className="mm-mobile-props-colors">
-              {NODE_COLORS.map((c, i) => (
+          {mobileSubView === 'labels' ? (() => {
+            const nodeForTags = findNode(root, selectedId)?.node;
+            const currentTags = nodeForTags?.tags ?? [];
+            const applyTag = (t: string) => { if (!currentTags.includes(t)) setNodeTags(selectedId, [...currentTags, t]); };
+            const libraryOnlyLabels = userLabels.filter((l) => !currentTags.includes(l.name));
+            return (
+              <>
+                <div className="mm-mobile-props-header">
+                  <button className="mm-btn-icon" onClick={() => setMobileSubView(null)} title="Back">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+                  </button>
+                  <span className="mm-mobile-props-title" style={{ flex: 1, textAlign: 'center' }}>
+                    Labels — {getVisibleNodeTextLines(nodeForTags?.text ?? '')[0]?.slice(0, 20) || 'Node'}
+                  </span>
+                  <button className="mm-btn-icon" onClick={() => { setMobilePropsOpen(false); setMobileSubView(null); }} title="Close">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+                <div className="mm-mobile-labels-view">
+                  <div className="mm-tag-chips">
+                    {currentTags.map((tag) => {
+                      const lib = userLabels.find((l) => l.name === tag);
+                      return (
+                        <span key={tag} className="mm-tag-chip" style={lib ? { background: lib.color } : {}}>
+                          {tag}
+                          <button onClick={() => setNodeTags(selectedId, currentTags.filter((t) => t !== tag))}>×</button>
+                        </span>
+                      );
+                    })}
+                    {currentTags.length === 0 && <span style={{ fontSize: 12, opacity: 0.5 }}>No labels yet</span>}
+                  </div>
+                  <div className="mm-tag-input-row">
+                    <input className="mm-tag-input" placeholder="Add label…" value={tagInputValue}
+                      onChange={(e) => setTagInputValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && tagInputValue.trim()) {
+                          const t = tagInputValue.trim().toLowerCase();
+                          if (!userLabels.some((l) => l.name === t)) addUserLabel(t, tagInputColor);
+                          applyTag(t); setTagInputValue(''); e.stopPropagation();
+                        }
+                        if (e.key === 'Escape') { setMobileSubView(null); e.stopPropagation(); }
+                      }}
+                      autoFocus
+                    />
+                    <label title="Label color" className="mm-tag-color-label">
+                      <span className="mm-tag-color-swatch" style={{ background: tagInputColor }} />
+                      <input type="color" value={tagInputColor} onChange={(e) => setTagInputColor(e.target.value)} style={{ opacity: 0, position: 'absolute', width: 1, height: 1, pointerEvents: 'none' }} />
+                    </label>
+                    <div className="mm-tag-input-actions">
+                      <button className="mm-tag-add-btn" disabled={!tagInputValue.trim()}
+                        onClick={() => {
+                          const t = tagInputValue.trim().toLowerCase();
+                          if (t) { if (!userLabels.some((l) => l.name === t)) addUserLabel(t, tagInputColor); applyTag(t); setTagInputValue(''); }
+                        }}>Add</button>
+                      <button className="mm-tag-add-btn mm-tag-save-btn" disabled={!tagInputValue.trim()} title="Add to node and save to library"
+                        onClick={() => {
+                          const t = tagInputValue.trim().toLowerCase();
+                          if (t) { addUserLabel(t, tagInputColor); applyTag(t); setTagInputValue(''); }
+                        }}>Save to lib</button>
+                    </div>
+                  </div>
+                  {userLabels.length > 0 && (
+                    <div className="mm-tag-library-wrap">
+                      <div className="mm-tag-library-heading">Your library</div>
+                      <div className="mm-tag-library-grid">
+                        {userLabels.map((lbl) => (
+                          <span key={lbl.name} className="mm-tag-library-item">
+                            <button onClick={() => applyTag(lbl.name)} className="mm-tag-library-lbl"
+                              style={{ background: lbl.color, opacity: libraryOnlyLabels.includes(lbl) ? 1 : 0.45 }}
+                              title={currentTags.includes(lbl.name) ? 'Already applied' : 'Apply to node'}
+                            >{lbl.name}</button>
+                            <label title="Change color" className="mm-tag-library-color-label">
+                              <span className="mm-tag-library-color-swatch" style={{ background: lbl.color }} />
+                              <input type="color" value={lbl.color} style={{ opacity: 0, position: 'absolute', width: 1, height: 1, pointerEvents: 'none' }} onChange={(e) => updateLabelColor(lbl.name, e.target.value)} />
+                            </label>
+                            <button onClick={() => removeUserLabel(lbl.name)} className="mm-tag-library-remove" title="Remove from library">×</button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })() : (
+            <>
+              <div className="mm-mobile-props-header">
+                <span className="mm-mobile-props-title">{selNode ? selNode.text.split('\n')[0].slice(0, 32) || 'Node' : 'Node'}</span>
+                <button className="mm-btn-icon" onClick={() => setMobilePropsOpen(false)} title="Close">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              <div className="mm-mobile-props-section">
+                <span className="mm-mobile-props-label">COLOR</span>
+                <div className="mm-mobile-props-colors">
+                  {NODE_COLORS.map((c, i) => (
+                    <button
+                      key={i}
+                      className={`mm-mobile-color-swatch${(selNode?.color ?? null) === c ? ' mm-mobile-color-swatch--active' : ''}`}
+                      style={c ? { background: c } : undefined}
+                      onClick={() => setNodeColor(selectedId, c)}
+                      title={c ?? 'Default'}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="mm-mobile-props-actions">
+                <button className="mm-mobile-props-btn" onClick={() => { openNotes(selectedId); setMobilePropsOpen(false); }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                  Notes
+                </button>
+                <button className="mm-mobile-props-btn" onClick={() => setMobileSubView('labels')}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg>
+                  Labels
+                </button>
                 <button
-                  key={i}
-                  className={`mm-mobile-color-swatch${(selNode?.color ?? null) === c ? ' mm-mobile-color-swatch--active' : ''}`}
-                  style={c ? { background: c } : undefined}
-                  onClick={() => setNodeColor(selectedId, c)}
-                  title={c ?? 'Default'}
-                />
-              ))}
-            </div>
-          </div>
-          <div className="mm-mobile-props-actions">
-            <button className="mm-mobile-props-btn" onClick={() => { openNotes(selectedId); setMobilePropsOpen(false); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-              Notes
-            </button>
-            <button className="mm-mobile-props-btn" onClick={() => { setShowDateDialog(true); setMobilePropsOpen(false); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-              Date
-            </button>
-            <button className="mm-mobile-props-btn" onClick={() => { setShowTagDialog((v) => !v); setMobilePropsOpen(false); }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg>
-              Labels
-            </button>
-          </div>
-          <div className="mm-mobile-progress-presets">
-            <button
-              className={`mm-mobile-progress-btn${(selNode?.progress ?? null) === null ? ' mm-mobile-progress-btn--active' : ''}`}
-              onClick={() => { hasBulk ? bulkCycleProgress() : setNodeProgress(selectedId, null); }}
-              title="No progress"
-            >✕</button>
-            {PROGRESS_PRESETS.map((pct) => (
-              <button
-                key={pct}
-                className={`mm-mobile-progress-btn${selNode?.progress === pct ? ' mm-mobile-progress-btn--active' : ''}`}
-                onClick={() => { hasBulk ? bulkCycleProgress() : setNodeProgress(selectedId, pct); }}
-                title={`${pct}%`}
-              >{pct}%</button>
-            ))}
-          </div>
-          <div className="mm-mobile-props-actions">
-            <button
-              className={`mm-mobile-props-btn${(selNode?.checked != null) ? ' mm-mobile-props-btn--active' : ''}`}
-              onClick={() => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }}
-              title="Toggle checkbox"
-            >
-              {selNode?.checked === true ? (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-              ) : (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-              )}
-              {selNode?.checked === true ? 'Checked' : selNode?.checked === false ? 'Unchecked' : 'Checkbox'}
-            </button>
-            <button
-              className="mm-mobile-props-btn"
-              onClick={() => { setShowIconPicker(true); setMobilePropsOpen(false); }}
-              title="Set icon"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-              Icons
-            </button>
-          </div>
+                  className="mm-mobile-props-btn"
+                  onClick={() => { setMobileFileUploadOpen(true); setMobilePropsOpen(false); }}
+                  disabled={!onNodeFileDrop || selectedId === 'root'}
+                  title="Attach files to node"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg>
+                  Files
+                </button>
+              </div>
+              <div className="mm-mobile-progress-presets">
+                <button
+                  className={`mm-mobile-progress-btn${(selNode?.progress ?? null) === null ? ' mm-mobile-progress-btn--active' : ''}`}
+                  onClick={() => { hasBulk ? bulkCycleProgress() : setNodeProgress(selectedId, null); }}
+                  title="No progress"
+                >✕</button>
+                {PROGRESS_PRESETS.map((pct) => (
+                  <button
+                    key={pct}
+                    className={`mm-mobile-progress-btn${selNode?.progress === pct ? ' mm-mobile-progress-btn--active' : ''}`}
+                    onClick={() => { hasBulk ? bulkCycleProgress() : setNodeProgress(selectedId, pct); }}
+                    title={`${pct}%`}
+                  >{pct}%</button>
+                ))}
+              </div>
+              <div className="mm-mobile-props-actions">
+                <button className="mm-mobile-props-btn" onClick={() => { setShowDateDialog(true); setMobilePropsOpen(false); }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                  Date
+                </button>
+                <button
+                  className={`mm-mobile-props-btn${selNode?.checked === true ? ' mm-mobile-props-btn--active' : ''}`}
+                  onClick={() => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }}
+                  title="Toggle checkbox"
+                >
+                  {selNode?.checked === true ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                  )}
+                  {selNode?.checked === true ? 'Checked' : 'Unchecked'}
+                </button>
+                <button
+                  className="mm-mobile-props-btn"
+                  onClick={() => { setShowIconPicker(true); setMobilePropsOpen(false); }}
+                  title="Set icon"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+                  Icons
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -2497,6 +2697,126 @@ export function DesktopMindMapEditor({
             showToast={showToast}
           />
         </div>
+      )}
+
+      {/* ── Mobile file upload sheet ────────────────────────────────── */}
+      {mobileFileUploadOpen && (
+        <>
+          <div className="mm-overlay mm-overlay--upload-sheet" onClick={() => setMobileFileUploadOpen(false)} />
+          <div className="mm-mobile-upload-sheet" role="dialog" aria-modal="true" aria-label="Attach files">
+            <div className="mm-tag-dialog-handle" />
+            <div className="mm-mobile-upload-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg>
+              <span>Attach Files</span>
+              <button className="mm-btn-icon" onClick={() => setMobileFileUploadOpen(false)} style={{ marginLeft: 'auto' }} title="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="mm-mobile-upload-hint">Files are encrypted before upload</div>
+            <div className="mm-mobile-upload-options">
+              <button className="mm-mobile-upload-option" onClick={() => mobileFileInputCameraRef.current?.click()}>
+                <span className="mm-mobile-upload-option-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                </span>
+                <span className="mm-mobile-upload-option-text">
+                  <span className="mm-mobile-upload-option-title">Camera</span>
+                  <span className="mm-mobile-upload-option-desc">Take a photo or video</span>
+                </span>
+                <svg className="mm-mobile-upload-option-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6"/></svg>
+              </button>
+              <button className="mm-mobile-upload-option" onClick={() => mobileFileInputGalleryRef.current?.click()}>
+                <span className="mm-mobile-upload-option-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 15l-5-5L5 21"/></svg>
+                </span>
+                <span className="mm-mobile-upload-option-text">
+                  <span className="mm-mobile-upload-option-title">Photo Library</span>
+                  <span className="mm-mobile-upload-option-desc">Choose from your gallery</span>
+                </span>
+                <svg className="mm-mobile-upload-option-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6"/></svg>
+              </button>
+              <button className="mm-mobile-upload-option" onClick={() => mobileFileInputAnyRef.current?.click()}>
+                <span className="mm-mobile-upload-option-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><path strokeLinecap="round" strokeLinejoin="round" d="M13 2v7h7"/></svg>
+                </span>
+                <span className="mm-mobile-upload-option-text">
+                  <span className="mm-mobile-upload-option-title">Browse Files</span>
+                  <span className="mm-mobile-upload-option-desc">Select any file from storage</span>
+                </span>
+                <svg className="mm-mobile-upload-option-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6"/></svg>
+              </button>
+              <button className="mm-mobile-upload-option" onClick={() => { setMobileFileUploadOpen(false); setMobileRecordingOpen(true); }}>
+                <span className="mm-mobile-upload-option-icon mm-mobile-upload-option-icon--record">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                </span>
+                <span className="mm-mobile-upload-option-text">
+                  <span className="mm-mobile-upload-option-title">Record Audio</span>
+                  <span className="mm-mobile-upload-option-desc">Record a voice note</span>
+                </span>
+                <svg className="mm-mobile-upload-option-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6"/></svg>
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Voice recording sheet ────────────────────────────────── */}
+      {mobileRecordingOpen && (
+        <>
+          <div className="mm-overlay mm-overlay--upload-sheet" onClick={() => { discardRecording(); setMobileRecordingOpen(false); }} />
+          <div className="mm-mobile-recording-sheet" role="dialog" aria-modal="true" aria-label="Record audio">
+            <div className="mm-tag-dialog-handle" />
+            <div className="mm-mobile-upload-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <span>Voice Recording</span>
+              <button className="mm-btn-icon" onClick={() => { discardRecording(); setMobileRecordingOpen(false); }} style={{ marginLeft: 'auto' }} title="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            {recordingState === 'idle' && (
+              <div className="mm-recording-body">
+                <button className="mm-recording-btn mm-recording-btn--start" onClick={() => void startRecording()} title="Start recording">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}><path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                </button>
+                <span className="mm-recording-label">Tap to start recording</span>
+                <span className="mm-recording-hint">Audio is encrypted before upload</span>
+              </div>
+            )}
+
+            {recordingState === 'recording' && (
+              <div className="mm-recording-body">
+                <div className="mm-recording-timer">
+                  {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:{String(recordingSeconds % 60).padStart(2, '0')}
+                </div>
+                <button className="mm-recording-btn mm-recording-btn--stop" onClick={stopRecording} title="Stop recording">
+                  <span className="mm-recording-stop-square" />
+                </button>
+                <span className="mm-recording-label">Recording… tap to stop</span>
+              </div>
+            )}
+
+            {recordingState === 'recorded' && recordingBlobUrl && (
+              <div className="mm-recording-body">
+                <audio className="mm-recording-preview" controls src={recordingBlobUrl} />
+                <div className="mm-recording-name-row">
+                  <input
+                    className="mm-recording-name-input"
+                    type="text"
+                    placeholder="Name this recording…"
+                    value={recordingName}
+                    onChange={(e) => setRecordingName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void saveRecording(); }}
+                  />
+                </div>
+                <div className="mm-recording-actions">
+                  <button className="mm-btn mm-btn--primary" onClick={() => void saveRecording()}>Save &amp; Upload</button>
+                  <button className="mm-btn" onClick={() => setRecordingState('idle')}>Re-record</button>
+                  <button className="mm-btn mm-btn--danger" onClick={() => { discardRecording(); setMobileRecordingOpen(false); }}>Discard</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* ── Context menu ────────────────────────────────────────────── */}
@@ -2554,6 +2874,9 @@ export function DesktopMindMapEditor({
 
       {/* ── Notes panel ─────────────────────────────────────────────── */}
       {/* ── Tag dialog ─────────────────────────────────────────────── */}
+      {showTagDialog && isMobile && (
+        <div className="mm-overlay mm-overlay--tag-sheet" onClick={() => setShowTagDialog(false)} />
+      )}
       {showTagDialog && (() => {
         const nodeForTags = findNode(root, selectedId)?.node;
         const currentTags = nodeForTags?.tags ?? [];
@@ -2563,6 +2886,7 @@ export function DesktopMindMapEditor({
         const libraryOnlyLabels = userLabels.filter((l) => !currentTags.includes(l.name));
         return (
           <div className={`mm-tag-dialog${isMobile ? ' mm-tag-dialog--mobile' : ''}`} style={isMobile ? {} : { position: 'absolute', right: 12, top: 60, zIndex: 200 }}>
+            {isMobile && <div className="mm-tag-dialog-handle" />}
             <div className="mm-tag-dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg>
               <span>Labels — {getVisibleNodeTextLines(nodeForTags?.text ?? '')[0] || 'Node'}</span>
@@ -2597,8 +2921,8 @@ export function DesktopMindMapEditor({
                 }}
                 autoFocus
               />
-              <label title="Label color" style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
-                <span style={{ width: 16, height: 16, borderRadius: 999, background: tagInputColor, border: '1px solid rgba(255,255,255,0.35)' }} />
+              <label title="Label color" className="mm-tag-color-label">
+                <span className="mm-tag-color-swatch" style={{ background: tagInputColor }} />
                 <input
                   type="color"
                   value={tagInputColor}
@@ -2606,36 +2930,38 @@ export function DesktopMindMapEditor({
                   style={{ opacity: 0, position: 'absolute', width: 1, height: 1, pointerEvents: 'none' }}
                 />
               </label>
-              <button className="mm-tag-add-btn" disabled={!tagInputValue.trim()}
-                onClick={() => {
-                  const t = tagInputValue.trim().toLowerCase();
-                  if (t) {
-                    if (!userLabels.some((l) => l.name === t)) addUserLabel(t, tagInputColor);
-                    applyTag(t);
-                    setTagInputValue('');
-                  }
-                }}>Add</button>
-              <button className="mm-tag-add-btn" title="Save to library"
-                disabled={!tagInputValue.trim()}
-                onClick={() => {
-                  const t = tagInputValue.trim().toLowerCase();
-                  if (t) { addUserLabel(t, tagInputColor); applyTag(t); setTagInputValue(''); }
-                }}>📌</button>
+              <div className="mm-tag-input-actions">
+                <button className="mm-tag-add-btn" disabled={!tagInputValue.trim()}
+                  onClick={() => {
+                    const t = tagInputValue.trim().toLowerCase();
+                    if (t) {
+                      if (!userLabels.some((l) => l.name === t)) addUserLabel(t, tagInputColor);
+                      applyTag(t);
+                      setTagInputValue('');
+                    }
+                  }}>Add</button>
+                <button className="mm-tag-add-btn mm-tag-save-btn" title="Add to node and save to library"
+                  disabled={!tagInputValue.trim()}
+                  onClick={() => {
+                    const t = tagInputValue.trim().toLowerCase();
+                    if (t) { addUserLabel(t, tagInputColor); applyTag(t); setTagInputValue(''); }
+                  }}>Save to lib</button>
+              </div>
             </div>
             {(userLabels.length > 0) && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 10, opacity: 0.55, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Your library</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              <div className="mm-tag-library-wrap">
+                <div className="mm-tag-library-heading">Your library</div>
+                <div className="mm-tag-library-grid">
                   {userLabels.map((lbl) => (
-                    <span key={lbl.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                    <span key={lbl.name} className="mm-tag-library-item">
                       <button
                         onClick={() => applyTag(lbl.name)}
-                        style={{ background: lbl.color, color: '#fff', borderRadius: 8, padding: '1px 8px', fontSize: 10, fontWeight: 600, border: 'none', cursor: 'pointer', opacity: libraryOnlyLabels.includes(lbl) ? 1 : 0.45 }}
+                        className="mm-tag-library-lbl"
+                        style={{ background: lbl.color, opacity: libraryOnlyLabels.includes(lbl) ? 1 : 0.45 }}
                         title={currentTags.includes(lbl.name) ? 'Already applied' : 'Apply to node'}
                       >{lbl.name}</button>
-                      {/* Color swatch — clicking opens native color picker */}
-                      <label title="Change color" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
-                        <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: lbl.color, border: '1px solid rgba(255,255,255,0.3)', flexShrink: 0 }} />
+                      <label title="Change color" className="mm-tag-library-color-label">
+                        <span className="mm-tag-library-color-swatch" style={{ background: lbl.color }} />
                         <input
                           type="color"
                           value={lbl.color}
@@ -2643,7 +2969,7 @@ export function DesktopMindMapEditor({
                           onChange={(e) => updateLabelColor(lbl.name, e.target.value)}
                         />
                       </label>
-                      <button onClick={() => removeUserLabel(lbl.name)} style={{ fontSize: 9, opacity: 0.5, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0 }} title="Remove from library">×</button>
+                      <button onClick={() => removeUserLabel(lbl.name)} className="mm-tag-library-remove" title="Remove from library">×</button>
                     </span>
                   ))}
                 </div>
@@ -2732,6 +3058,12 @@ export function DesktopMindMapEditor({
               )}
               {!attachmentPreviewBusy && attachmentPreviewType === 'pdf' && attachmentPreviewUrl && (
                 <iframe className="mm-attachment-preview-pdf" src={attachmentPreviewUrl} title={attachmentPreviewTitle || 'PDF preview'} />
+              )}
+              {!attachmentPreviewBusy && attachmentPreviewType === 'audio' && attachmentPreviewUrl && (
+                <div className="mm-attachment-preview-audio-wrap">
+                  <svg className="mm-attachment-preview-audio-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.4}><path strokeLinecap="round" strokeLinejoin="round" d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path strokeLinecap="round" strokeLinejoin="round" d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                  <audio className="mm-attachment-preview-audio" controls src={attachmentPreviewUrl} autoPlay={false} />
+                </div>
               )}
               {!attachmentPreviewBusy && !attachmentPreviewUrl && (
                 <div className="mm-attachment-preview-placeholder">Preview is unavailable for this file.</div>

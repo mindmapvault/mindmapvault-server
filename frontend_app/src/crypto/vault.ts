@@ -1,4 +1,5 @@
 import type { MindMapGraph, MindMapTree } from '../types';
+import type { BoardData } from '../board/BoardTypes';
 import { aesDecrypt, aesEncrypt, importAesKey } from './aes';
 import { deriveTitleKey } from './kdf';
 import { fromBase64, toBase64 } from './utils';
@@ -67,4 +68,17 @@ export async function decryptTree(blob: Uint8Array, dek: Uint8Array): Promise<Mi
     };
   }
   return parsed as MindMapTree;
+}
+
+// ── Evidence board blob helpers ───────────────────────────────────────────────
+
+export async function encryptBoard(board: BoardData, dek: Uint8Array): Promise<Uint8Array> {
+  const key = await importAesKey(dek);
+  return aesEncrypt(key, enc.encode(JSON.stringify(board)));
+}
+
+export async function decryptBoard(blob: Uint8Array, dek: Uint8Array): Promise<BoardData> {
+  const key = await importAesKey(dek);
+  const plaintext = await aesDecrypt(key, blob);
+  return JSON.parse(dec.decode(plaintext)) as BoardData;
 }

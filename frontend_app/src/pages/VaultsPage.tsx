@@ -12,7 +12,8 @@ const VersionHistoryPanel = lazy(() =>
   import('../components/VersionHistoryPanel').then((m) => ({ default: m.VersionHistoryPanel })),
 );
 import { hybridEncap } from '../crypto/kem';
-import { decryptTitle, encryptTree, encryptTitle } from '../crypto/vault';
+import { decryptTitle, encryptTree, encryptTitle, encryptBoard } from '../crypto/vault';
+import { emptyBoardData } from '../board/BoardTypes';
 import { toBase64 } from '../crypto/utils';
 import { getStorage } from '../storage';
 import { useAuthStore } from '../store/auth';
@@ -238,6 +239,8 @@ const VaultCard = memo(function VaultCard({
   const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
   const persistedEncryptionMode = normalizeEncryptionMode(map.vault_encryption_mode);
   const persistedLabels = normalizeVaultLabels(map.vault_labels);
+  const isBoard = map.vault_labels?.includes('__board__') ?? false;
+  const vaultPath = isBoard ? `/boards/${map.id}` : `/vaults/${map.id}`;
   const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
   const blurPreview = isSharedVault;
   const dirty =
@@ -285,7 +288,7 @@ const VaultCard = memo(function VaultCard({
             ) : (
               <button
                 className="min-w-0 w-full text-left"
-                onClick={() => onNavigate(`/vaults/${map.id}`)}
+                onClick={() => onNavigate(vaultPath)}
               >
                 <p className="truncate text-lg font-semibold text-white">
                   {map.title ?? <span className="italic text-slate-500">Decrypting...</span>}
@@ -375,7 +378,7 @@ const VaultCard = memo(function VaultCard({
             <div>
               <button
                 type="button"
-                onClick={() => onNavigate(`/vaults/${map.id}`)}
+                onClick={() => onNavigate(vaultPath)}
                 className="block w-full cursor-pointer rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 title={`Open ${map.title ?? 'vault'}`}
               >
@@ -408,7 +411,7 @@ const VaultCard = memo(function VaultCard({
           ) : (
             <button
               type="button"
-              onClick={() => onNavigate(`/vaults/${map.id}`)}
+              onClick={() => onNavigate(vaultPath)}
               className="flex h-56 w-full items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-900/60 px-6 text-center text-sm text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
             >
               Open and save this vault to create its encrypted screenshot preview.
@@ -458,7 +461,7 @@ const VaultCard = memo(function VaultCard({
         <label className="block text-xs text-slate-400">
           Vault labels
           <div className="mt-1 flex flex-wrap gap-1">
-            {map.draftLabels.map((lbl) => (
+            {map.draftLabels.filter((lbl) => lbl !== '__board__').map((lbl) => (
               <span
                 key={lbl}
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-white"
@@ -551,8 +554,11 @@ const VaultTableRow = memo(function VaultTableRow({
   onDeleteRequest,
 }: VaultTableRowProps) {
   const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
+  const isBoard = map.vault_labels?.includes('__board__') ?? false;
+  const vaultPath = isBoard ? `/boards/${map.id}` : `/vaults/${map.id}`;
   const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
-  const hasTooltip = (map.draftLabels.length > 0 || !!map.draftNote) && renamingId !== map.id;
+  const visibleLabels = map.draftLabels.filter((l) => l !== '__board__');
+  const hasTooltip = (visibleLabels.length > 0 || !!map.draftNote) && renamingId !== map.id;
   const [tooltipVisible, setTooltipVisible] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const tooltipTdRef = useRef<HTMLTableCellElement>(null);
@@ -566,7 +572,7 @@ const VaultTableRow = memo(function VaultTableRow({
       <td className="w-[88px] p-2 pl-2">
         <button
           className="block overflow-hidden rounded"
-          onClick={() => onNavigate(`/vaults/${map.id}`)}
+          onClick={() => onNavigate(vaultPath)}
           title={`Open ${map.title ?? 'vault'}`}
         >
           {previewState?.summary ? (
@@ -627,13 +633,13 @@ const VaultTableRow = memo(function VaultTableRow({
             </button>
           </div>
         ) : (
-          <button className="block w-full text-left" onClick={() => onNavigate(`/vaults/${map.id}`)}>
+          <button className="block w-full text-left" onClick={() => onNavigate(vaultPath)}>
             <span className="block truncate text-sm font-medium text-white">
               {map.title ?? <span className="italic text-slate-500">Decrypting…</span>}
             </span>
-            {map.draftLabels.length > 0 && (
+            {visibleLabels.length > 0 && (
               <span className="mt-1 flex flex-wrap gap-1">
-                {map.draftLabels.slice(0, 6).map((lbl) => (
+                {visibleLabels.slice(0, 6).map((lbl) => (
                   <span
                     key={lbl}
                     className="rounded-full px-1.5 py-0.5 text-[10px] leading-none text-white"
@@ -666,7 +672,7 @@ const VaultTableRow = memo(function VaultTableRow({
       <td className="py-2 pr-2">
         <div className="flex items-center justify-end gap-0.5">
           <button
-            onClick={() => onNavigate(`/vaults/${map.id}`)}
+            onClick={() => onNavigate(vaultPath)}
             className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-200"
             title="Open vault"
           >
@@ -711,11 +717,11 @@ const VaultTableRow = memo(function VaultTableRow({
         className="pointer-events-none fixed z-[9999] w-72 max-w-[85vw] rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-2xl"
         style={{ left: tooltipPos.x, top: tooltipPos.y, transform: 'translateY(-100%) translateY(-8px)' }}
       >
-        {map.draftLabels.length > 0 && (
+        {visibleLabels.length > 0 && (
           <div>
             <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Labels</p>
             <div className="flex flex-wrap gap-1">
-              {map.draftLabels.map((lbl) => (
+              {visibleLabels.map((lbl) => (
                 <span
                   key={lbl}
                   className="rounded-full px-2 py-0.5 text-xs text-white"
@@ -776,6 +782,11 @@ export function VaultsPage() {
   const [createError, setCreateError] = useState('');
   const [createPlanPrompt, setCreatePlanPrompt] = useState<PlanErrorPrompt | null>(null);
 
+  const [showCreateBoard, setShowCreateBoard] = useState(false);
+  const [newBoardTitle, setNewBoardTitle] = useState('');
+  const [creatingBoard, setCreatingBoard] = useState(false);
+  const [createBoardError, setCreateBoardError] = useState('');
+
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
   const mdImportRef = useRef<HTMLInputElement>(null);
@@ -794,6 +805,9 @@ export function VaultsPage() {
 
   const [showImportMenu, setShowImportMenu] = useState(false);
   const importMenuRef = useRef<HTMLDivElement>(null);
+
+  const [showCreateMenu, setShowCreateMenu] = useState(false);
+  const createMenuRef = useRef<HTMLDivElement>(null);
 
   const [historyVaultId, setHistoryVaultId] = useState<string | null>(null);
   const [storagePathInfo, setStoragePathInfo] = useState<LocalStorageDirInfo | null>(null);
@@ -1011,6 +1025,17 @@ export function VaultsPage() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showImportMenu]);
+
+  useEffect(() => {
+    if (!showCreateMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (createMenuRef.current && !createMenuRef.current.contains(e.target as Node)) {
+        setShowCreateMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showCreateMenu]);
 
   useEffect(() => {
     if (isLocalMode || !hasKeys || !mapIdsKey) {
@@ -1267,6 +1292,39 @@ export function VaultsPage() {
       setCreateError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleCreateBoard = async () => {
+    if (!newBoardTitle.trim() || !sessionKeys) return;
+    setCreatingBoard(true);
+    setCreateBoardError('');
+    try {
+      const boardTitle = newBoardTitle.trim();
+      const titleEnc = await encryptTitle(boardTitle, sessionKeys.masterKey);
+      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
+        sessionKeys.classicalPubKey,
+        sessionKeys.pqPubKey,
+      );
+      const boardData = emptyBoardData(boardTitle);
+      const encBlob = await encryptBoard(boardData, dek);
+
+      const created = await storage.createVault({
+        title_encrypted: titleEnc,
+        eph_classical_public: toBase64(ephClassicalPublic),
+        eph_pq_ciphertext: toBase64(ephPqCiphertext),
+        wrapped_dek: toBase64(wrappedDek),
+      });
+
+      await storage.uploadBlob(created.id, encBlob);
+      await storage.updateMeta(created.id, { vault_labels: ['__board__'] });
+      setNewBoardTitle('');
+      setShowCreateBoard(false);
+      navigate(`/boards/${created.id}`);
+    } catch (err) {
+      setCreateBoardError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingBoard(false);
     }
   };
 
@@ -1651,17 +1709,51 @@ export function VaultsPage() {
                 )}
               </div>
 
-              <button
-                onClick={() => setShowCreate(true)}
-                disabled={!hasKeys}
-                title="Create a new vault"
-                className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                </svg>
-                New vault
-              </button>
+              {/* New dropdown */}
+              <div ref={createMenuRef} style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setShowCreateMenu((v) => !v)}
+                  disabled={!hasKeys}
+                  title="Create a new vault or board"
+                  className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  New
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showCreateMenu && (
+                  <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--color-surface-1, #1e293b)', border: '1px solid var(--color-border, #334155)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                    <button
+                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { setShowCreate(true); setShowCreateMenu(false); }}
+                    >
+                      <svg className="h-4 w-4 shrink-0 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="12" cy="12" r="3"/><line x1="12" y1="3" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21"/><line x1="3" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21" y2="12"/>
+                      </svg>
+                      <span>
+                        <span className="block font-medium">Mind map</span>
+                        <span className="block text-xs text-slate-500">Tree-based idea mapping</span>
+                      </span>
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                      onClick={() => { setShowCreateBoard(true); setShowCreateMenu(false); }}
+                    >
+                      <svg className="h-4 w-4 shrink-0 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path strokeLinecap="round" d="M17.5 14v7M14 17.5h7"/>
+                      </svg>
+                      <span>
+                        <span className="block font-medium">Detective board</span>
+                        <span className="block text-xs text-slate-500">Evidence board with cards &amp; connections</span>
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           {importError && (
@@ -1797,6 +1889,41 @@ export function VaultsPage() {
                 <div className="mt-3 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-200">
                   <p className="font-medium text-red-100">{createPlanPrompt?.title ?? 'Create failed'}</p>
                   <p className="mt-1 text-red-200">{createPlanPrompt?.message ?? createError}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {showCreateBoard && (
+            <div className="mb-6 rounded-xl border border-slate-700 bg-surface-1 p-5">
+              <h3 className="mb-3 font-medium text-white">New evidence board</h3>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <input
+                  type="text"
+                  value={newBoardTitle}
+                  onChange={(e) => setNewBoardTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateBoard()}
+                  placeholder="Board name..."
+                  autoFocus
+                  className="flex-1 rounded-lg border border-slate-600 bg-surface px-4 py-2 text-white placeholder-slate-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+                <button
+                  onClick={handleCreateBoard}
+                  disabled={creatingBoard || !newBoardTitle.trim()}
+                  className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
+                >
+                  {creatingBoard ? 'Creating...' : 'Create board'}
+                </button>
+                <button
+                  onClick={() => { setShowCreateBoard(false); setCreateBoardError(''); }}
+                  className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-500"
+                >
+                  Cancel
+                </button>
+              </div>
+              {createBoardError && (
+                <div className="mt-3 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-200">
+                  {createBoardError}
                 </div>
               )}
             </div>

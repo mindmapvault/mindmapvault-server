@@ -205,7 +205,17 @@ impl MinioClient {
         let response = request
             .send()
             .await
-            .map_err(|e| AppError::Storage(e.to_string()))?;
+            .map_err(|e| {
+                let service_code = e.as_service_error().and_then(|se| se.code());
+                let http_status = e.raw_response().map(|r| r.status().as_u16());
+                if http_status == Some(404)
+                    || matches!(service_code, Some("NoSuchKey" | "NotFound" | "NoSuchVersion"))
+                {
+                    AppError::NotFound("board content not found in storage".to_string())
+                } else {
+                    AppError::Storage(e.to_string())
+                }
+            })?;
 
         let collected = response
             .body

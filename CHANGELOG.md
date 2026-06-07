@@ -6,6 +6,71 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-06-07
+
+### Added
+
+#### Evidence Board
+- **Evidence board canvas** — new vault type for free-form evidence/investigation boards. Cards, images, and connectors can be placed freely on a zoomable/pannable infinite canvas. Boards are end-to-end encrypted with the same hybrid KEM + AES-256-GCM pipeline as mind maps.
+  - `src/board/BoardTypes.ts` — data model: `BoardTextCard`, `BoardImageCard`, `BoardConnector`, `BoardData`.
+  - `src/board/BoardEngine.ts` — pure manipulation helpers (add, move, delete cards and connectors).
+  - `src/components/BoardEditor.tsx` + `BoardEditor.css` — full board editor component with drag-to-move cards, draw connectors, resize, zoom/pan, and per-card color theming.
+  - `src/pages/BoardPage.tsx` — page that loads, decrypts, edits, and saves boards using the existing `hybridDecap/Encap` flow. Includes version label, save status, attachment support, and back-navigation.
+  - `src/app-core/AppRoot.tsx` — `/boards/:id` route added alongside `/vaults/:id`.
+  - `src/crypto/vault.ts` — `encryptBoard` / `decryptBoard` helpers (AES-256-GCM via the same DEK pipeline as `encryptTree` / `decryptTree`).
+- **Create board from lobby** — the Vaults page "Create" button now opens a dropdown with **New Mind Map** and **New Evidence Board** options. Boards are tagged with the internal `__board__` label that is filtered from all UI display.
+- **Board routing in vault list** — vault cards and table rows detect the `__board__` label and navigate to `/boards/:id` instead of `/vaults/:id`. The `__board__` label is stripped from visible label chips.
+
+#### Voice Recording
+- **Voice recording attachment** — users can record audio directly on the mobile canvas and attach the encrypted recording to a node.
+  - **Record button in mobile action bar** — mic icon button added between Delete and Fit; disabled on root node.
+  - **Record Audio option in file upload sheet** — fourth option in the mobile attach-files bottom sheet opens the recording UI instead of a file picker.
+  - **Recording bottom sheet** — three-state UI: *Idle* (pulsing mic button, "Tap to start recording"), *Recording* (MM:SS timer, pulsing stop button), *Recorded* (`<audio>` playback preview, filename input, Save & Upload / Re-record / Discard actions).
+  - Uses `MediaRecorder` API with `audio/webm;codecs=opus` → `audio/webm` → platform default codec fallback chain.
+  - On save, recording is wrapped in a `File` object and routed through the existing `attachFilesToSelectedNode` flow so it is encrypted before upload.
+  - Blob URL memory managed via `useMemo` + `useEffect` cleanup (`URL.revokeObjectURL`); recording timer cleaned up on unmount.
+
+#### PWA Offline Sync
+- **`src/storage/idb.ts`** — `MmvIdb` class; IndexedDB database `mmv-offline-v1` with four object stores:
+  - `vault_list` — cached vault list (single record, keyed `'list'`).
+  - `vault_meta` — per-vault `MindMapDetail` metadata.
+  - `vault_blobs` — encrypted blob bytes with `version_id` for conflict detection.
+  - `sync_queue` — pending server operations (autoIncrement key); each entry records op type, vault ID, payload, `base_version_id`, timestamp, and attempt count.
+- **`src/storage/offline.ts`** — `OfflineStorageAdapter implements StorageAdapter`:
+  - **Read-through cache** — every `getVault`, `downloadBlob`, and `listVaults` call while online writes the result to IDB so the data is available offline.
+  - **Write-through (online)** — `updateVault` / `uploadBlob` / `updateMeta` write to the server; `uploadBlob` additionally captures the new `minio_version_id` from a post-upload `getVault` call and stores it alongside the cached blob.
+  - **Write-local (offline)** — the same calls cache to IDB and enqueue to `sync_queue`. The blob is persisted to `vault_blobs` **before** enqueue, so the user's work is never lost even if the sync queue flush fails.
+  - **`drainSyncQueue()`** — processes ops in insertion order; before uploading a blob checks the server's current `minio_version_id` against the stored `base_version_id`. Emits `conflict` status if they diverge. Failed ops increment an attempt counter and are dropped after 3 failures.
+  - **`resolveConflict(vaultId, 'local' | 'server')`** — "keep mine" force-uploads the cached blob overwriting the server; "use server" removes all pending ops for the vault from the queue.
+  - Observable `SyncStatus` (`state: 'idle' | 'syncing' | 'conflict' | 'error'`, `pendingCount`, `lastSyncedAt`, `conflictVaultId`) via `onStatusChange()` subscribe/unsubscribe pattern.
+- **`src/storage/index.ts`** — `getOfflineStorage()` singleton factory; `isPwa()` detection helper (`display-mode: standalone` media query + iOS `navigator.standalone`).
+- **`src/components/OfflineBanner.tsx`** — contextual banner rendered above the editor when using the offline adapter: red dot + "X unsaved changes" when offline; spinner + count while syncing; conflict prompt with "My offline edits" / "Server version" buttons; error + Retry button; transient green "✓ All changes synced" flash on successful drain.
+- **`src/pages/EditorPage.tsx`** — storage `useMemo` now selects `OfflineStorageAdapter` when `isPwa()` returns true; two `useEffect`s subscribe to status changes and listen to `window.online` / `window.offline` events to auto-drain the queue on reconnect; 3-second "synced" flash state managed independently of the adapter status.
+
+#### Attachment Improvements
+- **Audio attachment playback** — `previewOrOpenAttachment` detects `audio/*` content-type and file extensions (`.webm`, `.m4a`, `.mp3`, `.ogg`, `.wav`, `.aac`, `.flac`, `.opus`). The attachment preview modal renders a centered `<audio controls>` element with a large mic icon for audio files.
+- **Audio card icon in notes dialog** — attachment cards with `audio/*` content-type show a red mic SVG icon in the thumbnail area instead of the generic "FILE" text.
+- **PDF thumbnail utility** — `src/utils/pdfThumbnail.ts` renders the first page of a PDF to a JPEG data URL using `pdfjs-dist` (lazy-initialised worker).
+- **`pruneVersionHistory` utility** — `src/api/mindmaps.ts` adds a fire-and-forget helper that deletes versions older than a configurable limit (default 30), skipping the current latest version; uses `Promise.allSettled` so individual delete failures are non-fatal.
+
+### Changed
+
+#### Mobile Canvas UX
+- **Mobile props toolbar restructured** — top row: Notes / Labels / Files; bottom row: Date / Checkbox / Icons. Files button opens the new attach-files bottom sheet (previously absent).
+- **Labels as props sub-view** — tapping Labels in the mobile props panel now opens a sub-view inside the same bottom panel (canvas remains visible above) rather than launching a separate `position: fixed` overlay. Sub-view has ← Back and × navigation; library items render one-per-row with full-width tap targets; Add / Save to lib buttons wrap to a second line.
+- **Mobile file upload bottom sheet** — PWA-capable attach sheet with three distinct file input paths (Camera with `capture="environment"`, Photo Library, Browse Files) plus the new Record Audio option. Each input is a separate hidden `<input type="file">` with the appropriate `accept` and `capture` attributes.
+- **Mobile checkbox fix** — checkbox cycle no longer includes a `null` / "Checkbox" label state; only "Unchecked" and "Checked" are shown.
+
+#### Attachment Preview
+- **Attachment preview modal fully styled** — the modal was previously unstyled (no CSS), causing it to render in document flow behind the notes modal. Added complete `position: fixed` layout (`z-index: 801`), flex column structure, mobile full-screen override, image / PDF / audio body sections, header + footer with Download and Close buttons.
+- **Image thumbnail fix** — `loadAttachmentPreview` guarded on `preview_attachment_id` being truthy, which meant images (which use their own `attachment_id` as the preview source) never loaded a thumbnail. Guard updated to `if (!isImage && !attachment.preview_attachment_id) return`.
+
+### Fixed
+- **Backend: S3 get-object 404 now returns `AppError::NotFound`** — `MinioClient::get_object` in `backend/src/db/minio.rs` previously mapped all AWS SDK errors to `AppError::Storage`. The error mapper now inspects the HTTP status (404) and service code (`NoSuchKey`, `NotFound`, `NoSuchVersion`) and returns `AppError::NotFound("board content not found in storage")` for missing objects, enabling correct 404 HTTP responses for board content that has not been uploaded yet.
+
+### Validation
+- `pnpm exec tsc --noEmit` in `frontend_app` → clean.
+
 ## [0.3.29] - 2026-06-06
 
 ### Added

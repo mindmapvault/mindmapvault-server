@@ -19,7 +19,8 @@ import {
 } from '../crypto/encryptedVault';
 import { hybridDecap, hybridEncap } from '../crypto/kem';
 import { decryptTitle, decryptTree, encryptTitle, encryptTree } from '../crypto/vault';
-import { getStorage } from '../storage';
+import { getOfflineStorage, getStorage, isPwa, OfflineStorageAdapter, type SyncStatus } from '../storage';
+import { OfflineBanner } from '../components/OfflineBanner';
 import { fromBase64, toBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
@@ -115,7 +116,20 @@ export function EditorPage() {
   const { sessionKeys } = useAuthStore();
   const mode = useModeStore((s) => s.mode);
   const isLocalMode = mode === 'local';
-  const storage = useMemo(() => getStorage(), []);
+  const storage = useMemo(() => {
+    if (isLocalMode) return getStorage('local');
+    if (isPwa()) return getOfflineStorage();
+    return getStorage('server');
+  }, [isLocalMode]);
+
+  const offlineAdapter = storage instanceof OfflineStorageAdapter ? storage : null;
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(() => ({
+    state: 'idle',
+    pendingCount: 0,
+    lastSyncedAt: null,
+  }));
+  const [showSyncedFlash, setShowSyncedFlash] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -390,6 +404,36 @@ export function EditorPage() {
     if (sessionKeys) load(searchParams.get('version_id') ?? undefined);
     else setLoading(false);
   }, [sessionKeys, load]); // searchParams intentionally omitted — only used on first mount
+
+  // ── Offline / online sync ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!offlineAdapter) return;
+    return offlineAdapter.onStatusChange((status) => {
+      setSyncStatus(status);
+      if (status.state === 'idle' && status.pendingCount === 0 && status.lastSyncedAt != null) {
+        setShowSyncedFlash(true);
+        const t = setTimeout(() => setShowSyncedFlash(false), 3000);
+        return () => clearTimeout(t);
+      }
+    });
+  }, [offlineAdapter]);
+
+  useEffect(() => {
+    if (!offlineAdapter) return;
+    const handleOnline = () => {
+      setIsOnline(true);
+      void offlineAdapter.drainSyncQueue();
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    // Drain immediately on mount if we already have pending items
+    if (navigator.onLine) void offlineAdapter.drainSyncQueue();
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [offlineAdapter]);
 
   // ── Load a historical version in-place ─────────────────────────────────────────
   const loadVersion = useCallback(async (v: VersionDetail) => {
@@ -1018,6 +1062,21 @@ export function EditorPage() {
   // ── Editor ──────────────────────────────────────────────────────────────────
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+      {offlineAdapter && (
+        <OfflineBanner
+          isOnline={isOnline}
+          status={syncStatus}
+          onRetrySync={() => void offlineAdapter.drainSyncQueue()}
+          onKeepLocal={() => { void offlineAdapter.resolveConflict(syncStatus.conflictVaultId!, 'local'); }}
+          onKeepServer={() => { void offlineAdapter.resolveConflict(syncStatus.conflictVaultId!, 'server'); }}
+        />
+      )}
+      {offlineAdapter && showSyncedFlash && (
+        <div className="mm-offline-banner mm-offline-banner--synced" role="status">
+          <span className="mm-offline-dot mm-offline-dot--green" />
+          <span className="mm-offline-text">All changes synced</span>
+        </div>
+      )}
       {planPrompt && !isLocalMode && (
         <div className="mx-4 mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
           <div className="flex flex-wrap items-center justify-between gap-3">
