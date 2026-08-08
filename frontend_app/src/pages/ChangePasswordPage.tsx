@@ -7,6 +7,21 @@ import { getServerStorage } from '../storage';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 
+/**
+ * Password rotation is disabled because it destroys attachments.
+ *
+ * Attachments wrap their per-file key with the master key
+ * (`key_wrap: 'master-aes-256-gcm'` in crypto/encryptedVault.ts). Rotation
+ * derives a *new* master key and re-encrypts titles, notes and the private
+ * keys — but never re-wraps attachment keys. After a password change every
+ * attachment is wrapped with a master key that no longer exists, and cannot be
+ * decrypted again. The loss is silent and irreversible.
+ *
+ * Re-enable only once rotation re-wraps attachment keys for notes and nodes,
+ * with a test covering a vault that has attachments.
+ */
+const ROTATION_ENABLED = false;
+
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
   return tauriInvoke<T>(cmd, args);
@@ -166,6 +181,27 @@ export function ChangePasswordPage() {
       setProgress('');
     }
   };
+
+  if (!ROTATION_ENABLED) {
+    return (
+      <div className="mx-auto max-w-md p-6">
+        <div
+          className="rounded-lg px-3 py-2 text-sm"
+          style={{ background: 'rgba(234,179,8,0.12)', color: '#eab308' }}
+        >
+          <p className="font-medium">Changing your password is temporarily unavailable.</p>
+          <p className="mt-1" style={{ color: 'var(--text-muted)' }}>
+            Rotating the password would make existing attachments in your notes and nodes
+            impossible to decrypt. We have disabled it until that is fixed, rather than risk
+            your data. Your vaults and attachments are unaffected in the meantime.
+          </p>
+        </div>
+        <button className="mt-4 text-sm underline" onClick={() => navigate('/vaults')}>
+          Back to vaults
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center px-4 py-12">
