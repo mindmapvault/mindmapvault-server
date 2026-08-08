@@ -63,12 +63,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Optional: pprof profiler guard is started when `ENABLE_PPROF` env var is set.
     #[cfg(not(windows))]
-    use pprof::ProfilerGuard;
+    use pprof::{protos::Message, ProfilerGuard};
     #[cfg(not(windows))]
-    use std::fs::File;
+    use std::io::Write;
 
-    // Start a profiler guard when requested and write a flamegraph SVG after the
-    // configured duration (default 30s). We write to `/tmp/backend-flamegraph.svg`.
+    // Start a profiler guard when requested and write a pprof profile after the
+    // configured duration (default 30s). We write to `/tmp/backend-profile.pb`,
+    // which can be opened with `go tool pprof`, pprof.me or speedscope.
     #[cfg(not(windows))]
     if std::env::var("ENABLE_PPROF").is_ok() {
         let dur = std::env::var("PPROF_DURATION_SECS")
@@ -80,8 +81,12 @@ async fn main() -> anyhow::Result<()> {
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(dur));
                 if let Ok(report) = guard.report().build() {
-                    if let Ok(mut file) = File::create("/tmp/backend-flamegraph.svg") {
-                        let _ = report.flamegraph(&mut file);
+                    if let Ok(profile) = report.pprof() {
+                        if let Ok(bytes) = profile.write_to_bytes() {
+                            if let Ok(mut file) = std::fs::File::create("/tmp/backend-profile.pb") {
+                                let _ = file.write_all(&bytes);
+                            }
+                        }
                     }
                 }
             });

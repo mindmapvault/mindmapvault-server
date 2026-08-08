@@ -52,7 +52,7 @@ base64 = "0.22"
 
 [target.'cfg(not(windows))'.dependencies]
 # Profiling (optional at runtime via env)
-pprof = { version = "0.15", features = ["flamegraph"] }
+pprof = { version = "0.15", features = ["protobuf-codec"] }
 jemallocator = "0.5"
 
 [dev-dependencies]
