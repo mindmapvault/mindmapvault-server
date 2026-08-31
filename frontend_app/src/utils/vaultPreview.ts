@@ -404,7 +404,7 @@ function renderTreeSvgSync(
 }
 
 // Public async version loads icon data before rendering.
-async function renderTreeSvg(
+export async function renderTreeSvg(
   tree: MindMapTree,
   theme: ThemeMode,
   width = PREVIEW_WIDTH,

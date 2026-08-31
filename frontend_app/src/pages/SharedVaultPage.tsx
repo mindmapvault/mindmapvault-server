@@ -13,6 +13,8 @@ import { encryptTitle, encryptTree } from '../crypto/vault';
 import { getStorage } from '../storage';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
+import { useThemeStore } from '../store/theme';
+import { renderTreeSvg } from '../utils/vaultPreview';
 import type { PublicMapShareAttachmentMetadata, PublicMapShareResponse } from '../types';
 import { toBase64 } from '../crypto/utils';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
@@ -77,6 +79,7 @@ export function SharedVaultPage() {
   const navigate = useNavigate();
   const { accessToken, sessionKeys, username } = useAuthStore();
   const mode = useModeStore((state) => state.mode);
+  const themeMode = useThemeStore((state) => state.mode);
   const isLocalMode = mode === 'local';
   const storage = useMemo(() => getStorage(isLocalMode ? 'local' : 'server'), [isLocalMode]);
 
@@ -91,6 +94,31 @@ export function SharedVaultPage() {
   const [importMsg, setImportMsg] = useState('');
   const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [planPrompt, setPlanPrompt] = useState<PlanErrorPrompt | null>(null);
+  const [canvasSvg, setCanvasSvg] = useState<string | null>(null);
+
+  // Draw the decrypted map the way the canvas draws it, using the same
+  // renderer the vault previews use. The SVG is served to an <img> as a data
+  // URI rather than injected into the DOM: node text is someone else's
+  // content, and this page is opened by people with no account here.
+  useEffect(() => {
+    if (!unlocked) {
+      setCanvasSvg(null);
+      return;
+    }
+    let cancelled = false;
+    void renderTreeSvg(unlocked.payload.tree, themeMode === 'light' ? 'light' : 'dark', 1200, 800)
+      .then((svg) => {
+        if (!cancelled) {
+          setCanvasSvg(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCanvasSvg(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [themeMode, unlocked]);
 
   useEffect(() => {
     if (!shareId) {
@@ -369,11 +397,26 @@ export function SharedVaultPage() {
                       Exported {new Date(unlocked.payload.exported_at).toLocaleString()} · {nodeCount} node{nodeCount === 1 ? '' : 's'}
                     </p>
                     <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
-                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Outline preview</p>
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Canvas</p>
+                      {canvasSvg ? (
+                        <img
+                          src={canvasSvg}
+                          alt={`Mind map: ${unlocked.payload.title}`}
+                          className="mt-3 w-full rounded-xl border border-slate-800 bg-slate-950/40"
+                        />
+                      ) : (
+                        <p className="mt-3 text-sm text-slate-400">Rendering the canvas…</p>
+                      )}
+                    </div>
+
+                    <details className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
+                      <summary className="cursor-pointer text-xs uppercase tracking-[0.18em] text-slate-500 transition hover:text-slate-300">
+                        Outline
+                      </summary>
                       <ul className="mt-3">
                         <OutlinePreview node={unlocked.payload.tree.root as { id: string; text: string; children: Array<{ id: string; text: string; children: unknown[] }> }} />
                       </ul>
-                    </div>
+                    </details>
                   </>
                 )}
               </div>
