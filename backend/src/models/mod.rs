@@ -4,3 +4,4 @@ pub mod attachment;
 pub mod admin_audit;
 pub mod access;
 pub mod settings;
+pub mod share;

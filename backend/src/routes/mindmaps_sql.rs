@@ -3,7 +3,7 @@ use std::{collections::{BTreeMap, HashMap, HashSet}, sync::Arc};
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, FromRef, Path, Query, State},
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderValue},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::{minio::MinioClient, sql_store::{DynSqlStore, MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate, NewMindMap, NewMindMapAttachment, StoredMindMap, StoredMindMapAttachment}},
+    db::{minio::MinioClient, sql_store::{DynSqlStore, MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate, MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate, NewMindMap, NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment}},
     error::AppError,
     middleware::auth::{AuthenticatedUser, JwtService},
     models::{
@@ -22,6 +22,12 @@ use crate::{
             ConfirmUploadRequest, ConfirmUploadResponse, MindMapCreatedResponse, MindMapDetail,
             MindMapListItem, PresignedUrlResponse, StorageSummary, UpdateVaultMetaRequest,
             UpsertMindMapRequest, VaultStorageInfo, VersionDetail, VersionSnapshot,
+        },
+        share::{
+            CompleteMapShareAttachmentUploadRequest, CompleteMapShareUploadRequest,
+            CreateMapShareRequest, CreateMapShareResponse, InitMapShareAttachmentRequest,
+            InitMapShareAttachmentResponse, MapShareAttachmentMetadata, MapShareOwnerSummary,
+            ShareStatus,
         },
         user::MAX_UPLOAD_BODY_BYTES,
     },
@@ -56,6 +62,22 @@ pub fn router(state: MindMapsSqlState) -> Router {
         .route("/{id}/upload-url", post(get_upload_url))
         .route("/{id}/confirm-upload", post(confirm_upload))
         .route("/{id}/download-url", get(get_download_url))
+        .route("/{id}/shares", get(list_shares).post(create_share))
+        .route(
+            "/{id}/shares/{share_id}/upload",
+            post(upload_share_blob).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
+        )
+        .route("/{id}/shares/{share_id}/complete", post(complete_share_upload))
+        .route("/{id}/shares/{share_id}/revoke", post(revoke_share))
+        .route("/{id}/shares/{share_id}/attachments", post(init_share_attachment))
+        .route(
+            "/{id}/shares/{share_id}/attachments/{attachment_id}/upload",
+            post(upload_share_attachment_blob).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
+        )
+        .route(
+            "/{id}/shares/{share_id}/attachments/{attachment_id}/complete",
+            post(complete_share_attachment_upload),
+        )
         .route("/{id}/attachments", get(list_attachments))
         .route("/{id}/attachments/init", post(init_attachment))
         .route("/{id}/attachments/{attachment_id}", get(get_attachment).patch(update_attachment).delete(delete_attachment))
@@ -921,6 +943,468 @@ async fn load_map_attachment_storage(
         if is_preview { acc } else { (acc.0 + 1, acc.1 + a.size_bytes) }
     });
     Ok((primary_count, primary_bytes, all_bytes))
+}
+
+async fn list_shares(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<MapShareOwnerSummary>>, AppError> {
+    find_owned(&state.db, &id, &user.0).await?;
+    let share_base_url = share_base_url(&headers);
+    let shares = state
+        .db
+        .list_mind_map_shares(&id)
+        .await?
+        .into_iter()
+        .map(|share| to_owner_share_summary(share, &share_base_url))
+        .collect();
+
+    Ok(Json(shares))
+}
+
+async fn create_share(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<CreateMapShareRequest>,
+) -> Result<Json<CreateMapShareResponse>, AppError> {
+    let user_id = user.0.clone();
+    find_owned(&state.db, &id, &user_id).await?;
+    validate_share_create(&body)?;
+
+    let share_id = Uuid::new_v4().to_string();
+    let share_name = body.name.trim().to_string();
+    let sanitized_name = sanitize_attachment_name(&share_name);
+    let s3_key = format!("maps/{id}/shares/{share_id}/{sanitized_name}");
+    let now = Utc::now();
+
+    state
+        .db
+        .create_mind_map_share(NewMindMapShare {
+            id: share_id.clone(),
+            map_id: id.clone(),
+            share_name,
+            scope: body.scope.clone(),
+            s3_key: s3_key.clone(),
+            s3_version_id: None,
+            created_by: user_id,
+            created_at: now,
+            updated_at: now,
+            expires_at: body.expires_at,
+            revoked: false,
+            include_attachments: body.include_attachments,
+            passphrase_hint: normalize_optional(body.passphrase_hint),
+            content_type: body.content_type.trim().to_string(),
+            size_bytes: body.size_bytes,
+            encryption_meta: body
+                .encryption_meta
+                .ok_or_else(|| AppError::BadRequest("encryption_meta is required for shares".to_string()))?,
+            checksum_sha256: None,
+            status: ShareStatus::Pending,
+        })
+        .await?;
+
+    Ok(Json(CreateMapShareResponse {
+        share_id: share_id.clone(),
+        share_url: format!("{}/{}", share_base_url(&headers), share_id),
+        s3_key,
+        upload_url: format!("/api/mindmaps/{id}/shares/{share_id}/upload"),
+        upload_headers: BTreeMap::new(),
+        expires_at: presign_expires_at(&state)?,
+    }))
+}
+
+async fn upload_share_blob(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    Path((id, share_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Result<Json<ConfirmUploadResponse>, AppError> {
+    if body.is_empty() {
+        return Err(AppError::BadRequest("blob is required".to_string()));
+    }
+
+    find_owned(&state.db, &id, &user.0).await?;
+    let share = find_share(&state.db, &id, &share_id).await?;
+    if share.revoked {
+        return Err(AppError::BadRequest("share is revoked".to_string()));
+    }
+
+    let version_id = state.minio.upload_blob(&share.s3_key, body.to_vec()).await?;
+
+    Ok(Json(ConfirmUploadResponse { version_id }))
+}
+
+async fn complete_share_upload(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path((id, share_id)): Path<(String, String)>,
+    Json(body): Json<CompleteMapShareUploadRequest>,
+) -> Result<Json<MapShareOwnerSummary>, AppError> {
+    find_owned(&state.db, &id, &user.0).await?;
+    validate_share_complete(&body.version_id, body.checksum_sha256.as_deref())?;
+
+    let share = find_share(&state.db, &id, &share_id).await?;
+    let verified_vid = state.minio.verify_version(&share.s3_key, &body.version_id).await?;
+    if let Err(error) = state
+        .db
+        .complete_mind_map_share_upload(
+            &id,
+            &share_id,
+            MindMapShareUploadUpdate {
+                s3_version_id: verified_vid.clone(),
+                checksum_sha256: normalize_optional(body.checksum_sha256),
+                status: ShareStatus::Available,
+            },
+        )
+        .await
+    {
+        if let Err(cleanup_error) = state.minio.delete_version(&share.s3_key, &verified_vid).await {
+            tracing::error!(
+                ?cleanup_error,
+                map_id = %id,
+                share_id = %share_id,
+                version_id = %verified_vid,
+                "failed to roll back share upload after metadata update error"
+            );
+        }
+        return Err(error);
+    }
+
+    let updated = find_share(&state.db, &id, &share_id).await?;
+    Ok(Json(to_owner_share_summary(updated, &share_base_url(&headers))))
+}
+
+async fn revoke_share(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path((id, share_id)): Path<(String, String)>,
+) -> Result<Json<MapShareOwnerSummary>, AppError> {
+    find_owned(&state.db, &id, &user.0).await?;
+    let existing = find_share(&state.db, &id, &share_id).await?;
+    state.db.set_mind_map_share_revoked(&id, &share_id, true).await?;
+
+    // Revoking has to remove the ciphertext, not just hide the row. The share
+    // blob is a second, independently-keyed copy of the map; leaving it in
+    // storage means "revoked" only stops new downloads while the copy — and the
+    // bytes it costs the owner — live on forever.
+    delete_share_objects(&state.db, &state.minio, std::slice::from_ref(&existing)).await?;
+    state.db.mark_mind_map_share_purged(&share_id).await?;
+
+    let updated = find_share(&state.db, &id, &share_id).await?;
+    Ok(Json(to_owner_share_summary(updated, &share_base_url(&headers))))
+}
+
+async fn init_share_attachment(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    Path((id, share_id)): Path<(String, String)>,
+    Json(body): Json<InitMapShareAttachmentRequest>,
+) -> Result<Json<InitMapShareAttachmentResponse>, AppError> {
+    find_owned(&state.db, &id, &user.0).await?;
+    validate_share_attachment_init(&body)?;
+    let share = find_share(&state.db, &id, &share_id).await?;
+
+    if !share.include_attachments {
+        return Err(AppError::BadRequest(
+            "share was created without attachment support".to_string(),
+        ));
+    }
+    if share.revoked {
+        return Err(AppError::BadRequest("share is revoked".to_string()));
+    }
+
+    if let Some(source_attachment_id) = body.source_attachment_id.as_deref() {
+        find_attachment(&state.db, &id, source_attachment_id).await?;
+    }
+
+    let attachment_id = Uuid::new_v4().to_string();
+    let sanitized_name = sanitize_attachment_name(&body.name);
+    let s3_key = format!("maps/{id}/shares/{share_id}/attachments/{attachment_id}/{sanitized_name}");
+
+    state
+        .db
+        .create_mind_map_share_attachment(NewMindMapShareAttachment {
+            id: attachment_id.clone(),
+            share_id: share_id.clone(),
+            source_attachment_id: normalize_optional(body.source_attachment_id),
+            node_id: normalize_optional(body.node_id),
+            name: body.name.trim().to_string(),
+            sanitized_name,
+            content_type: body.content_type.trim().to_string(),
+            size_bytes: body.size,
+            s3_key: s3_key.clone(),
+            s3_version_id: None,
+            uploaded_at: Utc::now(),
+            encryption_meta: body.encryption_meta.ok_or_else(|| {
+                AppError::BadRequest("encryption_meta is required for shared attachments".to_string())
+            })?,
+            checksum_sha256: None,
+            status: AttachmentStatus::Pending,
+        })
+        .await?;
+
+    Ok(Json(InitMapShareAttachmentResponse {
+        attachment_id: attachment_id.clone(),
+        s3_key,
+        upload_url: format!(
+            "/api/mindmaps/{id}/shares/{share_id}/attachments/{attachment_id}/upload"
+        ),
+        upload_headers: BTreeMap::new(),
+        expires_at: presign_expires_at(&state)?,
+    }))
+}
+
+async fn upload_share_attachment_blob(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    Path((id, share_id, attachment_id)): Path<(String, String, String)>,
+    body: Bytes,
+) -> Result<Json<ConfirmUploadResponse>, AppError> {
+    if body.is_empty() {
+        return Err(AppError::BadRequest("blob is required".to_string()));
+    }
+
+    find_owned(&state.db, &id, &user.0).await?;
+    let share = find_share(&state.db, &id, &share_id).await?;
+    if share.revoked {
+        return Err(AppError::BadRequest("share is revoked".to_string()));
+    }
+
+    let attachment = find_share_attachment(&state.db, &share_id, &attachment_id).await?;
+    let version_id = state
+        .minio
+        .upload_blob(&attachment.s3_key, body.to_vec())
+        .await?;
+
+    Ok(Json(ConfirmUploadResponse { version_id }))
+}
+
+async fn complete_share_attachment_upload(
+    State(state): State<MindMapsSqlState>,
+    user: AuthenticatedUser,
+    Path((id, share_id, attachment_id)): Path<(String, String, String)>,
+    Json(body): Json<CompleteMapShareAttachmentUploadRequest>,
+) -> Result<Json<MapShareAttachmentMetadata>, AppError> {
+    find_owned(&state.db, &id, &user.0).await?;
+    validate_share_complete(&body.version_id, body.checksum_sha256.as_deref())?;
+    let attachment = find_share_attachment(&state.db, &share_id, &attachment_id).await?;
+    let verified_vid = state
+        .minio
+        .verify_version(&attachment.s3_key, &body.version_id)
+        .await?;
+
+    if let Err(error) = state
+        .db
+        .complete_mind_map_share_attachment_upload(
+            &share_id,
+            &attachment_id,
+            MindMapShareAttachmentUploadUpdate {
+                s3_version_id: verified_vid.clone(),
+                checksum_sha256: normalize_optional(body.checksum_sha256),
+                status: AttachmentStatus::Available,
+            },
+        )
+        .await
+    {
+        if let Err(cleanup_error) = state
+            .minio
+            .delete_version(&attachment.s3_key, &verified_vid)
+            .await
+        {
+            tracing::error!(
+                ?cleanup_error,
+                map_id = %id,
+                share_id = %share_id,
+                attachment_id = %attachment_id,
+                version_id = %verified_vid,
+                "failed to roll back shared attachment upload after metadata update error"
+            );
+        }
+        return Err(error);
+    }
+
+    let updated = find_share_attachment(&state.db, &share_id, &attachment_id).await?;
+    Ok(Json(to_share_attachment_metadata(updated)))
+}
+
+async fn find_share(
+    db: &DynSqlStore,
+    map_id: &str,
+    share_id: &str,
+) -> Result<StoredMindMapShare, AppError> {
+    db.get_mind_map_share(map_id, share_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("share not found".to_string()))
+}
+
+async fn find_share_attachment(
+    db: &DynSqlStore,
+    share_id: &str,
+    attachment_id: &str,
+) -> Result<StoredMindMapShareAttachment, AppError> {
+    db.get_mind_map_share_attachment(share_id, attachment_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("share attachment not found".to_string()))
+}
+
+pub(crate) async fn delete_share_objects(
+    store: &DynSqlStore,
+    minio: &MinioClient,
+    shares: &[StoredMindMapShare],
+) -> Result<(), AppError> {
+    for share in shares {
+        let attachments = store.list_mind_map_share_attachments(&share.id).await?;
+        for attachment in attachments {
+            match minio.delete_object(&attachment.s3_key).await {
+                Ok(()) | Err(AppError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        match minio.delete_object(&share.s3_key).await {
+            Ok(()) | Err(AppError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_share_create(body: &CreateMapShareRequest) -> Result<(), AppError> {
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("share name is required".to_string()));
+    }
+    if body.content_type.trim().is_empty() {
+        return Err(AppError::BadRequest("content_type is required".to_string()));
+    }
+    if body.size_bytes < 0 {
+        return Err(AppError::BadRequest("size_bytes must be >= 0".to_string()));
+    }
+    if body.encryption_meta.is_none() {
+        return Err(AppError::BadRequest("encryption_meta is required for shares".to_string()));
+    }
+    if let Some(expires_at) = body.expires_at {
+        if expires_at <= Utc::now() {
+            return Err(AppError::BadRequest("expires_at must be in the future".to_string()));
+        }
+    }
+    if let Some(hint) = body.passphrase_hint.as_deref() {
+        if hint.trim().len() > 200 {
+            return Err(AppError::BadRequest("passphrase_hint is too long".to_string()));
+        }
+    }
+    Ok(())
+}
+
+fn validate_share_attachment_init(body: &InitMapShareAttachmentRequest) -> Result<(), AppError> {
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("attachment name is required".to_string()));
+    }
+    if body.content_type.trim().is_empty() {
+        return Err(AppError::BadRequest("content_type is required".to_string()));
+    }
+    if body.size < 0 {
+        return Err(AppError::BadRequest("size must be >= 0".to_string()));
+    }
+    if body.encryption_meta.is_none() {
+        return Err(AppError::BadRequest(
+            "encryption_meta is required for shared attachments".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_share_complete(version_id: &str, checksum_sha256: Option<&str>) -> Result<(), AppError> {
+    if version_id.trim().is_empty() {
+        return Err(AppError::BadRequest("version_id is required".to_string()));
+    }
+
+    if let Some(checksum) = checksum_sha256 {
+        let normalized = checksum.trim();
+        if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(AppError::BadRequest(
+                "checksum_sha256 must be a 64-character hex string".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Where a share link points. A self-hosted server serves the web app from its
+/// own origin, so the link is built from the request rather than from a
+/// configured public hostname: whatever host reached this server is the host
+/// the recipient can reach too. `X-Forwarded-*` wins so an instance behind a
+/// reverse proxy emits its public URL, not the container's internal one.
+fn share_base_url(headers: &HeaderMap) -> String {
+    let forwarded_host = headers
+        .get("x-forwarded-host")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let host = forwarded_host
+        .or_else(|| headers.get(header::HOST).and_then(|value| value.to_str().ok()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("localhost:8090");
+
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
+            "http"
+        } else {
+            "https"
+        });
+
+    format!("{scheme}://{host}/shared")
+}
+
+fn to_owner_share_summary(share: StoredMindMapShare, share_base_url: &str) -> MapShareOwnerSummary {
+    MapShareOwnerSummary {
+        id: share.id.clone(),
+        map_id: share.map_id,
+        name: share.share_name,
+        scope: share.scope,
+        share_url: format!("{share_base_url}/{}", share.id),
+        include_attachments: share.include_attachments,
+        passphrase_hint: share.passphrase_hint,
+        expires_at: share.expires_at,
+        revoked: share.revoked,
+        created_at: share.created_at,
+        updated_at: share.updated_at,
+        status: share.status,
+        content_type: share.content_type,
+        size_bytes: share.size_bytes,
+        checksum_sha256: share.checksum_sha256,
+    }
+}
+
+fn to_share_attachment_metadata(
+    attachment: StoredMindMapShareAttachment,
+) -> MapShareAttachmentMetadata {
+    MapShareAttachmentMetadata {
+        id: attachment.id,
+        share_id: attachment.share_id,
+        node_id: attachment.node_id,
+        name: attachment.name,
+        sanitized_name: attachment.sanitized_name,
+        content_type: attachment.content_type,
+        size_bytes: attachment.size_bytes,
+        uploaded_at: attachment.uploaded_at,
+        encryption_meta: attachment.encryption_meta,
+        checksum_sha256: attachment.checksum_sha256,
+    }
 }
 
 async fn find_owned(db: &DynSqlStore, id: &str, user_id: &str) -> Result<StoredMindMap, AppError> {

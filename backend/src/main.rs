@@ -31,8 +31,10 @@ use tower_http::{
 use tracing::Level;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+use chrono::Utc;
 use config::AppConfig;
 use db::{minio::MinioClient, postgres::PostgresDb, sql_store::DynSqlStore};
+use error::AppError;
 use middleware::auth::JwtService;
 use middleware::request_cleanup::release_request_caches;
 use middleware::request_id::request_id_layer;
@@ -42,7 +44,73 @@ use routes::{
     auth_sql::{router as auth_sql_router, AuthSqlState},
     mindmaps_sql::{router as mindmaps_sql_router, MindMapsSqlState},
     public::{router as public_router, PublicState},
+    share_public::{router as share_public_router, SharePublicState},
 };
+
+/// How many expired shares to clear per sweep. Bounded so one pass cannot
+/// stall on a large backlog.
+const SHARE_PURGE_BATCH: i64 = 200;
+
+/// Deletes the stored ciphertext of shares that are revoked or past expiry.
+///
+/// A share blob is a second, independently-keyed copy of a map. Once the share
+/// is over, that copy has no reason to exist — and it counts against the
+/// owner's storage until it is gone.
+async fn purge_expired_shares(store: &DynSqlStore, minio: &MinioClient) {
+    let shares = match store
+        .list_purgeable_mind_map_shares(Utc::now(), SHARE_PURGE_BATCH)
+        .await
+    {
+        Ok(shares) if shares.is_empty() => return,
+        Ok(shares) => shares,
+        Err(error) => {
+            tracing::warn!(?error, "share purge query failed");
+            return;
+        }
+    };
+
+    let mut cleared = 0_usize;
+    for share in shares {
+        let attachments = match store.list_mind_map_share_attachments(&share.id).await {
+            Ok(attachments) => attachments,
+            Err(error) => {
+                tracing::warn!(?error, "could not list share attachments");
+                continue;
+            }
+        };
+
+        let mut failed = false;
+        for attachment in &attachments {
+            if let Err(error) = minio.delete_object(&attachment.s3_key).await {
+                if !matches!(error, AppError::NotFound(_)) {
+                    tracing::warn!(?error, "share attachment delete failed");
+                    failed = true;
+                }
+            }
+        }
+
+        if let Err(error) = minio.delete_object(&share.s3_key).await {
+            if !matches!(error, AppError::NotFound(_)) {
+                tracing::warn!(?error, "share blob delete failed");
+                failed = true;
+            }
+        }
+
+        // Only mark it done once the bytes are actually gone, so a storage
+        // outage retries on the next sweep instead of orphaning the object.
+        if failed {
+            continue;
+        }
+        match store.mark_mind_map_share_purged(&share.id).await {
+            Ok(()) => cleared += 1,
+            Err(error) => tracing::warn!(?error, "could not mark share purged"),
+        }
+    }
+
+    if cleared > 0 {
+        tracing::info!(cleared, "purged expired share blobs");
+    }
+}
 
 async fn health() -> (StatusCode, &'static str) {
     (StatusCode::OK, "OK")
@@ -121,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let sql_store: Option<DynSqlStore> = Some(Arc::new(PostgresDb::connect(&cfg).await?));
+    let sql_store_for_purge = sql_store.clone();
 
     // ── CORS ──────────────────────────────────────────────────────────────────
     let allowed_origins: Vec<_> = cfg
@@ -163,6 +232,11 @@ async fn main() -> anyhow::Result<()> {
 
         let public_state = PublicState {};
 
+        let share_public_state = SharePublicState {
+            db: sql_store.clone(),
+            minio: minio.clone(),
+        };
+
         let admin_state = AdminState {
             db: sql_store.clone(),
             minio: minio.clone(),
@@ -189,6 +263,9 @@ async fn main() -> anyhow::Result<()> {
             .nest("/api/admin", admin_router(admin_state))
             .nest("/api/mindmaps", mindmaps_sql_router(mindmaps_state))
             .nest("/api/public", public_router(public_state.clone()))
+            // Unauthenticated: a share link is opened by a recipient who has no
+            // account here. The ciphertext is useless without the passphrase.
+            .nest("/share", share_public_router(share_public_state))
             .nest_service("/admin/", admin_static_service)
             .fallback_service(app_static_service)
             .layer(from_fn(release_request_caches))
@@ -204,6 +281,21 @@ async fn main() -> anyhow::Result<()> {
             .layer(from_fn(request_id_layer))
             .layer(cors)
     };
+
+    // ── Retention ─────────────────────────────────────────────────────────────
+    // Revoked shares are cleared inline at revoke time; this daily sweep catches
+    // the ones that simply ran out of time, plus anything an inline delete
+    // failed to remove.
+    if let Some(store) = sql_store_for_purge {
+        let purge_minio = minio.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
+            loop {
+                ticker.tick().await;
+                purge_expired_shares(&store, &purge_minio).await;
+            }
+        });
+    }
 
     // ── Listen ────────────────────────────────────────────────────────────────
     let listener = tokio::net::TcpListener::bind(cfg.listen_addr()).await?;

@@ -12,6 +12,7 @@ use crate::{
         attachment::AttachmentStatus,
         mindmap::VersionSnapshot,
         settings::UserAccountSettings,
+        share::{ShareScope, ShareStatus},
         user::{Argon2Params, SubscriptionTier},
     },
 };
@@ -250,6 +251,100 @@ pub struct MindMapAttachmentUploadUpdate {
     pub status: AttachmentStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct StoredMindMapShare {
+    pub id: String,
+    pub map_id: String,
+    pub share_name: String,
+    pub scope: ShareScope,
+    pub s3_key: String,
+    pub s3_version_id: Option<String>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked: bool,
+    pub include_attachments: bool,
+    pub passphrase_hint: Option<String>,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub encryption_meta: Value,
+    pub checksum_sha256: Option<String>,
+    pub status: ShareStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMindMapShare {
+    pub id: String,
+    pub map_id: String,
+    pub share_name: String,
+    pub scope: ShareScope,
+    pub s3_key: String,
+    pub s3_version_id: Option<String>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked: bool,
+    pub include_attachments: bool,
+    pub passphrase_hint: Option<String>,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub encryption_meta: Value,
+    pub checksum_sha256: Option<String>,
+    pub status: ShareStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct MindMapShareUploadUpdate {
+    pub s3_version_id: String,
+    pub checksum_sha256: Option<String>,
+    pub status: ShareStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredMindMapShareAttachment {
+    pub id: String,
+    pub share_id: String,
+    pub source_attachment_id: Option<String>,
+    pub node_id: Option<String>,
+    pub name: String,
+    pub sanitized_name: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub s3_key: String,
+    pub s3_version_id: Option<String>,
+    pub uploaded_at: DateTime<Utc>,
+    pub encryption_meta: Value,
+    pub checksum_sha256: Option<String>,
+    pub status: AttachmentStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMindMapShareAttachment {
+    pub id: String,
+    pub share_id: String,
+    pub source_attachment_id: Option<String>,
+    pub node_id: Option<String>,
+    pub name: String,
+    pub sanitized_name: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub s3_key: String,
+    pub s3_version_id: Option<String>,
+    pub uploaded_at: DateTime<Utc>,
+    pub encryption_meta: Value,
+    pub checksum_sha256: Option<String>,
+    pub status: AttachmentStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct MindMapShareAttachmentUploadUpdate {
+    pub s3_version_id: String,
+    pub checksum_sha256: Option<String>,
+    pub status: AttachmentStatus,
+}
+
 impl StoredUser {
     pub fn manual_subscription_active(&self, now: DateTime<Utc>) -> bool {
         self.manual_subscription_tier.is_some()
@@ -445,6 +540,58 @@ pub trait SqlStore: Send + Sync {
         &self,
         map_id: &str,
         attachment_id: &str,
+    ) -> Result<(), AppError>;
+
+    async fn list_mind_map_shares(&self, map_id: &str) -> Result<Vec<StoredMindMapShare>, AppError>;
+    async fn create_mind_map_share(&self, share: NewMindMapShare) -> Result<(), AppError>;
+    async fn get_mind_map_share(
+        &self,
+        map_id: &str,
+        share_id: &str,
+    ) -> Result<Option<StoredMindMapShare>, AppError>;
+    async fn get_public_mind_map_share(
+        &self,
+        share_id: &str,
+    ) -> Result<Option<StoredMindMapShare>, AppError>;
+    async fn complete_mind_map_share_upload(
+        &self,
+        map_id: &str,
+        share_id: &str,
+        update: MindMapShareUploadUpdate,
+    ) -> Result<(), AppError>;
+    async fn set_mind_map_share_revoked(
+        &self,
+        map_id: &str,
+        share_id: &str,
+        revoked: bool,
+    ) -> Result<(), AppError>;
+    /// Shares whose blob should no longer exist: revoked, or past their expiry.
+    /// `status = 'available'` is the marker that a blob is still in storage, so
+    /// this returns work to do rather than everything ever revoked.
+    async fn list_purgeable_mind_map_shares(
+        &self,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<StoredMindMapShare>, AppError>;
+    async fn mark_mind_map_share_purged(&self, share_id: &str) -> Result<(), AppError>;
+    async fn list_mind_map_share_attachments(
+        &self,
+        share_id: &str,
+    ) -> Result<Vec<StoredMindMapShareAttachment>, AppError>;
+    async fn create_mind_map_share_attachment(
+        &self,
+        attachment: NewMindMapShareAttachment,
+    ) -> Result<(), AppError>;
+    async fn get_mind_map_share_attachment(
+        &self,
+        share_id: &str,
+        attachment_id: &str,
+    ) -> Result<Option<StoredMindMapShareAttachment>, AppError>;
+    async fn complete_mind_map_share_attachment_upload(
+        &self,
+        share_id: &str,
+        attachment_id: &str,
+        update: MindMapShareAttachmentUploadUpdate,
     ) -> Result<(), AppError>;
 }
 

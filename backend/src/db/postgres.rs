@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use tokio_postgres::{types::Json, Client, NoTls, Row};
 
 use crate::{
@@ -10,11 +11,12 @@ use crate::{
     db::sql_store::{
         AdminUserAdminUpdate, AdminUserRecord, ManualSubscriptionUpdate,
         MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate,
+        MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate,
         NewMindMap,
-        NewMindMapAttachment, NewUser,
+        NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, NewUser,
         RotateCredentialsUpdate,
         SqlStore,
-        StoredMindMap, StoredMindMapAttachment,
+        StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment,
         StoredUser,
         UserProfileUpdate,
     },
@@ -25,6 +27,7 @@ use crate::{
         attachment::AttachmentStatus,
         mindmap::VersionSnapshot,
         settings::UserAccountSettings,
+        share::{ShareScope, ShareStatus},
         user::{Argon2Params, SubscriptionTier},
     },
 };
@@ -172,6 +175,44 @@ impl PostgresDb {
                     status TEXT NOT NULL DEFAULT 'pending'
                 );
 
+                CREATE TABLE IF NOT EXISTS mind_map_shares (
+                    id TEXT PRIMARY KEY,
+                    map_id TEXT NOT NULL REFERENCES mind_maps(id) ON DELETE CASCADE,
+                    share_name TEXT NOT NULL,
+                    share_scope TEXT NOT NULL,
+                    s3_key TEXT NOT NULL,
+                    s3_version_id TEXT,
+                    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    expires_at TIMESTAMPTZ,
+                    revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                    include_attachments BOOLEAN NOT NULL DEFAULT FALSE,
+                    passphrase_hint TEXT,
+                    content_type TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    encryption_meta JSONB NOT NULL,
+                    checksum_sha256 TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                );
+
+                CREATE TABLE IF NOT EXISTS mind_map_share_attachments (
+                    id TEXT PRIMARY KEY,
+                    share_id TEXT NOT NULL REFERENCES mind_map_shares(id) ON DELETE CASCADE,
+                    source_attachment_id TEXT,
+                    node_id TEXT,
+                    name TEXT NOT NULL,
+                    sanitized_name TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    s3_key TEXT NOT NULL,
+                    s3_version_id TEXT,
+                    uploaded_at TIMESTAMPTZ NOT NULL,
+                    encryption_meta JSONB NOT NULL,
+                    checksum_sha256 TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                );
+
                 CREATE TABLE IF NOT EXISTS admin_audit_events (
                     id TEXT PRIMARY KEY,
                     entity_type TEXT NOT NULL,
@@ -187,7 +228,12 @@ impl PostgresDb {
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_map_id ON mind_map_attachments (map_id, uploaded_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_uploaded_by ON mind_map_attachments (uploaded_by);
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_status ON mind_map_attachments (status);
-                CREATE INDEX IF NOT EXISTS idx_admin_audit_events_created_at ON admin_audit_events (created_at DESC);",
+                CREATE INDEX IF NOT EXISTS idx_admin_audit_events_created_at ON admin_audit_events (created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_mind_map_shares_map_id ON mind_map_shares (map_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_mind_map_shares_status ON mind_map_shares (status, revoked);
+                CREATE INDEX IF NOT EXISTS idx_mind_map_shares_expires_at ON mind_map_shares (expires_at);
+                CREATE INDEX IF NOT EXISTS idx_mind_map_share_attachments_share_id ON mind_map_share_attachments (share_id, uploaded_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_mind_map_share_attachments_status ON mind_map_share_attachments (status);",
             )
             .await
             .context("failed to ensure PostgreSQL schema")?;
@@ -987,6 +1033,337 @@ impl SqlStore for PostgresDb {
 
         Ok(())
     }
+
+    async fn list_mind_map_shares(&self, map_id: &str) -> Result<Vec<StoredMindMapShare>, AppError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
+                        created_at, updated_at, expires_at, revoked, include_attachments,
+                        passphrase_hint, content_type, size_bytes, encryption_meta,
+                        checksum_sha256, status
+                 FROM mind_map_shares
+                 WHERE map_id = $1
+                 ORDER BY created_at DESC",
+                &[&map_id],
+            )
+            .await?;
+
+        rows.into_iter().map(stored_mind_map_share_from_row).collect()
+    }
+
+    async fn create_mind_map_share(&self, share: NewMindMapShare) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "INSERT INTO mind_map_shares (
+                    id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
+                    created_at, updated_at, expires_at, revoked, include_attachments,
+                    passphrase_hint, content_type, size_bytes, encryption_meta,
+                    checksum_sha256, status
+                 ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7,
+                    $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16,
+                    $17, $18
+                 )",
+                &[
+                    &share.id,
+                    &share.map_id,
+                    &share.share_name,
+                    &share.scope.as_str(),
+                    &share.s3_key,
+                    &share.s3_version_id,
+                    &share.created_by,
+                    &share.created_at,
+                    &share.updated_at,
+                    &share.expires_at,
+                    &share.revoked,
+                    &share.include_attachments,
+                    &share.passphrase_hint,
+                    &share.content_type,
+                    &share.size_bytes,
+                    &Json(&share.encryption_meta),
+                    &share.checksum_sha256,
+                    &share.status.as_str(),
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn get_mind_map_share(
+        &self,
+        map_id: &str,
+        share_id: &str,
+    ) -> Result<Option<StoredMindMapShare>, AppError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
+                        created_at, updated_at, expires_at, revoked, include_attachments,
+                        passphrase_hint, content_type, size_bytes, encryption_meta,
+                        checksum_sha256, status
+                 FROM mind_map_shares
+                 WHERE map_id = $1 AND id = $2
+                 LIMIT 1",
+                &[&map_id, &share_id],
+            )
+            .await?;
+
+        row.map(stored_mind_map_share_from_row).transpose()
+    }
+
+    async fn get_public_mind_map_share(&self, share_id: &str) -> Result<Option<StoredMindMapShare>, AppError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
+                        created_at, updated_at, expires_at, revoked, include_attachments,
+                        passphrase_hint, content_type, size_bytes, encryption_meta,
+                        checksum_sha256, status
+                 FROM mind_map_shares
+                 WHERE id = $1
+                 LIMIT 1",
+                &[&share_id],
+            )
+            .await?;
+
+        row.map(stored_mind_map_share_from_row).transpose()
+    }
+
+    async fn complete_mind_map_share_upload(
+        &self,
+        map_id: &str,
+        share_id: &str,
+        update: MindMapShareUploadUpdate,
+    ) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "UPDATE mind_map_shares
+                 SET s3_version_id = $1,
+                     checksum_sha256 = $2,
+                     status = $3,
+                     updated_at = NOW()
+                 WHERE map_id = $4 AND id = $5",
+                &[
+                    &update.s3_version_id,
+                    &update.checksum_sha256,
+                    &update.status.as_str(),
+                    &map_id,
+                    &share_id,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn set_mind_map_share_revoked(
+        &self,
+        map_id: &str,
+        share_id: &str,
+        revoked: bool,
+    ) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "UPDATE mind_map_shares
+                 SET revoked = $1,
+                     status = CASE WHEN $1 THEN 'revoked' ELSE status END,
+                     updated_at = NOW()
+                 WHERE map_id = $2 AND id = $3",
+                &[&revoked, &map_id, &share_id],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn list_purgeable_mind_map_shares(
+        &self,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<StoredMindMapShare>, AppError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT id, map_id, share_name, share_scope, s3_key, s3_version_id, created_by,
+                        created_at, updated_at, expires_at, revoked, include_attachments,
+                        passphrase_hint, content_type, size_bytes, encryption_meta,
+                        checksum_sha256, status
+                 FROM mind_map_shares
+                 WHERE status = 'available'
+                   AND (revoked = TRUE OR (expires_at IS NOT NULL AND expires_at < $1))
+                 ORDER BY updated_at ASC
+                 LIMIT $2",
+                &[&now, &limit],
+            )
+            .await?;
+
+        rows.into_iter().map(stored_mind_map_share_from_row).collect()
+    }
+
+    async fn mark_mind_map_share_purged(&self, share_id: &str) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "UPDATE mind_map_shares
+                 SET status = 'revoked', revoked = TRUE, size_bytes = 0, updated_at = NOW()
+                 WHERE id = $1",
+                &[&share_id],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn list_mind_map_share_attachments(
+        &self,
+        share_id: &str,
+    ) -> Result<Vec<StoredMindMapShareAttachment>, AppError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT id, share_id, source_attachment_id, node_id, name, sanitized_name,
+                        content_type, size_bytes, s3_key, s3_version_id, uploaded_at,
+                        encryption_meta, checksum_sha256, status
+                 FROM mind_map_share_attachments
+                 WHERE share_id = $1 AND status <> 'deleted'
+                 ORDER BY uploaded_at DESC",
+                &[&share_id],
+            )
+            .await?;
+
+        rows.into_iter()
+            .map(stored_mind_map_share_attachment_from_row)
+            .collect()
+    }
+
+    async fn create_mind_map_share_attachment(
+        &self,
+        attachment: NewMindMapShareAttachment,
+    ) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "INSERT INTO mind_map_share_attachments (
+                    id, share_id, source_attachment_id, node_id, name, sanitized_name,
+                    content_type, size_bytes, s3_key, s3_version_id, uploaded_at,
+                    encryption_meta, checksum_sha256, status
+                 ) VALUES (
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9, $10, $11,
+                    $12, $13, $14
+                 )",
+                &[
+                    &attachment.id,
+                    &attachment.share_id,
+                    &attachment.source_attachment_id,
+                    &attachment.node_id,
+                    &attachment.name,
+                    &attachment.sanitized_name,
+                    &attachment.content_type,
+                    &attachment.size_bytes,
+                    &attachment.s3_key,
+                    &attachment.s3_version_id,
+                    &attachment.uploaded_at,
+                    &Json(&attachment.encryption_meta),
+                    &attachment.checksum_sha256,
+                    &attachment.status.as_str(),
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn get_mind_map_share_attachment(
+        &self,
+        share_id: &str,
+        attachment_id: &str,
+    ) -> Result<Option<StoredMindMapShareAttachment>, AppError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT id, share_id, source_attachment_id, node_id, name, sanitized_name,
+                        content_type, size_bytes, s3_key, s3_version_id, uploaded_at,
+                        encryption_meta, checksum_sha256, status
+                 FROM mind_map_share_attachments
+                 WHERE share_id = $1 AND id = $2 AND status <> 'deleted'
+                 LIMIT 1",
+                &[&share_id, &attachment_id],
+            )
+            .await?;
+
+        row.map(stored_mind_map_share_attachment_from_row).transpose()
+    }
+
+    async fn complete_mind_map_share_attachment_upload(
+        &self,
+        share_id: &str,
+        attachment_id: &str,
+        update: MindMapShareAttachmentUploadUpdate,
+    ) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "UPDATE mind_map_share_attachments
+                 SET s3_version_id = $1,
+                     checksum_sha256 = $2,
+                     status = $3
+                 WHERE share_id = $4 AND id = $5 AND status <> 'deleted'",
+                &[
+                    &update.s3_version_id,
+                    &update.checksum_sha256,
+                    &update.status.as_str(),
+                    &share_id,
+                    &attachment_id,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+}
+
+fn stored_mind_map_share_from_row(row: Row) -> Result<StoredMindMapShare, AppError> {
+    Ok(StoredMindMapShare {
+        id: row.get("id"),
+        map_id: row.get("map_id"),
+        share_name: row.get("share_name"),
+        scope: ShareScope::from_str(&row.get::<_, String>("share_scope")),
+        s3_key: row.get("s3_key"),
+        s3_version_id: row.get("s3_version_id"),
+        created_by: row.get("created_by"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        expires_at: row.get("expires_at"),
+        revoked: row.get("revoked"),
+        include_attachments: row.get("include_attachments"),
+        passphrase_hint: row.get("passphrase_hint"),
+        content_type: row.get("content_type"),
+        size_bytes: row.get("size_bytes"),
+        encryption_meta: row.get::<_, Json<serde_json::Value>>("encryption_meta").0,
+        checksum_sha256: row.get("checksum_sha256"),
+        status: ShareStatus::from_str(&row.get::<_, String>("status")),
+    })
+}
+fn stored_mind_map_share_attachment_from_row(
+    row: Row,
+) -> Result<StoredMindMapShareAttachment, AppError> {
+    Ok(StoredMindMapShareAttachment {
+        id: row.get("id"),
+        share_id: row.get("share_id"),
+        source_attachment_id: row.get("source_attachment_id"),
+        node_id: row.get("node_id"),
+        name: row.get("name"),
+        sanitized_name: row.get("sanitized_name"),
+        content_type: row.get("content_type"),
+        size_bytes: row.get("size_bytes"),
+        s3_key: row.get("s3_key"),
+        s3_version_id: row.get("s3_version_id"),
+        uploaded_at: row.get("uploaded_at"),
+        encryption_meta: row.get::<_, Json<serde_json::Value>>("encryption_meta").0,
+        checksum_sha256: row.get("checksum_sha256"),
+        status: AttachmentStatus::from_str(&row.get::<_, String>("status")),
+    })
 }
 
 fn stored_user_from_row(row: Row) -> Result<StoredUser, AppError> {
