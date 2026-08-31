@@ -10,6 +10,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Security
 - **Updated `h2` to 0.4.19** for RUSTSEC-2026-0258 — a remote peer could make the HTTP/2 stack buffer unbounded empty DATA frames.
+- **Raised the admin console's `nanoid` override to 3.3.18** for GHSA-2v37-7h3g-55p8; the previous pin sat one patch below the fix. The app bundle already resolved a patched version.
 
 ### Changed
 - **Compose binds Postgres and Garage ports to `127.0.0.1`** — Docker's published ports bypass ufw-style host firewalls, so the previous `5432:5432` / `9000:3900` mappings exposed the database and object store to the network on a stock host. Only `8090` is meant to be public. Documented in `docs/DEPLOYMENT.md`, including how to expose presigned URLs through a reverse proxy instead.
