@@ -18,8 +18,102 @@ on:
       - '.github/workflows/build-server-image.yml'
   workflow_dispatch:
 
+# Each architecture is built on a runner of that architecture and pushed by
+# digest; a second job then joins the digests into one multi-arch tag. The
+# alternative — one amd64 runner emulating arm64 through QEMU — compiles the
+# Rust backend under emulation and takes the better part of an hour.
 jobs:
-  docker-image:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Compute image coordinates
+        id: image
+        shell: bash
+        run: |
+          echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+          echo "slug=${MATRIX_PLATFORM//\//-}" >> "$GITHUB_OUTPUT"
+        env:
+          MATRIX_PLATFORM: ${{ matrix.platform }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.ghcr }}
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pull requests validate that the image still builds, and push nothing.
+      - name: Build only (pull request)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          cache-from: type=gha,scope=${{ steps.image.outputs.slug }}
+          cache-to: type=gha,mode=max,scope=${{ steps.image.outputs.slug }}
+
+      - name: Build and push by digest
+        id: build
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ steps.image.outputs.ghcr }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.image.outputs.slug }}
+          cache-to: type=gha,mode=max,scope=${{ steps.image.outputs.slug }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.image.outputs.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: publish multi-arch tags
+    needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,8 +123,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -49,15 +147,16 @@ jobs:
       - name: Compute image coordinates
         id: image
         shell: bash
-        run: |
-          echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
+        run: echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mindmapvault-server" >> "$GITHUB_OUTPUT"
 
+      # Version tags and `latest` belong to releases. A push to main publishes
+      # only its sha tag, so `latest` keeps meaning "newest release" rather than
+      # "newest commit".
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ steps.image.outputs.ghcr }}
+          images: ${{ steps.image.outputs.ghcr }}
           tags: |
             type=ref,event=tag
             type=raw,value=v${{ steps.app_version.outputs.value }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
@@ -65,26 +164,19 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and optionally push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: backend/Dockerfile
-          # arm64 matters for self-hosters on a Pi or an Ampere VPS. It is built
-          # under emulation, so it is the slow half of this job.
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ steps.image.outputs.ghcr }}@sha256:%s ' *)
 
       - name: Publish usage summary
         shell: bash
@@ -93,15 +185,12 @@ jobs:
             echo "## Server Image"
             echo ""
             echo "GHCR image: \`${{ steps.image.outputs.ghcr }}\`"
+            echo "Platforms: \`linux/amd64\`, \`linux/arm64\` (each built on a native runner)."
             echo "Docker Hub publishing is handled separately by scripts/publish_dockerhub/publish-to-dockerhub.sh."
             echo ""
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              echo "This run validated the Docker build without pushing an image."
-            else
-              echo "This run pushed image tags to the configured registries:"
-              echo ""
-              echo '```'
-              echo "${{ steps.meta.outputs.tags }}"
-              echo '```'
-            fi
+            echo "Pushed tags:"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
