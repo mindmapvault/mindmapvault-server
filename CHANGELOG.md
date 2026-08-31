@@ -6,6 +6,25 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-08-31
+
+### Changed
+- **Compose binds Postgres and Garage ports to `127.0.0.1`** — Docker's published ports bypass ufw-style host firewalls, so the previous `5432:5432` / `9000:3900` mappings exposed the database and object store to the network on a stock host. Only `8090` is meant to be public. Documented in `docs/DEPLOYMENT.md`, including how to expose presigned URLs through a reverse proxy instead.
+- **Compiled-in CORS default trimmed to local origins** — the binary's fallback `CORS_ALLOWED_ORIGINS` no longer includes hosted production domains; it now covers only localhost development and the desktop (tauri) origins. Deployments that need more set the env var, as the compose file already does. An empty list logs a startup warning.
+- **Request ID per request** — every HTTP request now gets a UUID injected as a tracing span field and echoed back in the `X-Request-ID` response header, so all log lines for one request can be correlated.
+- **Request/response logging at INFO** — `TraceLayer` now logs HTTP method, path, status code, and latency at `INFO` level (was `DEBUG`, so effectively silent in production). The compose default `RUST_LOG` drops from `backend=debug` to `backend=info` accordingly.
+- **Database errors no longer log PII** — previously the full PostgreSQL error message was logged, which can include column values from constraint violations (e.g. `DETAIL: Key (username)=(alice) already exists`). Now only the PostgreSQL error code (e.g. `23505`) is logged.
+- **JWT errors return a generic client message** — the raw `jsonwebtoken` error string (which can reveal algorithm details) is no longer sent to clients. Clients receive `"invalid or expired token"`; the error kind is logged server-side. This covers both the error type itself and the auth middleware, which was formatting the library error into its own message.
+- **Usernames removed from log lines** — registration, login, and account-deletion events no longer log the username. Login and deletion log the opaque user UUID instead.
+- **Structured error logging across all variants** — every `AppError` variant now emits a log event at the right severity, carrying an `error_kind` field for log-based filtering.
+
+### Fixed
+- **PNG and PDF exports came out empty (background and watermark only)** — `renderSvgToCanvas` serialized the live `<svg class="mm-canvas">` into a `data:` URI, but that element is sized purely by CSS and carries no `width`, `height` or `viewBox` attribute. In a standalone SVG image none of that CSS applies, so the image had no intrinsic size and rasterized at the SVG default of 300×150; a centred mind map sits outside that box and was cropped away entirely. The clone is now stamped with the measured viewport size (plus a matching `viewBox` when absent) before serialization.
+- **Export filenames picked up the day of the month as a fake version** — a date fallback version label (`v 6. 8. 2026`) matched an unanchored `/v\s*(\d+)/i` and exported `MyMap` as `MyMap-v6.png`. The match is now anchored to the whole label, so only a genuine sequential label (`v12`) contributes a token. The mobile and page-level filename builders also gained the existing dedupe guard, so a vault titled `guide-v3` at version `v3` no longer exports as `guide-v3-v3`.
+- **Markdown import turned flat lists into descending chains** — each sibling list item became a child of the previous one, because the list's base level was read from the top of the parse stack instead of the enclosing heading level.
+- **`VITE_BACKEND_URL` in `.env` was ignored** — both `vite.config.ts` files read `process.env`, which Vite does not populate from `.env` files. They now use `loadEnv`, so the dev proxy can target a non-local backend without code changes.
+- **Uploads over ~2 MB failed with a bare `413`.** `POST .../attachments/init` accepted the full declared size first, so the plan checks reported the file as allowed and only the upload that followed failed. Two body limits were stacked: axum's 2 MB default, which the upload routes never overrode, and a global 10 MiB `RequestBodyLimitLayer` that silently clipped anything set above it. The vault and attachment upload routes now carry an explicit limit derived from the largest per-plan attachment cap, and the global ceiling clears it.
+
 ## [0.3.30] - 2026-06-07
 
 ### Added
