@@ -8,6 +8,18 @@ pub const CLOUD_PAID_LIMIT_BYTES: i64 = 250 * 1024 * 1024;
 pub const CLOUD_FREE_MAX_ATTACHMENT_SIZE_BYTES: i64 = 5 * 1024 * 1024;
 pub const CLOUD_PAID_MAX_ATTACHMENT_SIZE_BYTES: i64 = 50 * 1024 * 1024;
 
+/// Largest body an upload route will buffer.
+///
+/// Derived from the biggest per-plan attachment cap rather than written out, so
+/// the transport can never refuse a file the plan allows. Without it, axum's
+/// 2 MB default body limit applied to the upload routes: `init` accepted the
+/// declared size and the upload that followed died with a bare 413.
+///
+/// The margin covers a caller that declares plaintext size and sends AES-GCM
+/// ciphertext, which is 28 bytes longer.
+pub const MAX_UPLOAD_BODY_BYTES: usize =
+    CLOUD_PAID_MAX_ATTACHMENT_SIZE_BYTES as usize + 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubscriptionTier {

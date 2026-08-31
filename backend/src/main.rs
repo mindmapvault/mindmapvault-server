@@ -34,6 +34,7 @@ use config::AppConfig;
 use db::{minio::MinioClient, postgres::PostgresDb, sql_store::DynSqlStore};
 use middleware::auth::JwtService;
 use middleware::request_cleanup::release_request_caches;
+use models::user::MAX_UPLOAD_BODY_BYTES;
 use routes::{
     admin::{router as admin_router, AdminState},
     auth_sql::{router as auth_sql_router, AuthSqlState},
@@ -183,7 +184,10 @@ async fn main() -> anyhow::Result<()> {
             .nest_service("/admin/", admin_static_service)
             .fallback_service(app_static_service)
             .layer(from_fn(release_request_caches))
-            .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10 MiB
+            // The outer ceiling has to clear the largest per-route limit or it
+            // silently clips it: a 10 MiB ceiling here would override the
+            // attachment upload limit and the caller would only see a bare 413.
+            .layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BODY_BYTES))
             .layer(TraceLayer::new_for_http())
             .layer(cors)
     };

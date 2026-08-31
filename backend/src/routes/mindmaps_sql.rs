@@ -2,7 +2,7 @@ use std::{collections::{BTreeMap, HashMap, HashSet}, sync::Arc};
 
 use axum::{
     body::Bytes,
-    extract::{FromRef, Path, Query, State},
+    extract::{DefaultBodyLimit, FromRef, Path, Query, State},
     http::{header, HeaderValue},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -23,6 +23,7 @@ use crate::{
             MindMapListItem, PresignedUrlResponse, StorageSummary, UpdateVaultMetaRequest,
             UpsertMindMapRequest, VaultStorageInfo, VersionDetail, VersionSnapshot,
         },
+        user::MAX_UPLOAD_BODY_BYTES,
     },
 };
 
@@ -47,7 +48,10 @@ pub fn router(state: MindMapsSqlState) -> Router {
         .route("/my/storage", get(get_storage))
         .route("/{id}", get(get_mind_map).put(update_mind_map).delete(delete_mind_map))
         .route("/{id}/meta", put(update_vault_meta))
-        .route("/{id}/upload", post(upload_blob))
+        .route(
+            "/{id}/upload",
+            post(upload_blob).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
+        )
         .route("/{id}/blob", get(download_blob))
         .route("/{id}/upload-url", post(get_upload_url))
         .route("/{id}/confirm-upload", post(confirm_upload))
@@ -55,7 +59,10 @@ pub fn router(state: MindMapsSqlState) -> Router {
         .route("/{id}/attachments", get(list_attachments))
         .route("/{id}/attachments/init", post(init_attachment))
         .route("/{id}/attachments/{attachment_id}", get(get_attachment).patch(update_attachment).delete(delete_attachment))
-        .route("/{id}/attachments/{attachment_id}/upload", post(upload_attachment_blob))
+        .route(
+            "/{id}/attachments/{attachment_id}/upload",
+            post(upload_attachment_blob).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
+        )
         .route("/{id}/attachments/{attachment_id}/complete", post(complete_attachment_upload))
         .route("/{id}/attachments/{attachment_id}/download", get(get_attachment_download_url))
         .route("/{id}/attachments/{attachment_id}/blob", get(download_attachment_blob))
