@@ -32,6 +32,7 @@ target/
 docs/PARITY_CHECK.md
 docs/PARITY_IMPLEMENTATION_PLAN.md
 docs/RISK_ASSESSMENT.md
+docs/NODE_IMAGE_IMPLEMENTATION_PLAN.md
 
 # Compose and container state
 .docker/
