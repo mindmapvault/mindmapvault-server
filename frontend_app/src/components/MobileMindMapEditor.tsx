@@ -239,9 +239,13 @@ export function MobileMindMapEditor({
       .replace(/[\\/:*?"<>|]+/g, '-')
       .replace(/\s+/g, ' ')
       .trim();
-    const versionMatch = (versionLabel ?? '').match(/v\s*(\d+)/i);
+    // Anchored: a date fallback label ("v 6. 8. 2026") must not contribute a
+    // version token; only a real sequential label ("v12") does.
+    const versionMatch = (versionLabel ?? '').trim().match(/^v\s*(\d+)$/i);
     const versionToken = versionMatch ? `v${versionMatch[1]}` : null;
-    return versionToken ? `${safeTitle}-${versionToken}` : safeTitle;
+    const alreadyEndsWithVersion =
+      versionToken != null && new RegExp(`[-_ ]${versionToken}$`, 'i').test(safeTitle);
+    return (versionToken && !alreadyEndsWithVersion) ? `${safeTitle}-${versionToken}` : safeTitle;
   }, [title, versionLabel]);
 
   const toggleSelectedCollapse = useCallback(() => {

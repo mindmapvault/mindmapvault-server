@@ -1184,7 +1184,12 @@ export function DesktopMindMapEditor({
       .replace(/[\\/:*?"<>|]+/g, '-')
       .replace(/\s+/g, ' ')
       .trim();
-    const versionMatch = (versionLabel ?? '').match(/v\s*(\d+)/i);
+    // Only a real sequential version label ("v12") becomes a filename token.
+    // Anchored deliberately: local mode has no server-side version history and
+    // falls back to a date label ("v 6. 8. 2026"), which an unanchored match
+    // would read as version 6 — stamping the day of the month onto every
+    // export as "-v6".
+    const versionMatch = (versionLabel ?? '').trim().match(/^v\s*(\d+)$/i);
     const versionToken = versionMatch ? `v${versionMatch[1]}` : null;
     // Don't append the version token when the title already ends with it
     // (e.g. title "guide-v3" + versionLabel "v3" → "guide-v3", not "guide-v3-v3")
