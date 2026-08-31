@@ -997,19 +997,19 @@ export function EditorPage() {
       }, draft.passphrase);
 
       const created = await encryptedVaultApi.createShare(id, {
-        name: draft.name.trim() || `${title || 'vault'}.cmvshare`,
+        name: draft.name.trim() || `${title || 'vault'}.mmvshare`,
         scope: 'map',
         include_attachments: draft.includeAttachments,
         passphrase_hint: draft.passphraseHint.trim() || undefined,
         expires_at: expiresAt,
-        content_type: 'application/vnd.cryptmind.share+json',
+        content_type: 'application/vnd.mindmapvault.share+json',
         size_bytes: shareBundle.ciphertext.byteLength,
         encryption_meta: shareBundle.encryptionMeta,
       });
 
       const shareVersionId = await encryptedVaultApi.uploadPresigned(created.upload_url, shareBundle.ciphertext, {
         ...created.upload_headers,
-        'Content-Type': 'application/vnd.cryptmind.share+json',
+        'Content-Type': 'application/vnd.mindmapvault.share+json',
       });
       await encryptedVaultApi.completeShareUpload(id, created.share_id, shareVersionId ?? '', shareBundle.checksumSha256);
 

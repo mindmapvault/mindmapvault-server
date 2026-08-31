@@ -703,7 +703,7 @@ pub fn update_local_vault_meta(
 
 // ── File import / export ─────────────────────────────────────────────────────
 
-/// Exports a vault (metadata + blob) to a single .cmvault file.
+/// Exports a vault (metadata + blob) to a single .mmv file.
 /// The file format is: 4-byte JSON length (LE) ‖ JSON metadata ‖ blob bytes.
 #[tauri::command]
 pub fn export_vault_file(
@@ -740,7 +740,7 @@ pub fn export_vault_file(
     Ok(())
 }
 
-/// Imports a .cmvault file into the local store. Returns the new vault id.
+/// Imports a .mmv file into the local store. Returns the new vault id.
 #[tauri::command]
 pub fn import_vault_file(app: AppHandle, src_path: String) -> Result<String, LocalStoreError> {
     ensure_storage_initialized(&app)?;

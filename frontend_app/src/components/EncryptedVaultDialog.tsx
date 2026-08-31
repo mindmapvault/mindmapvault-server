@@ -116,7 +116,7 @@ export function EncryptedVaultDialog({
   const [deleteTarget, setDeleteTarget] = useState<AttachmentMetadata | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<MapShareOwnerSummary | null>(null);
   const [shareDraft, setShareDraft] = useState<ShareDraft>({
-    name: 'Encrypted share export.cmvshare',
+    name: 'Encrypted share export.mmvshare',
     passphrase: '',
     passphraseConfirm: '',
     passphraseHint: '',
@@ -382,7 +382,7 @@ export function EncryptedVaultDialog({
                       <input
                         value={shareDraft.name}
                         onChange={(e) => setShareDraft((d) => ({ ...d, name: e.target.value }))}
-                        placeholder="Project export.cmvshare"
+                        placeholder="Project export.mmvshare"
                         className={inputCls}
                       />
                     </Field>

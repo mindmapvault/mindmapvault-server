@@ -638,7 +638,7 @@ export function MobileMindMapEditor({
           )}
           {onDownloadEncrypted && (
             <button type="button" onClick={() => onDownloadEncrypted(buildExportFileBaseName())} className="rounded-full border border-[var(--border-muted)] px-3 py-1.5">
-              Download .crypt
+              Download .mmv
             </button>
           )}
           {onDownloadJson && (
