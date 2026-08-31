@@ -8,6 +8,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [0.3.31] - 2026-08-31
 
+### Security
+- **Updated `h2` to 0.4.19** for RUSTSEC-2026-0258 — a remote peer could make the HTTP/2 stack buffer unbounded empty DATA frames.
+
 ### Changed
 - **Compose binds Postgres and Garage ports to `127.0.0.1`** — Docker's published ports bypass ufw-style host firewalls, so the previous `5432:5432` / `9000:3900` mappings exposed the database and object store to the network on a stock host. Only `8090` is meant to be public. Documented in `docs/DEPLOYMENT.md`, including how to expose presigned URLs through a reverse proxy instead.
 - **Compiled-in CORS default trimmed to local origins** — the binary's fallback `CORS_ALLOWED_ORIGINS` no longer includes hosted production domains; it now covers only localhost development and the desktop (tauri) origins. Deployments that need more set the env var, as the compose file already does. An empty list logs a startup warning.
