@@ -82,11 +82,20 @@ Purpose:
 
 - stores encrypted blob objects through an S3-compatible API
 
-Exposed ports:
+Exposed ports (bound to `127.0.0.1` — see the note below):
 
 - `9000` on the host maps to Garage S3 API `3900`
 - `3901` on the host maps to Garage RPC `3901`
 - `3903` on the host maps to Garage admin API `3903`
+
+Port binding note: the compose file binds the Postgres and Garage host ports to
+`127.0.0.1` on purpose. Docker's published ports are inserted ahead of
+ufw-style host firewalls, so a plain `5432:5432` mapping exposes the database
+to the network even when the firewall says otherwise. Only `8090` is meant to
+be reachable from outside, ideally behind a reverse proxy. If browsers on
+other machines must reach presigned URLs directly, put the S3 endpoint behind
+the same reverse proxy and point `S3_PUBLIC_ENDPOINT` at that address instead
+of republishing port `9000`.
 
 Persistence:
 
