@@ -20,6 +20,7 @@ Interactive demo: https://mindmapvault.github.io/mindmapvault-foss/demo/
 - **Web UI included** — the end-user app is served at `/` and the admin surface at `/admin/` from the same Docker image
 - **PostgreSQL + S3-compatible storage** — works with MinIO, RustFS, or any S3-compatible endpoint
 - **Encrypted blob versioning** — the server tracks encrypted versions of each vault without ever seeing plaintext
+- **Encrypted share links** — share a vault by link with a passphrase the server never sees; recipients need no account, and revoking deletes the shared copy
 - **Single Docker image** — one container runs the API, the web UI, and the admin surface together
 - **AGPL-3 licensed**
 

@@ -18,6 +18,7 @@ Public sync/offline client features, public collaboration APIs, and Swagger-styl
 | Packaged web UI | The user app is served at `/`, and the admin surface is served at `/admin/` from the same Docker image. | Done |
 | PostgreSQL + S3-compatible storage | The server works with PostgreSQL plus MinIO, RustFS, or any S3-compatible endpoint. | Done |
 | Encrypted blob versioning | The server tracks encrypted versions of each vault without exposing plaintext content. | Done |
+| Encrypted share links | A vault can be exported as a passphrase-encrypted copy and shared by link. Recipients need no account; the server stores ciphertext and never sees the passphrase. Revoking deletes the copy. | Done |
 | Single Docker image runtime | One container runs the API, the web UI, and the admin surface together. | Done |
 | Public deployment tooling | Docker Hub publishing, guided install scripts, and deployment docs are available for self-hosters. | Done |
 | Public release documentation | Release notes, deployment guidance, and validation notes are published with the repository. | Done |
