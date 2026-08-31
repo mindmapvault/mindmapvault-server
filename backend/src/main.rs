@@ -26,14 +26,16 @@ use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     limit::RequestBodyLimitLayer,
     services::{ServeDir, ServeFile},
-    trace::TraceLayer,
+    trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
+use tracing::Level;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use config::AppConfig;
 use db::{minio::MinioClient, postgres::PostgresDb, sql_store::DynSqlStore};
 use middleware::auth::JwtService;
 use middleware::request_cleanup::release_request_caches;
+use middleware::request_id::request_id_layer;
 use models::user::MAX_UPLOAD_BODY_BYTES;
 use routes::{
     admin::{router as admin_router, AdminState},
@@ -188,7 +190,12 @@ async fn main() -> anyhow::Result<()> {
             // silently clips it: a 10 MiB ceiling here would override the
             // attachment upload limit and the caller would only see a bare 413.
             .layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BODY_BYTES))
-            .layer(TraceLayer::new_for_http())
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                    .on_response(DefaultOnResponse::new().level(Level::INFO)),
+            )
+            .layer(from_fn(request_id_layer))
             .layer(cors)
     };
 

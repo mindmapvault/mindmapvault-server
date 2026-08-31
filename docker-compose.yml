@@ -76,7 +76,7 @@ services:
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env.deploy}
 
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:1420,http://tauri.localhost,https://tauri.localhost}
-      RUST_LOG: ${RUST_LOG:-backend=debug,tower_http=info}
+      RUST_LOG: ${RUST_LOG:-backend=info,tower_http=info}
     ports:
       - "8090:8090"
 
