@@ -1014,7 +1014,17 @@ export function EditorPage() {
       await encryptedVaultApi.completeShareUpload(id, created.share_id, shareVersionId ?? '', shareBundle.checksumSha256);
 
       if (draft.includeAttachments) {
-        const sourceAttachments = attachments.length > 0 ? attachments.filter((item) => item.status === 'available') : await encryptedVaultApi.listAttachments(id);
+        // The fallback path fetches the raw list, which still contains the
+        // vault's own preview thumbnails — internal artefacts that must not be
+        // handed to a share recipient. Filter both branches the same way.
+        const candidateAttachments = attachments.length > 0
+          ? attachments
+          : await encryptedVaultApi.listAttachments(id);
+        const sourceAttachments = candidateAttachments.filter(
+          (item) => item.status === 'available'
+            && !isPreviewAttachment(item)
+            && !isHiddenVaultPreviewAttachment(item),
+        );
         for (const attachment of sourceAttachments) {
           const download = await encryptedVaultApi.getAttachmentDownload(id, attachment.id);
           const ciphertext = await encryptedVaultApi.downloadUrl(download.download_url);
@@ -1047,7 +1057,7 @@ export function EditorPage() {
     } finally {
       setShareBusy(false);
     }
-  }, [attachments, currentTree, id, isLocalMode, refreshSecureData, savedTitle, sessionKeys, title]);
+  }, [attachments, currentTree, id, isHiddenVaultPreviewAttachment, isLocalMode, isPreviewAttachment, refreshSecureData, savedTitle, sessionKeys, title]);
   // ── Unlock prompt ───────────────────────────────────────────────────────────
   if (!sessionKeys) {
     return <UnlockModal onUnlocked={() => load(searchParams.get('version_id') ?? undefined)} />;
