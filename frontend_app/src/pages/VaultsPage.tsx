@@ -21,6 +21,7 @@ import { useModeStore } from '../store/mode';
 import { useThemeStore } from '../store/theme';
 import { useUserLabels } from '../hooks/useUserLabels';
 import type {
+  MapShareOwnerSummary,
   MindMapTree,
   MindMapListItem,
   StorageSummary,
@@ -29,6 +30,7 @@ import type {
   VersionDetail,
 } from '../types';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
+import { BOARD_LABEL, IMPORTED_SHARE_LABEL, visibleLabels } from '../utils/vaultLabels';
 import { obsidianMarkdownToTree } from '../utils/markdownImport';
 import { freemindToTree } from '../utils/freemindImport';
 import { wisemappingToTree } from '../utils/wisemappingImport';
@@ -196,6 +198,7 @@ interface VaultCardProps {
   onRenameConfirm: (id: string) => Promise<void>;
   onRenameCancel: () => void;
   onOpenHistory: (id: string) => void;
+  onOpenShares: (id: string) => void;
   onDeleteRequest: (id: string, title: string | null) => void;
   onSetDraftColor: (id: string, color: string) => void;
   onSetDraftNote: (id: string, note: string) => void;
@@ -225,6 +228,7 @@ const VaultCard = memo(function VaultCard({
   onRenameConfirm,
   onRenameCancel,
   onOpenHistory,
+  onOpenShares,
   onDeleteRequest,
   onSetDraftColor,
   onSetDraftNote,
@@ -239,7 +243,7 @@ const VaultCard = memo(function VaultCard({
   const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
   const persistedEncryptionMode = normalizeEncryptionMode(map.vault_encryption_mode);
   const persistedLabels = normalizeVaultLabels(map.vault_labels);
-  const isBoard = map.vault_labels?.includes('__board__') ?? false;
+  const isBoard = map.vault_labels?.includes(BOARD_LABEL) ?? false;
   const vaultPath = isBoard ? `/boards/${map.id}` : `/vaults/${map.id}`;
   const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
   const blurPreview = isSharedVault;
@@ -325,6 +329,17 @@ const VaultCard = memo(function VaultCard({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
             </button>
+            {!isLocalMode && (
+              <button
+                onClick={() => onOpenShares(map.id)}
+                className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300"
+                title="Share exports"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+              </button>
+            )}
             {!isLocalMode && (
               <button
                 onClick={() => onOpenHistory(map.id)}
@@ -461,7 +476,7 @@ const VaultCard = memo(function VaultCard({
         <label className="block text-xs text-slate-400">
           Vault labels
           <div className="mt-1 flex flex-wrap gap-1">
-            {map.draftLabels.filter((lbl) => lbl !== '__board__').map((lbl) => (
+            {visibleLabels(map.draftLabels).map((lbl) => (
               <span
                 key={lbl}
                 className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-white"
@@ -532,6 +547,7 @@ interface VaultTableRowProps {
   onRenameConfirm: (id: string) => Promise<void>;
   onRenameCancel: () => void;
   onOpenHistory: (id: string) => void;
+  onOpenShares: (id: string) => void;
   onDeleteRequest: (id: string, title: string | null) => void;
 }
 
@@ -551,14 +567,15 @@ const VaultTableRow = memo(function VaultTableRow({
   onRenameConfirm,
   onRenameCancel,
   onOpenHistory,
+  onOpenShares,
   onDeleteRequest,
 }: VaultTableRowProps) {
   const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
-  const isBoard = map.vault_labels?.includes('__board__') ?? false;
+  const isBoard = map.vault_labels?.includes(BOARD_LABEL) ?? false;
   const vaultPath = isBoard ? `/boards/${map.id}` : `/vaults/${map.id}`;
   const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
-  const visibleLabels = map.draftLabels.filter((l) => l !== '__board__');
-  const hasTooltip = (visibleLabels.length > 0 || !!map.draftNote) && renamingId !== map.id;
+  const shownLabels = visibleLabels(map.draftLabels);
+  const hasTooltip = (shownLabels.length > 0 || !!map.draftNote) && renamingId !== map.id;
   const [tooltipVisible, setTooltipVisible] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const tooltipTdRef = useRef<HTMLTableCellElement>(null);
@@ -637,9 +654,9 @@ const VaultTableRow = memo(function VaultTableRow({
             <span className="block truncate text-sm font-medium text-white">
               {map.title ?? <span className="italic text-slate-500">Decrypting…</span>}
             </span>
-            {visibleLabels.length > 0 && (
+            {shownLabels.length > 0 && (
               <span className="mt-1 flex flex-wrap gap-1">
-                {visibleLabels.slice(0, 6).map((lbl) => (
+                {shownLabels.slice(0, 6).map((lbl) => (
                   <span
                     key={lbl}
                     className="rounded-full px-1.5 py-0.5 text-[10px] leading-none text-white"
@@ -691,6 +708,17 @@ const VaultTableRow = memo(function VaultTableRow({
           </button>
           {!isLocalMode && (
             <button
+              onClick={() => onOpenShares(map.id)}
+              className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300"
+              title="Share exports"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </button>
+          )}
+          {!isLocalMode && (
+            <button
               onClick={() => onOpenHistory(map.id)}
               className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-700 hover:text-slate-300"
               title="Version history"
@@ -717,11 +745,11 @@ const VaultTableRow = memo(function VaultTableRow({
         className="pointer-events-none fixed z-[9999] w-72 max-w-[85vw] rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-2xl"
         style={{ left: tooltipPos.x, top: tooltipPos.y, transform: 'translateY(-100%) translateY(-8px)' }}
       >
-        {visibleLabels.length > 0 && (
+        {shownLabels.length > 0 && (
           <div>
             <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">Labels</p>
             <div className="flex flex-wrap gap-1">
-              {visibleLabels.map((lbl) => (
+              {shownLabels.map((lbl) => (
                 <span
                   key={lbl}
                   className="rounded-full px-2 py-0.5 text-xs text-white"
@@ -810,6 +838,14 @@ export function VaultsPage() {
   const createMenuRef = useRef<HTMLDivElement>(null);
 
   const [historyVaultId, setHistoryVaultId] = useState<string | null>(null);
+
+  // Sharing needs the vault's keys, which only the editor holds, so the lobby
+  // opens the editor with the share panel already on rather than duplicating
+  // the flow here.
+  const openShares = useCallback(
+    (id: string) => navigate(`/vaults/${id}?secure=shares`),
+    [navigate],
+  );
   const [storagePathInfo, setStoragePathInfo] = useState<LocalStorageDirInfo | null>(null);
   const [storagePathInput, setStoragePathInput] = useState('');
   const [storagePathWorking, setStoragePathWorking] = useState(false);
@@ -821,7 +857,8 @@ export function VaultsPage() {
   const [renaming, setRenaming] = useState(false);
   const [pendingVaultDeletion, setPendingVaultDeletion] = useState<PendingVaultDeletion | null>(null);
   const [deletingVaultId, setDeletingVaultId] = useState<string | null>(null);
-  const [activeShareCounts, setActiveShareCounts] = useState<Record<string, number>>({});
+  const [activeSharesByVault, setActiveSharesByVault] = useState<Record<string, MapShareOwnerSummary[]>>({});
+  const [shareFilter, setShareFilter] = useState<'none' | 'outgoing' | 'imported'>('none');
   const [previewStates, setPreviewStates] = useState<Record<string, VaultPreviewState>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>(
@@ -1000,7 +1037,7 @@ export function VaultsPage() {
           }),
         );
       }
-      setActiveShareCounts({});
+      setActiveSharesByVault({});
       setPreviewStates({});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load vaults');
@@ -1051,15 +1088,15 @@ export function VaultsPage() {
           const shares = await encryptedVaultApi.listShares(id);
           return {
             id,
-            count: shares.filter((share) => !share.revoked && share.status !== 'revoked').length,
+            shares: shares.filter((share) => !share.revoked && share.status !== 'revoked'),
           };
         } catch {
-          return { id, count: 0 };
+          return { id, shares: [] as MapShareOwnerSummary[] };
         }
       }),
     ).then((results) => {
       if (!active) return;
-      setActiveShareCounts(Object.fromEntries(results.map((result) => [result.id, result.count])));
+      setActiveSharesByVault(Object.fromEntries(results.map((result) => [result.id, result.shares])));
     });
 
     return () => {
@@ -1317,7 +1354,7 @@ export function VaultsPage() {
       });
 
       await storage.uploadBlob(created.id, encBlob);
-      await storage.updateMeta(created.id, { vault_labels: ['__board__'] });
+      await storage.updateMeta(created.id, { vault_labels: [BOARD_LABEL] });
       setNewBoardTitle('');
       setShowCreateBoard(false);
       navigate(`/boards/${created.id}`);
@@ -1573,16 +1610,36 @@ export function VaultsPage() {
     [storageSummary],
   );
 
+  // Two views on sharing, from the only data that exists for each direction:
+  // outgoing shares are real server records, while the incoming side can only
+  // be the vaults this account imported from a share (a share has no recipient).
+  const outgoingShareCount = useMemo(
+    () => Object.values(activeSharesByVault).reduce((sum, shares) => sum + shares.length, 0),
+    [activeSharesByVault],
+  );
+  const outgoingVaultIds = useMemo(
+    () => new Set(Object.entries(activeSharesByVault).filter(([, s]) => s.length > 0).map(([id]) => id)),
+    [activeSharesByVault],
+  );
+  const importedVaultIds = useMemo(
+    () => new Set(maps.filter((m) => m.vault_labels?.includes(IMPORTED_SHARE_LABEL)).map((m) => m.id)),
+    [maps],
+  );
+
   const filteredMaps = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return maps;
-    return maps.filter(
-      (m) =>
-        m.title?.toLowerCase().includes(q) ||
-        m.draftNote.toLowerCase().includes(q) ||
-        m.draftLabels.some((l) => l.includes(q)),
-    );
-  }, [maps, searchQuery]);
+    const bySearch = !q
+      ? maps
+      : maps.filter(
+          (m) =>
+            m.title?.toLowerCase().includes(q) ||
+            m.draftNote.toLowerCase().includes(q) ||
+            m.draftLabels.some((l) => l.includes(q)),
+        );
+    if (shareFilter === 'outgoing') return bySearch.filter((m) => outgoingVaultIds.has(m.id));
+    if (shareFilter === 'imported') return bySearch.filter((m) => importedVaultIds.has(m.id));
+    return bySearch;
+  }, [importedVaultIds, maps, outgoingVaultIds, searchQuery, shareFilter]);
 
   const usedBytes = storageSummary?.total_bytes ?? 0;
   const attachedFileCount = storageSummary?.attachment_count ?? 0;
@@ -1836,6 +1893,59 @@ export function VaultsPage() {
             </div>
           )}
 
+          {!isLocalMode && (outgoingShareCount > 0 || importedVaultIds.size > 0) && (
+            <div className="mb-6 flex flex-wrap gap-3">
+              {outgoingShareCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShareFilter((f) => (f === 'outgoing' ? 'none' : 'outgoing'))}
+                aria-pressed={shareFilter === 'outgoing'}
+                className={`flex-1 min-w-[220px] rounded-xl border p-4 text-left transition ${
+                  shareFilter === 'outgoing'
+                    ? 'border-accent bg-accent/10'
+                    : 'border-slate-700 bg-surface-1 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="h-4 w-4 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                  <h2 className="text-sm font-semibold text-slate-200">I&rsquo;m sharing</h2>
+                </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  {outgoingShareCount} active share{outgoingShareCount === 1 ? '' : 's'} across{' '}
+                  {outgoingVaultIds.size} vault{outgoingVaultIds.size === 1 ? '' : 's'}
+                  {shareFilter === 'outgoing' ? ' · showing these' : ' · click to show'}
+                </p>
+              </button>
+              )}
+
+              {importedVaultIds.size > 0 && (
+              <button
+                type="button"
+                onClick={() => setShareFilter((f) => (f === 'imported' ? 'none' : 'imported'))}
+                aria-pressed={shareFilter === 'imported'}
+                className={`flex-1 min-w-[220px] rounded-xl border p-4 text-left transition ${
+                  shareFilter === 'imported'
+                    ? 'border-accent bg-accent/10'
+                    : 'border-slate-700 bg-surface-1 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="h-4 w-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l-4-4m4 4l4-4" />
+                  </svg>
+                  <h2 className="text-sm font-semibold text-slate-200">Shared with me</h2>
+                </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  {importedVaultIds.size} vault{importedVaultIds.size === 1 ? '' : 's'} imported from a share
+                  {shareFilter === 'imported' ? ' · showing these' : ' · click to show'}
+                </p>
+              </button>
+              )}
+            </div>
+          )}
+
           {storageSummary && (
             <div className="mb-6 rounded-xl border border-slate-700 bg-surface-1 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2041,7 +2151,7 @@ export function VaultsPage() {
                       renameValue={renameValue}
                       renaming={renaming}
                       userLabels={userLabels}
-                      activeShareCount={activeShareCounts[m.id] ?? 0}
+                      activeShareCount={activeSharesByVault[m.id]?.length ?? 0}
                       previewState={previewStates[m.id]}
                       onNavigate={navigate}
                       onStartRename={handleStartRename}
@@ -2049,6 +2159,7 @@ export function VaultsPage() {
                       onRenameConfirm={handleRenameConfirm}
                       onRenameCancel={handleRenameCancel}
                       onOpenHistory={setHistoryVaultId}
+                      onOpenShares={openShares}
                       onDeleteRequest={(id, title) => setPendingVaultDeletion({ id, title })}
                     />
                   ))}
@@ -2067,7 +2178,7 @@ export function VaultsPage() {
                   renameValue={renameValue}
                   renaming={renaming}
                   userLabels={userLabels}
-                  activeShareCount={activeShareCounts[m.id] ?? 0}
+                  activeShareCount={activeSharesByVault[m.id]?.length ?? 0}
                   previewState={previewStates[m.id]}
                   previewPanelStyle={previewPanelStyle}
                   previewOverlayStyle={previewOverlayStyle}
@@ -2078,6 +2189,7 @@ export function VaultsPage() {
                   onRenameConfirm={handleRenameConfirm}
                   onRenameCancel={handleRenameCancel}
                   onOpenHistory={setHistoryVaultId}
+                  onOpenShares={openShares}
                   onDeleteRequest={(id, title) => setPendingVaultDeletion({ id, title })}
                   onSetDraftColor={setDraftColor}
                   onSetDraftNote={setDraftNote}

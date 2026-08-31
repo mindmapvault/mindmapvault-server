@@ -83,7 +83,7 @@ export function DesktopMindMapEditor({
   initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
   onExportMarkdown, onExportFreemind, onExportFreeplane, onExportWisemapping, onExportXmind, titleChanged, onRenameTitle, renamingTitle,
   versionLabel, versionTooltip,
-  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenNodeAttachment,
+  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onOpenNodeAttachment,
   onFetchNodeAttachmentContent,
   onDeleteNodeAttachment,
   onLoadNodeAttachmentPreview,
@@ -1299,6 +1299,16 @@ export function DesktopMindMapEditor({
       nodeAttachmentInputRef.current?.click();
       showToast('F6 — Attach encrypted file');
     }
+    else if (e.key === 'F7' && onOpenSecurePanel) {
+      e.preventDefault();
+      onOpenSecurePanel('attachments');
+      showToast('F7 — Vault files');
+    }
+    else if (e.key === 'F8' && onOpenSecurePanel) {
+      e.preventDefault();
+      onOpenSecurePanel('shares');
+      showToast('F8 — Share exports');
+    }
     else if (e.key === 'Escape') { setShowShortcuts(false); setShowColorPicker(false); setShowIconPicker(false); setShowExportMenu(false); setContextMenu(null); setSearchOpen(false); setMultiSelect(new Set()); setShowTagDialog(false); setMobileFileUploadOpen(false); }
     else if (e.key === 'F9' || (e.ctrlKey && e.key === 'z' && !e.shiftKey)) { e.preventDefault(); undo(); showToast('Undo'); }
     else if (e.key === 'F10' || (e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) { e.preventDefault(); redo(); showToast('Redo'); }
@@ -1366,7 +1376,7 @@ export function DesktopMindMapEditor({
     else if (e.key === '-') { e.preventDefault(); setZoom((z) => Math.max(0.3, z - 0.15)); }
     }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
       toggleCheckbox, undo, redo, toggleCollapse, openNotes, showToast, resetNodePosition, resetAllPositions, autoAlignSubtree, showIconPicker, showColorPicker, focusMode, focusedIds,
-      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition]);
+      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2331,6 +2341,24 @@ export function DesktopMindMapEditor({
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg>
           </button>
+          {onOpenSecurePanel && (
+            <>
+              <button
+                className="mm-btn"
+                onClick={() => onOpenSecurePanel('attachments')}
+                title="Vault files (F7)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4h5l2 2h9a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
+              </button>
+              <button
+                className="mm-btn"
+                onClick={() => onOpenSecurePanel('shares')}
+                title="Share exports (F8)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              </button>
+            </>
+          )}
           {onExportMarkdown && <div className="mm-toolbar-sep" />}
           {onExportMarkdown && (
             <div style={{ position: 'relative' }}>
@@ -3114,7 +3142,7 @@ export function DesktopMindMapEditor({
           </div>
           <div className="mm-shortcuts-grid">{[
             ['Tab', 'Add child'], ['⇧Tab', 'Add left child (root)'], ['Enter', 'Add sibling'], ['Del / ⌫', 'Delete node'], ['F2', 'Rename'], ['F3', 'Notes'],
-            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
+            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['F7', 'Vault files'], ['F8', 'Share exports'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
             ['↑ ↓ ← →', 'Navigate (spatial)'], ['⇧+Arrow', 'Multi-select'], ['Ctrl+Click', 'Toggle select'], ['⇧+Drag', 'Rectangle select'],
             ['Home', 'Root'], ['+ −', 'Zoom'], ['Ctrl+S', 'Save'],
             ['C', 'Checkbox'], ['P', 'Progress'], ['I', 'Icons'], ['D', 'Dates'], ['U', 'URL'], ['R', 'Reset pos'],

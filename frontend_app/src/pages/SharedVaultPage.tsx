@@ -18,6 +18,7 @@ import { renderTreeSvg } from '../utils/vaultPreview';
 import type { PublicMapShareAttachmentMetadata, PublicMapShareResponse } from '../types';
 import { toBase64 } from '../crypto/utils';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
+import { IMPORTED_SHARE_LABEL } from '../utils/vaultLabels';
 
 type UnlockedShareState = {
   payload: Awaited<ReturnType<typeof decryptShareBundle>>;
@@ -248,6 +249,15 @@ export function SharedVaultPage() {
           await encryptedVaultApi.completeAttachment(created.id, init.attachment_id, versionId ?? '', encrypted.checksumSha256);
           importedAttachments += 1;
         }
+      }
+
+      // Mark where this vault came from. A share carries no recipient, so an
+      // imported copy is the only durable trace that something was shared with
+      // this account; the lobby groups vaults by this label.
+      try {
+        await storage.updateMeta(created.id, { vault_labels: [IMPORTED_SHARE_LABEL] });
+      } catch {
+        // Provenance is a nicety — never fail an otherwise complete import over it.
       }
 
       setImportMsg(importedAttachments > 0 ? `Imported vault with ${importedAttachments} attachment${importedAttachments === 1 ? '' : 's'}.` : 'Imported vault.');
