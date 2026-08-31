@@ -42,6 +42,9 @@ function listDepth(line: string): number {
   return Math.floor(spaces / 2);
 }
 
+/** Markdown supports h1–h6; list items occupy virtual levels above this. */
+const HEADING_MAX_LEVEL = 6;
+
 /** Heading level 1-6 → returns [level, text] or null */
 function matchHeading(line: string): [number, string] | null {
   const m = line.match(/^(#{1,6})\s+(.*)/);
@@ -103,6 +106,7 @@ function cleanText(text: string): string {
     .replace(/(^|\s)#[a-zA-Z]\w*/g, '$1')            // Obsidian tags
     .replace(/<!--[\s\S]*?-->/g, '')                  // HTML comments
     .replace(/^#+\s*/, '')                            // leading hashes
+    .replace(/ {2,}/g, ' ')                           // collapse gaps left by stripped syntax
     .trim();
 }
 
@@ -171,8 +175,12 @@ export function obsidianMarkdownToTree(md: string, title: string): MindMapTreeNo
     const listItem = matchListItem(line) ?? matchOrderedListItem(line);
     if (listItem) {
       const [depth, itemText, checked] = listItem;
-      const baseLevel = stack.length > 0 ? stack[stack.length - 1].level : 0;
-      const itemLevel = baseLevel + 7 + depth;
+      // Lists live at virtual levels above the heading levels (7+). The base is
+      // the enclosing *heading* level, not the top of the stack — reading the
+      // top would make each sibling item a child of the previous one, turning a
+      // flat list into a descending chain.
+      const headingBase = stack.reduce((acc, e) => (e.level <= HEADING_MAX_LEVEL ? e.level : acc), 0);
+      const itemLevel = headingBase + HEADING_MAX_LEVEL + 1 + depth;
       const parent = getParentForLevel(itemLevel);
       const node = makeNode(cleanText(itemText));
       if (checked !== null) node.checked = checked;
