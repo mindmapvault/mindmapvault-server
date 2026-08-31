@@ -28,6 +28,11 @@ target/
 *.log
 .DS_Store
 
+# Internal working notes (not published)
+docs/PARITY_CHECK.md
+docs/PARITY_IMPLEMENTATION_PLAN.md
+docs/RISK_ASSESSMENT.md
+
 # Compose and container state
 .docker/
 minio-data/
