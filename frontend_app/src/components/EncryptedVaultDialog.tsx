@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ConfirmDialog from './ConfirmDialog';
+import { generateSharePassphrase, MIN_SHARE_PASSPHRASE_LENGTH } from '../crypto/utils';
 import type { AttachmentMetadata, MapShareOwnerSummary } from '../types';
 
 export type SecureVaultTab = 'attachments' | 'shares';
@@ -15,6 +16,7 @@ type ShareDraft = {
   passphraseConfirm: string;
   passphraseHint: string;
   expiresInDays: string;
+  neverExpires: boolean;
   includeAttachments: boolean;
 };
 
@@ -119,8 +121,10 @@ export function EncryptedVaultDialog({
     passphraseConfirm: '',
     passphraseHint: '',
     expiresInDays: '7',
+    neverExpires: false,
     includeAttachments: true,
   });
+  const [showSharePassphrase, setShowSharePassphrase] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -372,6 +376,7 @@ export function EncryptedVaultDialog({
                     </label>
                   </div>
 
+                  {/* 1 — what gets shared */}
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Export file name">
                       <input
@@ -381,42 +386,119 @@ export function EncryptedVaultDialog({
                         className={inputCls}
                       />
                     </Field>
-                    <Field label="Passphrase">
-                      <input
-                        value={shareDraft.passphrase}
-                        onChange={(e) => setShareDraft((d) => ({ ...d, passphrase: e.target.value }))}
-                        placeholder="Choose a strong passphrase"
-                        type="password"
-                        className={inputCls}
-                      />
-                    </Field>
-                    <Field label="Confirm passphrase">
-                      <input
-                        value={shareDraft.passphraseConfirm}
-                        onChange={(e) => setShareDraft((d) => ({ ...d, passphraseConfirm: e.target.value }))}
-                        placeholder="Repeat passphrase"
-                        type="password"
-                        className={inputCls}
-                      />
-                    </Field>
-                    <Field label="Passphrase hint (optional)">
-                      <input
-                        value={shareDraft.passphraseHint}
-                        onChange={(e) => setShareDraft((d) => ({ ...d, passphraseHint: e.target.value }))}
-                        placeholder="Hint shown to recipients"
-                        className={inputCls}
-                      />
-                    </Field>
-                    <Field label="Expiry in days">
-                      <input
-                        value={shareDraft.expiresInDays}
-                        onChange={(e) => setShareDraft((d) => ({ ...d, expiresInDays: e.target.value }))}
-                        type="number"
-                        min="1"
-                        max="365"
-                        className={inputCls}
-                      />
-                    </Field>
+                  </div>
+
+                  {/* 2 — the passphrase, which is what actually protects it */}
+                  <div className="mt-5 rounded-lg border border-slate-700/60 bg-slate-900/40 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">Passphrase</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowSharePassphrase((v) => !v)}
+                        className="flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-slate-200"
+                        aria-pressed={showSharePassphrase}
+                      >
+                        {showSharePassphrase ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        )}
+                        {showSharePassphrase ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <Field label="Passphrase">
+                        <div className="flex gap-2">
+                          <input
+                            value={shareDraft.passphrase}
+                            onChange={(e) => setShareDraft((d) => ({ ...d, passphrase: e.target.value }))}
+                            placeholder={`At least ${MIN_SHARE_PASSPHRASE_LENGTH} characters`}
+                            type={showSharePassphrase ? 'text' : 'password'}
+                            autoComplete="new-password"
+                            className={inputCls}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const generated = generateSharePassphrase();
+                              setShareDraft((d) => ({
+                                ...d,
+                                passphrase: generated,
+                                passphraseConfirm: generated,
+                              }));
+                              // Generating is pointless if you cannot read what
+                              // you have to send on; reveal it for this step.
+                              setShowSharePassphrase(true);
+                            }}
+                            className="shrink-0 rounded-lg border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-slate-500 hover:text-white"
+                          >
+                            Generate
+                          </button>
+                        </div>
+                      </Field>
+                      <Field label="Confirm passphrase">
+                        <input
+                          value={shareDraft.passphraseConfirm}
+                          onChange={(e) => setShareDraft((d) => ({ ...d, passphraseConfirm: e.target.value }))}
+                          placeholder="Repeat passphrase"
+                          type={showSharePassphrase ? 'text' : 'password'}
+                          autoComplete="new-password"
+                          className={inputCls}
+                        />
+                      </Field>
+                      <Field label="Passphrase hint (optional)">
+                        <input
+                          value={shareDraft.passphraseHint}
+                          onChange={(e) => setShareDraft((d) => ({ ...d, passphraseHint: e.target.value }))}
+                          placeholder="Hint shown to recipients"
+                          className={inputCls}
+                        />
+                      </Field>
+                    </div>
+
+                    <p className="mt-3 text-xs text-slate-400">
+                      Send the passphrase separately from the link — together in one message they
+                      are one message. Never reuse your account password: the recipient will see
+                      this. The hint is stored unencrypted and is visible to anyone holding the
+                      link.
+                    </p>
+                  </div>
+
+                  {/* 3 — how long the link stays alive */}
+                  <div className="mt-5 rounded-lg border border-slate-700/60 bg-slate-900/40 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">Access</p>
+                    <div className="mt-3 flex flex-wrap items-end gap-4">
+                      <Field label="Expires after">
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={shareDraft.expiresInDays}
+                            onChange={(e) => setShareDraft((d) => ({ ...d, expiresInDays: e.target.value }))}
+                            type="number"
+                            min="1"
+                            max="365"
+                            disabled={shareDraft.neverExpires}
+                            className={`${inputCls} w-28 disabled:cursor-not-allowed disabled:opacity-50`}
+                          />
+                          <span className="text-xs text-slate-400">days</span>
+                        </div>
+                      </Field>
+                      <label className="flex cursor-pointer items-center gap-2 pb-2.5 text-sm text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={shareDraft.neverExpires}
+                          onChange={(e) => setShareDraft((d) => ({ ...d, neverExpires: e.target.checked }))}
+                          className="h-4 w-4 rounded border-slate-500 accent-[var(--accent)]"
+                        />
+                        <span className="text-xs text-slate-400">Never expires</span>
+                      </label>
+                    </div>
+                    {shareDraft.neverExpires && (
+                      <p className="mt-3 text-xs text-amber-400/90">
+                        The link stays valid until you revoke it. Anyone who keeps a copy of it,
+                        and the passphrase, keeps access.
+                      </p>
+                    )}
                   </div>
 
                   <div className="mt-4 flex items-center gap-3">
@@ -432,6 +514,13 @@ export function EncryptedVaultDialog({
                     {shareDraft.passphrase && shareDraft.passphrase !== shareDraft.passphraseConfirm && (
                       <span className="text-xs text-red-400">Passphrases do not match</span>
                     )}
+                    {shareDraft.passphrase &&
+                      shareDraft.passphrase.length < MIN_SHARE_PASSPHRASE_LENGTH && (
+                        <span className="text-xs text-amber-400">
+                          Too short — use at least {MIN_SHARE_PASSPHRASE_LENGTH} characters, or
+                          press Generate.
+                        </span>
+                      )}
                   </div>
                 </div>
 

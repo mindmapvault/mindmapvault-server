@@ -964,6 +964,7 @@ export function EditorPage() {
     passphraseConfirm: string;
     passphraseHint: string;
     expiresInDays: string;
+    neverExpires: boolean;
     includeAttachments: boolean;
   }) => {
     if (!id || !sessionKeys || isLocalMode || !currentTree) return;
@@ -980,10 +981,12 @@ export function EditorPage() {
     setSecureError(null);
     setPlanPrompt(null);
     try {
+      // No expiry is deliberate, not a parse failure: the server treats a
+      // missing expires_at as "until revoked".
       const expiresInDays = Number.parseInt(draft.expiresInDays, 10);
-      const expiresAt = Number.isFinite(expiresInDays) && expiresInDays > 0
-        ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString()
-        : undefined;
+      const expiresAt = draft.neverExpires || !Number.isFinite(expiresInDays) || expiresInDays <= 0
+        ? undefined
+        : new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString();
 
       const shareBundle = await createEncryptedShareBundle({
         title: title.trim() || savedTitle || 'Untitled vault',
