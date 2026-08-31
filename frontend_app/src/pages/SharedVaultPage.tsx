@@ -63,6 +63,15 @@ function OutlinePreview({ node, depth = 0 }: { node: { id: string; text: string;
   );
 }
 
+/// A failed AES-GCM decryption throws `OperationError`, which is an `Error`
+/// with an empty `message`. Reading `.message` alone therefore produced an
+/// empty string, and the error banner renders only when the message is
+/// non-empty — so a wrong passphrase used to do nothing at all.
+function errorMessage(err: unknown, fallback: string): string {
+  const message = err instanceof Error ? err.message.trim() : '';
+  return message || fallback;
+}
+
 export function SharedVaultPage() {
   const { shareId } = useParams<{ shareId: string }>();
   const navigate = useNavigate();
@@ -98,7 +107,7 @@ export function SharedVaultPage() {
         if (!cancelled) setShare(data);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load shared vault');
+        if (!cancelled) setError(errorMessage(err, 'Failed to load shared vault'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -122,7 +131,7 @@ export function SharedVaultPage() {
       setUnlocked(unlockedBundle);
     } catch (err) {
       setUnlocked(null);
-      setError(err instanceof Error ? err.message : 'Failed to decrypt shared vault');
+      setError(errorMessage(err, 'Could not decrypt this share. Check the passphrase and try again.'));
     } finally {
       setUnlockBusy(false);
     }
@@ -162,7 +171,7 @@ export function SharedVaultPage() {
       const plaintext = await decryptBytesForShare(ciphertext, unlocked.shareKey);
       saveBytesToFile(plaintext, download.name, download.content_type || 'application/octet-stream');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to download shared attachment');
+      setError(errorMessage(err, 'Failed to download shared attachment'));
     } finally {
       setDownloadingAttachmentId(null);
     }
@@ -217,7 +226,7 @@ export function SharedVaultPage() {
       navigate(`/vaults/${created.id}`);
     } catch (err) {
       setPlanPrompt(getPlanErrorPrompt(err));
-      setError(err instanceof Error ? err.message : 'Failed to import shared vault');
+      setError(errorMessage(err, 'Failed to import shared vault'));
     } finally {
       setImportBusy(false);
     }
