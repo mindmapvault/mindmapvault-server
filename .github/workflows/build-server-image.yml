@@ -29,6 +29,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -56,9 +59,10 @@ jobs:
           images: |
             ${{ steps.image.outputs.ghcr }}
           tags: |
-            type=raw,value=v${{ steps.app_version.outputs.value }},enable={{is_default_branch}}
+            type=ref,event=tag
+            type=raw,value=v${{ steps.app_version.outputs.value }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -73,6 +77,9 @@ jobs:
         with:
           context: .
           file: backend/Dockerfile
+          # arm64 matters for self-hosters on a Pi or an Ampere VPS. It is built
+          # under emulation, so it is the slow half of this job.
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
