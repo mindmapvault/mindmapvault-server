@@ -133,12 +133,25 @@ let attachmentId = '';
   check('vault blob upload 3 MB not blocked by body limit', res.status !== 413, `status ${res.status}`);
 }
 {
-  const res = await fetch(`${BASE}/api/mindmaps/${mapId}/attachments/${attachmentId}/upload`, {
-    method: 'POST',
-    headers: { ...bearer, 'content-type': 'application/octet-stream' },
-    body: randomBytes(60 * 1024 * 1024),
-  });
-  check('attachment upload 60 MB rejected 413', res.status === 413, `status ${res.status}`);
+  // The server answers 413 and closes the connection without draining the rest
+  // of the body, so the client sometimes sees the reset before it reads the
+  // response. Both outcomes mean the upload was refused.
+  let outcome;
+  try {
+    const res = await fetch(`${BASE}/api/mindmaps/${mapId}/attachments/${attachmentId}/upload`, {
+      method: 'POST',
+      headers: { ...bearer, 'content-type': 'application/octet-stream' },
+      body: randomBytes(60 * 1024 * 1024),
+    });
+    outcome = res.status === 413 ? '413' : `status ${res.status}`;
+  } catch (error) {
+    outcome = error?.cause?.code === 'ECONNRESET' ? 'connection reset' : `error ${error?.cause?.code}`;
+  }
+  check(
+    'attachment upload 60 MB refused',
+    outcome === '413' || outcome === 'connection reset',
+    outcome,
+  );
 }
 
 // Default CORS allowlist: local dev yes, hosted domains no.
