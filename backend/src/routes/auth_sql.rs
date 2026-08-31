@@ -151,7 +151,7 @@ async fn register(
         })
         .await?;
 
-    tracing::info!("Registered new user: {}", body.username);
+    tracing::info!("new user registered");
     Ok(Json(serde_json::json!({ "message": "registered successfully" })))
 }
 
@@ -179,7 +179,7 @@ async fn login(
     let access_token = state.jwt.issue_access_token(&user.id)?;
     let refresh_token = state.jwt.issue_refresh_token(&user.id)?;
 
-    tracing::info!("User logged in: {}", body.username);
+    tracing::info!(user_id = %user.id, "user logged in");
 
     Ok(Json(LoginResponse {
         access_token,
@@ -511,7 +511,8 @@ async fn delete_profile(
     State(state): State<AuthSqlState>,
     user: AuthenticatedUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db_user = state
+    // Existence check — returns 404 if the authenticated user is no longer in the DB.
+    state
         .db
         .load_user_by_id(&user.0)
         .await?
@@ -521,11 +522,7 @@ async fn delete_profile(
     delete_owned_blobs(&state.db, &state.minio, &maps).await?;
     state.db.delete_user(&user.0).await?;
 
-    tracing::info!(
-        "Deleted SQL-backed account '{}' with {} vault(s)",
-        db_user.username,
-        maps.len()
-    );
+    tracing::info!(user_id = %user.0, vault_count = maps.len(), "account deleted");
 
     Ok(Json(serde_json::json!({
         "message": "account deleted",

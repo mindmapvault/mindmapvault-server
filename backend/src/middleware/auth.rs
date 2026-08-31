@@ -62,7 +62,7 @@ impl JwtService {
 
     pub fn validate_access_token(&self, token: &str) -> Result<Claims, AppError> {
         let data = decode::<Claims>(token, &self.decoding_key, &Validation::default())
-            .map_err(|e| AppError::Unauthorized(format!("invalid token: {e}")))?;
+            .map_err(AppError::Jwt)?;
 
         if data.claims.typ != ACCESS_TOKEN_TYPE {
             return Err(AppError::Unauthorized("wrong token type".to_string()));
@@ -72,7 +72,7 @@ impl JwtService {
 
     pub fn validate_refresh_token(&self, token: &str) -> Result<Claims, AppError> {
         let data = decode::<Claims>(token, &self.decoding_key, &Validation::default())
-            .map_err(|e| AppError::Unauthorized(format!("invalid token: {e}")))?;
+            .map_err(AppError::Jwt)?;
 
         if data.claims.typ != REFRESH_TOKEN_TYPE {
             return Err(AppError::Unauthorized("wrong token type".to_string()));
