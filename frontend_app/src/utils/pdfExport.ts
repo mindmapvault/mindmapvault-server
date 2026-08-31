@@ -177,8 +177,24 @@ export async function renderSvgToCanvas(
   versionLabel?: string,
   dateStr?: string,
 ): Promise<HTMLCanvasElement> {
+  const svgW = svg.clientWidth || 1200;
+  const svgH = svg.clientHeight || 800;
+
   const clone = svg.cloneNode(true) as SVGSVGElement;
   clone.querySelectorAll('foreignObject').forEach((fo) => fo.remove());
+
+  // The live <svg class="mm-canvas"> is sized purely by CSS (width/height:100%)
+  // and carries no width/height/viewBox attributes. Once serialized into a
+  // standalone data: URI none of that CSS applies, so the image has no
+  // intrinsic size and rasterizes at the SVG default of 300×150 — everything
+  // beyond that box is cropped, which for a real map means the export comes
+  // out empty apart from the background and watermark drawn separately below.
+  // Stamp the measured viewport size onto the clone before serializing.
+  clone.setAttribute('width', String(svgW));
+  clone.setAttribute('height', String(svgH));
+  if (!clone.getAttribute('viewBox')) {
+    clone.setAttribute('viewBox', `0 0 ${svgW} ${svgH}`);
+  }
 
   const serializer = new XMLSerializer();
   let svgStr = serializer.serializeToString(clone);
@@ -188,8 +204,6 @@ export async function renderSvgToCanvas(
 
   const { resolved, bgColor } = resolveCssVarsInSvg(svgStr);
 
-  const svgW = svg.clientWidth || 1200;
-  const svgH = svg.clientHeight || 800;
   const scale = 2;
   const canvas = document.createElement('canvas');
   canvas.width = svgW * scale;
@@ -212,6 +226,9 @@ export async function renderSvgToCanvas(
       resolve();
     };
     img.onerror = () => reject(new Error('SVG render failed'));
+    // Ensure crossorigin is set so rendering doesn't taint canvas when possible
+    // (SVG data URIs are same-origin, but defensive set avoids some browser quirks).
+    img.crossOrigin = 'anonymous';
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(resolved);
   });
 
