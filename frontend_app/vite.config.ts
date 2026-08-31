@@ -1,9 +1,11 @@
 /// <reference types="node" />
 
-import { defineConfig, type PluginOption } from 'vite';
+import { defineConfig, loadEnv, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { fileURLToPath, URL } from 'url';
+
+const envDir = fileURLToPath(new URL('..', import.meta.url));
 
 const pwaPlugin = VitePWA({
   registerType: 'prompt',
@@ -53,34 +55,43 @@ const pwaPlugin = VitePWA({
   },
 }) as unknown as PluginOption;
 
+// loadEnv, not process.env: Vite does not copy .env files into process.env, so
+// reading process.env here would ignore the repo-root .env and silently fall
+// back to localhost — pointing dev at the wrong backend with no error. loadEnv
+// reads .env and then lets a real shell variable win, which is the precedence
+// we want for a one-off `VITE_BACKEND_URL=… pnpm dev`.
 // https://vitejs.dev/config/
-export default defineConfig({
-  envDir: '..',
-  plugins: [
-    react(),
-    pwaPlugin,
-  ],
-  resolve: {
-    alias: {
-      '@mindmapvault/connectors': fileURLToPath(new URL('../packages/connectors/src/index.ts', import.meta.url)),
-    },
-  },
-  optimizeDeps: {
-    // hash-wasm loads its own WASM files at runtime — exclude from pre-bundling
-    exclude: ['hash-wasm'],
-  },
-  build: {
-    target: 'esnext',
-  },
-  server: {
-    host: '127.0.0.1',
-    port: 5274,
-    strictPort: true,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8090',
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, envDir, 'VITE_');
+
+  return {
+    envDir: '..',
+    plugins: [
+      react(),
+      pwaPlugin,
+    ],
+    resolve: {
+      alias: {
+        '@mindmapvault/connectors': fileURLToPath(new URL('../packages/connectors/src/index.ts', import.meta.url)),
       },
     },
-  },
+    optimizeDeps: {
+      // hash-wasm loads its own WASM files at runtime — exclude from pre-bundling
+      exclude: ['hash-wasm'],
+    },
+    build: {
+      target: 'esnext',
+    },
+    server: {
+      host: '127.0.0.1',
+      port: 5274,
+      strictPort: true,
+      proxy: {
+        '/api': {
+          target: env.VITE_BACKEND_URL || 'http://localhost:8090',
+          changeOrigin: true,
+        },
+      },
+    },
+  };
 });
