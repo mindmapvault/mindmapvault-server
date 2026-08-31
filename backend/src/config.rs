@@ -46,7 +46,11 @@ impl AppConfig {
             .set_default("s3_presign_expiry_secs", 3600)?
             .set_default("jwt_access_expiry_secs", 900)?
             .set_default("jwt_refresh_expiry_secs", 2_592_000)?
-            .set_default("cors_allowed_origins", "http://localhost:5173,http://tauri.localhost,https://tauri.localhost,http://localhost:8090,https://mindmapvault.com,https://www.mindmapvault.com,https://app.mindmapvault.com,https://mindmap.marazfamily.eu,https://admin.mindmapvault.com")?
+            // Local development and desktop origins only. A self-hosted install
+            // serves the app from its own origin, so it needs no CORS entry;
+            // anything else belongs in CORS_ALLOWED_ORIGINS, not in a default
+            // every deployment inherits.
+            .set_default("cors_allowed_origins", "http://localhost:5173,http://localhost:8090,http://tauri.localhost,https://tauri.localhost")?
             .set_default("db_engine", "sql")?
             .set_default("enable_diagnostics_routes", false)?
             .set_default("admin_api_token", "")?

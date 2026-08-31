@@ -129,6 +129,12 @@ async fn main() -> anyhow::Result<()> {
         .filter_map(|o| o.parse().ok())
         .collect();
 
+    if allowed_origins.is_empty() {
+        tracing::warn!(
+            "CORS_ALLOWED_ORIGINS is empty; only same-origin browser requests will be accepted"
+        );
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins))
         .allow_methods(AllowMethods::list([
