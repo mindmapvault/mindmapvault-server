@@ -17,7 +17,7 @@ use crate::{
     error::{AppError, PlanErrorMetadata},
     middleware::auth::{AuthenticatedUser, JwtService, KeyVersionCache, VerifiedWriter},
     models::{
-        attachment::{AttachmentDownloadResponse, AttachmentMetadata, AttachmentStatus, CompleteAttachmentUploadRequest, InitAttachmentRequest, InitAttachmentResponse, UpdateAttachmentRequest},
+        attachment::{AttachmentDownloadResponse, AttachmentMetadata, AttachmentStatus, CompleteAttachmentUploadRequest, CopyAttachmentRequest, InitAttachmentRequest, InitAttachmentResponse, UpdateAttachmentRequest},
         instance_settings::InstanceSettingsHandle,
         mindmap::{
             ConfirmUploadRequest, ConfirmUploadResponse, MindMapCreatedResponse, MindMapDetail,
@@ -162,6 +162,7 @@ pub fn router(state: MindMapsSqlState) -> Router {
             post(upload_attachment_blob).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
         )
         .route("/{id}/attachments/{attachment_id}/complete", post(complete_attachment_upload))
+        .route("/{id}/attachments/{attachment_id}/copy", post(copy_attachment))
         .route("/{id}/attachments/{attachment_id}/download", get(get_attachment_download_url))
         .route("/{id}/attachments/{attachment_id}/blob", get(download_attachment_blob))
         .route("/{id}/versions", get(list_versions))
@@ -689,6 +690,78 @@ async fn get_attachment_download_url(
         size_bytes: attachment.size_bytes,
         checksum_sha256: attachment.checksum_sha256,
     }))
+}
+
+/// Copies an attachment within the same map, for node duplication.
+///
+/// One attachment belongs to exactly one node: duplicating a node has to
+/// duplicate its files, or the two copies share storage and deleting either
+/// one breaks the other. The bytes are copied in the object store — they are
+/// ciphertext sealed under the owner's master key and stay valid unchanged, so
+/// nothing is decrypted here and the client uploads nothing.
+///
+/// The copy counts against the storage quota like any other upload.
+async fn copy_attachment(
+    State(state): State<MindMapsSqlState>,
+    user: VerifiedWriter,
+    Path((id, attachment_id)): Path<(String, String)>,
+    Json(body): Json<CopyAttachmentRequest>,
+) -> Result<Json<AttachmentMetadata>, AppError> {
+    find_owned(&state.db, &id, &user.0).await?;
+    let source = find_attachment(&state.db, &id, &attachment_id).await?;
+
+    if source.status != AttachmentStatus::Available {
+        return Err(AppError::BadRequest(
+            "only a completed attachment can be copied".to_string(),
+        ));
+    }
+
+    enforce_storage_limits(&state, &user.0, source.size_bytes).await?;
+
+    let new_id = Uuid::new_v4().to_string();
+    let s3_key = format!(
+        "maps/{id}/attachments/{new_id}/{}",
+        source.sanitized_name
+    );
+    let version_id = state.minio.copy_object(&source.s3_key, &s3_key).await?;
+
+    let created = state
+        .db
+        .create_mind_map_attachment(NewMindMapAttachment {
+            id: new_id.clone(),
+            map_id: id.clone(),
+            node_id: normalize_optional(body.node_id),
+            name: source.name.clone(),
+            sanitized_name: source.sanitized_name.clone(),
+            content_type: source.content_type.clone(),
+            size_bytes: source.size_bytes,
+            s3_key: s3_key.clone(),
+            s3_version_id: Some(version_id.clone()),
+            uploaded_by: user.0.clone(),
+            uploaded_at: Utc::now(),
+            encrypted: source.encrypted,
+            encryption_meta: source.encryption_meta.clone(),
+            checksum_sha256: source.checksum_sha256.clone(),
+            status: AttachmentStatus::Available,
+        })
+        .await;
+
+    // The object exists but no row points at it: remove it rather than leave a
+    // byte-for-byte duplicate nothing can reach or account for.
+    if let Err(error) = created {
+        if let Err(cleanup_error) = state.minio.delete_object(&s3_key).await {
+            tracing::error!(
+                ?cleanup_error,
+                map_id = %id,
+                source_attachment_id = %attachment_id,
+                "failed to remove the copied object after the metadata insert failed"
+            );
+        }
+        return Err(error);
+    }
+
+    let stored = find_attachment(&state.db, &id, &new_id).await?;
+    Ok(Json(to_attachment_metadata(stored)))
 }
 
 async fn delete_attachment(

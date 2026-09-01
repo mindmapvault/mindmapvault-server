@@ -736,6 +736,35 @@ export function EditorPage() {
     }
   }, [id, isLocalMode, refreshSecureData, sessionKeys]);
 
+  /**
+   * Duplicates one attachment onto another node, for node duplication.
+   *
+   * The server copies the ciphertext in place, so this uploads nothing. Local
+   * mode never gets here: those attachments carry their bytes inline and the
+   * editor clones them itself.
+   */
+  const copyNodeAttachment = useCallback(async (
+    attachment: NodeAttachmentRef,
+    nodeId: string,
+  ): Promise<NodeAttachmentRef | null> => {
+    if (!id || isLocalMode) return null;
+    try {
+      const copy = await encryptedVaultApi.copyAttachment(id, attachment.attachment_id, nodeId);
+      return {
+        ...attachment,
+        attachment_id: copy.id,
+        // The preview is a second attachment; the duplicate does without one
+        // rather than doubling the storage cost of a thumbnail.
+        preview_attachment_id: null,
+        uploaded_at: copy.uploaded_at ?? new Date().toISOString(),
+      };
+    } catch (err) {
+      setPlanPrompt(getPlanErrorPrompt(err));
+      setSecureError(err instanceof Error ? err.message : 'Failed to copy attachment');
+      return null;
+    }
+  }, [id, isLocalMode]);
+
   const handleDownloadAttachment = useCallback(async (attachment: AttachmentMetadata) => {
     if (!id || !sessionKeys || isLocalMode) return;
     setSecureError(null);
@@ -1136,6 +1165,7 @@ export function EditorPage() {
         onOpenNodeAttachment={(attachment) => { void handleOpenNodeAttachment(attachment); }}
         onFetchNodeAttachmentContent={(attachment) => handleFetchNodeAttachmentContent(attachment)}
         onDeleteNodeAttachment={(attachment) => { void handleDeleteNodeAttachment(attachment); }}
+        onCopyNodeAttachment={(attachment, nodeId) => copyNodeAttachment(attachment, nodeId)}
         onLoadNodeAttachmentPreview={(attachment) => handleLoadNodeAttachmentPreview(attachment)}
       />
       {!isLocalMode && showHistory && (

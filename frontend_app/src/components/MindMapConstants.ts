@@ -61,5 +61,7 @@ export const DATE_BADGE_OFFSET_H = 34;
 export const ICON_SIZE = 16;
 export const CHECKBOX_SIZE = 16;
 export const PROGRESS_PIE_SIZE = 32;
-export const ATTACHMENT_PREVIEW_H = 44;
-export const ATTACHMENT_PREVIEW_W = 56;
+/** The box a node image fits inside; the glyph keeps its own aspect ratio. */
+export const NODE_IMAGE_BOX = 64;
+/** Vertical breathing room above and below the image band. */
+export const NODE_IMAGE_PAD = 6;

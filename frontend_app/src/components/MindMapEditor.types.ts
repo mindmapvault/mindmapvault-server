@@ -41,6 +41,12 @@ export interface MindMapEditorProps {
   onOpenNodeAttachment?: (attachment: NodeAttachmentRef) => Promise<void> | void;
   onFetchNodeAttachmentContent?: (attachment: NodeAttachmentRef) => Promise<{ name: string; contentType: string; blob: Blob } | null>;
   onDeleteNodeAttachment?: (attachment: NodeAttachmentRef) => Promise<void> | void;
+  /**
+   * Duplicates one attachment onto another node, returning the new reference.
+   * Node duplication needs it so the copy owns its files rather than sharing
+   * the original's — see `duplicateNode`.
+   */
+  onCopyNodeAttachment?: (attachment: NodeAttachmentRef, nodeId: string) => Promise<NodeAttachmentRef | null>;
   onLoadNodeAttachmentPreview?: (attachment: NodeAttachmentRef) => Promise<string | null>;
   onLoadNodeAttachmentViewer?: (attachment: NodeAttachmentRef) => Promise<NodeAttachmentViewerAsset | null>;
 }

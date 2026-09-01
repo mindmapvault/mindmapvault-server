@@ -73,6 +73,16 @@ export const encryptedVaultApi = {
       `/mindmaps/${encodeURIComponent(vaultId)}/attachments/${encodeURIComponent(attachmentId)}/complete`,
       { version_id: versionId, checksum_sha256: checksumSha256 },
     ),
+  /**
+   * Duplicates an attachment inside the same vault, for node duplication. The
+   * server copies the ciphertext in object storage; nothing is uploaded and
+   * nothing is decrypted.
+   */
+  copyAttachment: (vaultId: string, attachmentId: string, nodeId?: string) =>
+    api.post<AttachmentMetadata>(
+      `/mindmaps/${encodeURIComponent(vaultId)}/attachments/${encodeURIComponent(attachmentId)}/copy`,
+      { node_id: nodeId },
+    ),
   getAttachmentDownload: (vaultId: string, attachmentId: string) =>
     api.get<AttachmentDownloadResponse>(`/mindmaps/${encodeURIComponent(vaultId)}/attachments/${encodeURIComponent(attachmentId)}/download`),
   updateAttachmentNode: (vaultId: string, attachmentId: string, nodeId?: string) =>

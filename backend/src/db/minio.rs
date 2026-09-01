@@ -259,6 +259,66 @@ impl MinioClient {
         Self::validate_uploaded_version_id(version_id)
     }
 
+    /// Copies a stored object to a new key and returns the new version id.
+    ///
+    /// Used when a node carrying an attachment is duplicated. The ciphertext is
+    /// already sealed under the owner's master key, so the bytes stay valid
+    /// unchanged — there is nothing to re-encrypt, and the backend never needs
+    /// to see the plaintext.
+    ///
+    /// Prefers the server-side `CopyObject`, which never moves the bytes
+    /// through this process. Not every S3-compatible store implements it, so a
+    /// failure falls back to a download-and-upload of the same bytes rather
+    /// than failing the duplicate; the log line says which path ran.
+    pub async fn copy_object(
+        &self,
+        source_key: &str,
+        destination_key: &str,
+    ) -> Result<String, AppError> {
+        // `copy_source` is a URL path, so it would need percent-encoding for
+        // anything exotic. Attachment keys cannot contain anything exotic:
+        // every segment is a UUID or a name put through
+        // `sanitize_attachment_name`, which keeps only `[A-Za-z0-9._-]`. The
+        // check keeps that assumption honest rather than trusting it.
+        if !source_key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '/'))
+        {
+            return Err(AppError::Storage(
+                "object key contains characters that cannot be copied".to_string(),
+            ));
+        }
+        let copy_source = format!("{}/{}", self.bucket, source_key);
+
+        let copied = self
+            .client
+            .copy_object()
+            .bucket(&self.bucket)
+            .key(destination_key)
+            .copy_source(&copy_source)
+            .send()
+            .await;
+
+        match copied {
+            Ok(output) => {
+                let version_id = output.version_id().ok_or_else(|| {
+                    AppError::Storage("S3 backend did not return a version id".to_string())
+                })?;
+                Self::validate_uploaded_version_id(version_id)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    %source_key,
+                    %destination_key,
+                    "server-side object copy failed; falling back to download and re-upload"
+                );
+                let bytes = self.download_blob(source_key, None).await?;
+                self.upload_blob(destination_key, bytes).await
+            }
+        }
+    }
+
     /// Downloads an encrypted blob through the backend using the internal
     /// S3 endpoint. When `version_id` is provided, that historical version
     /// is streamed instead of the latest object.

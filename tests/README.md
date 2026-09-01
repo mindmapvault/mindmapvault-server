@@ -10,6 +10,7 @@ Current layout:
 - `tests/endpoints/password-rotation.mjs` - the rotation contract: manifest, coverage, atomicity, stale sessions
 - `tests/ui/settings-hub.mjs` - the in-app settings hub, driven in a real browser
 - `tests/ui/note-editor.mjs` - the live-Markdown note editor: hidden and revealed syntax, task checkboxes, autosave, attachments resolved to decrypted blobs
+- `tests/ui/node-images.mjs` - pictures on nodes: every way to add one (menu, drop, Ctrl+V), replace, remove, undo, aspect ratios and the size cap, layout, the glyph surviving into the exported SVG and the vault-list preview, and a duplicated subtree getting its own stored copies
 - `tests/ui/password-rotation.mjs` - password rotation with the real client crypto (needs the vite DEV server, which serves the source modules the test drives in-page)
 - `tests/ui/rotation-multi-account.mjs` - rotation across three accounts at once: isolation, a cross-account forgery, parallel rotations, and a decrypt-everything sweep (same vite dev server requirement)
 
@@ -30,7 +31,11 @@ repository:
 npm i -D playwright && npx playwright install chromium
 node tests/ui/settings-hub.mjs --app-url http://127.0.0.1:5173 --api-url http://127.0.0.1:8090
 node tests/ui/note-editor.mjs  --app-url http://127.0.0.1:5173 --api-url http://127.0.0.1:8090
+node tests/ui/node-images.mjs  --app-url http://127.0.0.1:5173 --api-url http://127.0.0.1:8090
 ```
+
+`node-images.mjs` drives the whole picture-on-a-node surface through the UI and then checks the
+server's side of it over the API. It runs against either the vite dev server or a built app.
 
 It signs up a throwaway account and creates a vault, so point it at a disposable instance. Pass
 `--screenshot-dir <dir>` to keep screenshots of each step; without it none are written.

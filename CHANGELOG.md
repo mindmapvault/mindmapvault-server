@@ -6,7 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+- **Pictures on the nodes themselves.** Add one from the node's context menu, by dropping an image onto a node, with Ctrl+V, or with **Alt+K** — the shortcut FreeMind uses for the same thing. A thumbnail is drawn on the node at its own aspect ratio inside a 64×64 box — no crop, no letterbox — and clicking it opens the full-resolution original. The thumbnail lives inside the map, so it inherits the vault's encryption, needs no request to render, and appears in the vault-list preview and on a shared link with nothing fetched at all. The original is kept as an ordinary encrypted attachment; a node whose original has been deleted still shows its picture, and only click-through stops working. PNG and PDF exports include the pictures; the text formats (Markdown, FreeMind, Freeplane, XMind, WiseMapping) drop them.
+- `POST /api/mindmaps/{id}/attachments/{attachment_id}/copy` — duplicates an attachment inside a vault by copying the ciphertext in object storage. Nothing is uploaded and nothing is decrypted; the copy counts against the quota like any other file.
+- `tests/ui/node-images.mjs` — the whole surface driven in a real browser: every way to add a picture, replace, remove, undo, the aspect-ratio and size-cap rules, layout, the glyph surviving into the exported SVG and the vault-list preview, and a duplicated subtree getting its own stored copies.
+
 ### Fixed
+- **Duplicating a node shared its files with the original.** `duplicateNode` gave the copy new node ids but left the attachment ids alone, so both nodes pointed at one stored file and deleting either one's file silently broke the other. The duplicate now gets its own copy of every file.
 - **An attachment upload discarded unsaved edits.** Refreshed attachment references were fed back through the editor's `initialTree` prop, which the editor treats as a document to load — so it reset its whole working tree, history included, throwing away everything changed since the vault was opened. Including, for an upload, the change being made at that moment.
 
 ## [0.4.1] - 2026-09-01

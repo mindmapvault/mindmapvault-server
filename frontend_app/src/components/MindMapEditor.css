@@ -3077,3 +3077,10 @@
     height: auto;
   }
 }
+
+/* ── Node image glyph ────────────────────────────────────────────────────── */
+/* The rounded corner is set inline on the element instead of here, so it
+   survives serialization into the standalone SVG the PNG/PDF export rasterizes.
+   Only the interactive affordances live in the stylesheet. */
+.mm-node-image { cursor: zoom-in; }
+.mm-node-image:hover { opacity: 0.88; }

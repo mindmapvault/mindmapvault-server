@@ -48,6 +48,7 @@ import {
   LINK_STRIP_H,
   TAG_STRIP_H,
   TOP_META_STRIP_H,
+  NODE_IMAGE_PAD,
 } from './MindMapConstants';
 import {
   uid,
@@ -65,6 +66,7 @@ import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
 import { handleDelegatedLinkClick, openExternalUrl } from '../utils/openExternal';
+import { createNodeImageGlyph, type NodeImageGlyph } from '../utils/filePreview';
 import './MindMapEditor.css';
 
 // ── Drag state ────────────────────────────────────────────────────────────────
@@ -87,6 +89,7 @@ export function DesktopMindMapEditor({
   onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onOpenNodeAttachment,
   onFetchNodeAttachmentContent,
   onDeleteNodeAttachment,
+  onCopyNodeAttachment,
   onLoadNodeAttachmentPreview,
 }: MindMapEditorProps) {
   const autosaveMode = useThemeStore((s) => s.autosaveMode);
@@ -123,6 +126,7 @@ export function DesktopMindMapEditor({
   const [hoveringNotePopup, setHoveringNotePopup] = useState(false);
   const [notesDropActive, setNotesDropActive] = useState(false);
   const [notesUploadBusy, setNotesUploadBusy] = useState(false);
+  const [nodeImageBusy, setNodeImageBusy] = useState(false);
   const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
   const [attachmentPreviewTitle, setAttachmentPreviewTitle] = useState('');
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null);
@@ -348,6 +352,10 @@ export function DesktopMindMapEditor({
   const [notesSaveState, setNotesSaveState] = useState<'saved' | 'saving'>('saved');
   const notesAttachmentInputRef = useRef<HTMLInputElement>(null);
   const nodeAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const nodeImageInputRef = useRef<HTMLInputElement>(null);
+  // The picker is shared, so the node it was opened for has to outlive the
+  // click — the context menu that opened it is gone by the time a file arrives.
+  const nodeImageTargetRef = useRef<string | null>(null);
   const mobileFileInputCameraRef = useRef<HTMLInputElement>(null);
   const mobileFileInputGalleryRef = useRef<HTMLInputElement>(null);
   const mobileFileInputAnyRef = useRef<HTMLInputElement>(null);
@@ -764,7 +772,21 @@ export function DesktopMindMapEditor({
   }, [root, mutate]);
 
   // ── Duplicate ─────────────────────────────────────────────────────────────
-  const duplicateNode = useCallback((nodeId: string) => {
+
+  /**
+   * Duplicates a node and everything under it.
+   *
+   * Attachments are *copied*, not shared. Reassigning node ids while leaving
+   * attachment ids alone would leave two nodes pointing at one stored file, and
+   * from then on deleting either node's file breaks the other. Copying keeps
+   * the invariant trivial — one attachment belongs to exactly one node — at the
+   * cost of duplicated bytes for a rare action.
+   *
+   * A copy that fails leaves the duplicate without that file rather than
+   * sharing the original's: an incomplete duplicate is recoverable, a shared
+   * one quietly corrupts both.
+   */
+  const duplicateNode = useCallback(async (nodeId: string) => {
     if (nodeId === 'root') return;
     const newRoot = cloneTree(root);
     const found = findNode(newRoot, nodeId);
@@ -772,10 +794,63 @@ export function DesktopMindMapEditor({
     const clone = cloneTree(found.node);
     const reassignIds = (n: MindMapTreeNode) => { n.id = uid(); n.children.forEach(reassignIds); };
     reassignIds(clone);
-    found.parent.children.splice(found.index + 1, 0, clone);
-    mutate(newRoot);
+
+    const withAttachments: MindMapTreeNode[] = [];
+    const collect = (n: MindMapTreeNode) => {
+      if ((n.attachments ?? []).length > 0) withAttachments.push(n);
+      n.children.forEach(collect);
+    };
+    collect(clone);
+
+    if (withAttachments.length > 0) {
+      setNodeImageBusy(true);
+      let failures = 0;
+      try {
+        for (const n of withAttachments) {
+          const copies: NodeAttachmentRef[] = [];
+          const remapped = new Map<string, string>();
+          for (const attachment of n.attachments ?? []) {
+            // Local-mode attachments carry their bytes inline, so the clone is
+            // already independent — it only needs an id of its own.
+            if (attachment.attachment_id.startsWith('local-')) {
+              const localId = `local-${crypto.randomUUID()}`;
+              remapped.set(attachment.attachment_id, localId);
+              copies.push({ ...attachment, attachment_id: localId });
+              continue;
+            }
+            const copy = onCopyNodeAttachment
+              ? await onCopyNodeAttachment(attachment, n.id)
+              : null;
+            if (copy) {
+              remapped.set(attachment.attachment_id, copy.attachment_id);
+              copies.push(copy);
+            } else {
+              failures += 1;
+            }
+          }
+          n.attachments = copies;
+          const originalImageId = n.image?.attachment_id;
+          if (n.image && originalImageId) {
+            // The thumbnail copied with the JSON; only the pointer to the
+            // full-size original has to follow the new attachment.
+            n.image = { ...n.image, attachment_id: remapped.get(originalImageId) ?? null };
+          }
+        }
+      } finally {
+        setNodeImageBusy(false);
+      }
+      if (failures > 0) {
+        showToast(`${failures} file${failures === 1 ? '' : 's'} could not be copied to the duplicate`);
+      }
+    }
+
+    const latest = cloneTree(root);
+    const target = findNode(latest, nodeId);
+    if (!target || !target.parent) return;
+    target.parent.children.splice(target.index + 1, 0, clone);
+    mutate(latest);
     setSelectedId(clone.id);
-  }, [root, mutate]);
+  }, [root, mutate, onCopyNodeAttachment, showToast]);
 
   // ── Reparent (drag-drop) ──────────────────────────────────────────────────
   const reparentNode = useCallback((nodeId: string, newParentId: string) => {
@@ -1317,6 +1392,15 @@ export function DesktopMindMapEditor({
     else if (e.key === 'Insert') { e.preventDefault(); addChild(selectedId); showToast('Ins — Add child'); }
     else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); addSibling(selectedId); showToast('Enter — Add sibling'); }
     else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); hasBulk ? bulkDelete() : deleteNode(selectedId); showToast('Del — Delete node'); }
+    // Alt+K is FreeMind's "Insert image (choose)". Matched on `code`, not
+    // `key`: on macOS Option+K produces "˚", so comparing the character would
+    // work everywhere except a Mac.
+    else if (e.altKey && e.code === 'KeyK') {
+      e.preventDefault();
+      nodeImageTargetRef.current = selectedId;
+      nodeImageInputRef.current?.click();
+      showToast('Alt+K — Add image');
+    }
     else if (e.key === 'F2') { e.preventDefault(); const f = findNode(root, selectedId); if (f) startEditing(f.node); showToast('F2 — Rename'); }
     else if (e.key === 'F3') { e.preventDefault(); openNotes(selectedId); showToast('F3 — Notes'); }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') { e.preventDefault(); openNotes(selectedId); showToast('Ctrl+E — Edit notes'); }
@@ -1600,12 +1684,143 @@ export function DesktopMindMapEditor({
     setDropTargetId(null);
   }, []);
 
+  const getNodeAttachments = useCallback((nodeId: string, inlineAttachments?: NodeAttachmentRef[]) => {
+    const inline = inlineAttachments ?? [];
+    const external = externalNodeAttachments?.[nodeId] ?? [];
+    if (inline.length === 0) return external;
+    if (external.length === 0) return inline;
+
+    const merged = new Map<string, NodeAttachmentRef>();
+    for (const attachment of external) merged.set(attachment.attachment_id, attachment);
+    for (const attachment of inline) {
+      merged.set(attachment.attachment_id, {
+        ...merged.get(attachment.attachment_id),
+        ...attachment,
+      });
+    }
+    return Array.from(merged.values()).sort((left, right) => right.uploaded_at.localeCompare(left.uploaded_at));
+  }, [externalNodeAttachments]);
+
+  // ── Node images ───────────────────────────────────────────────────────────
+
+  /**
+   * Puts a picture on a node.
+   *
+   * The order matters. The glyph is generated first and the original uploaded
+   * second, and only then is `node.image` written. Failing between the upload
+   * and the write leaves an attachment nothing points at — invisible and
+   * harmless. The other order would leave a node pointing at nothing.
+   */
+  const attachNodeImage = useCallback(async (nodeId: string, file: File) => {
+    let glyph: NodeImageGlyph;
+    try {
+      glyph = await createNodeImageGlyph(file);
+    } catch {
+      showToast('That file is not an image the browser can read');
+      return;
+    }
+
+    if (!onNodeFileDrop) {
+      // Local-only editors still get the picture; there is nothing to upload to
+      // and nothing to click through to.
+      const newRoot = cloneTree(root);
+      const found = findNode(newRoot, nodeId);
+      if (!found) return;
+      found.node.image = { ...glyph, name: file.name };
+      mutate(newRoot);
+      showToast('Image added to node');
+      return;
+    }
+
+    setNodeImageBusy(true);
+    try {
+      const refs = await onNodeFileDrop(nodeId, [file]);
+      const newRoot = cloneTree(root);
+      const found = findNode(newRoot, nodeId);
+      if (!found) return;
+      found.node.image = {
+        ...glyph,
+        attachment_id: refs[0]?.attachment_id ?? null,
+        name: file.name,
+      };
+      if (refs.length > 0) {
+        found.node.attachments = [...(found.node.attachments ?? []), ...refs];
+      }
+      mutate(newRoot);
+      refs.forEach((attachment) => { void loadAttachmentPreview(attachment); });
+      showToast(refs.length > 0 ? 'Image added to node' : 'Image added — the full-size copy did not upload');
+    } catch {
+      showToast('Image upload failed');
+    } finally {
+      setNodeImageBusy(false);
+    }
+  }, [loadAttachmentPreview, mutate, onNodeFileDrop, root, showToast]);
+
+  /** Opens the full-resolution original behind a node's glyph. */
+  const openNodeImage = useCallback(async (node: MindMapTreeNode) => {
+    const attachmentId = node.image?.attachment_id;
+    if (!attachmentId) {
+      showToast('This picture has no full-size copy stored');
+      return;
+    }
+    const attachment = getNodeAttachments(node.id, node.attachments)
+      .find((item) => item.attachment_id === attachmentId);
+    if (!attachment) {
+      // Expected after restoring a version whose original was deleted since.
+      // The glyph still renders; only click-through cannot work.
+      showToast('The full-size original is no longer available');
+      return;
+    }
+    await previewOrOpenAttachment(attachment);
+  }, [getNodeAttachments, previewOrOpenAttachment, showToast]);
+
+  /** Removes the glyph. The original stays an ordinary attachment on the node. */
+  const removeNodeImage = useCallback((nodeId: string) => {
+    const newRoot = cloneTree(root);
+    const found = findNode(newRoot, nodeId);
+    if (!found?.node.image) return;
+    found.node.image = null;
+    mutate(newRoot);
+    showToast('Image removed from node');
+  }, [mutate, root, showToast]);
+
+  // Ctrl+V on the canvas puts a copied picture on the selected node. Ignored
+  // while a dialog or an inline editor owns the keyboard, where a paste means
+  // text.
+  useEffect(() => {
+    const handler = (e: ClipboardEvent) => {
+      if (notesOpen || editingId) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const file = Array.from(e.clipboardData?.items ?? [])
+        .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .find((value): value is File => Boolean(value));
+      if (!file) return;
+      e.preventDefault();
+      void attachNodeImage(selectedId, file);
+    };
+    window.addEventListener('paste', handler);
+    return () => window.removeEventListener('paste', handler);
+  }, [attachNodeImage, editingId, notesOpen, selectedId]);
+
   const onDropSvg = useCallback(async (e: React.DragEvent<SVGSVGElement>) => {
     if (!onNodeFileDrop || e.dataTransfer.files.length === 0) return;
     e.preventDefault();
     const nodeId = getNodeIdAtClientPoint(e.clientX, e.clientY);
     setDropTargetId(null);
     if (!nodeId) return;
+
+    // Dropping a single picture onto a node shows it on the node. It is still
+    // attached as a file, so nothing is lost either way — the difference is a
+    // glyph on the canvas instead of a link appended to the node's text.
+    const dropped = Array.from(e.dataTransfer.files);
+    const found = findNode(root, nodeId);
+    if (dropped.length === 1 && dropped[0].type.startsWith('image/') && !found?.node.image?.thumb) {
+      setSelectedId(nodeId);
+      await attachNodeImage(nodeId, dropped[0]);
+      return;
+    }
 
     setFileDropBusyNodeId(nodeId);
     try {
@@ -1624,7 +1839,7 @@ export function DesktopMindMapEditor({
     } finally {
       setFileDropBusyNodeId(null);
     }
-  }, [getNodeIdAtClientPoint, mutate, onNodeFileDrop, root, showToast]);
+  }, [attachNodeImage, getNodeIdAtClientPoint, mutate, onNodeFileDrop, root, showToast]);
 
   const attachFilesToSelectedNode = useCallback(async (files: FileList | File[] | null) => {
     if (!onNodeFileDrop || !files || files.length === 0 || selectedId === 'root') return;
@@ -1880,23 +2095,6 @@ export function DesktopMindMapEditor({
     );
   };
 
-  const getNodeAttachments = useCallback((nodeId: string, inlineAttachments?: NodeAttachmentRef[]) => {
-    const inline = inlineAttachments ?? [];
-    const external = externalNodeAttachments?.[nodeId] ?? [];
-    if (inline.length === 0) return external;
-    if (external.length === 0) return inline;
-
-    const merged = new Map<string, NodeAttachmentRef>();
-    for (const attachment of external) merged.set(attachment.attachment_id, attachment);
-    for (const attachment of inline) {
-      merged.set(attachment.attachment_id, {
-        ...merged.get(attachment.attachment_id),
-        ...attachment,
-      });
-    }
-    return Array.from(merged.values()).sort((left, right) => right.uploaded_at.localeCompare(left.uploaded_at));
-  }, [externalNodeAttachments]);
-
   const cancelHoverPopupClose = useCallback(() => {
     if (!hoverPopupCloseTimerRef.current) return;
     clearTimeout(hoverPopupCloseTimerRef.current);
@@ -1950,8 +2148,13 @@ export function DesktopMindMapEditor({
     const tagCount = (node.tags ?? []).length;
     const topTagH = tagCount > 0 ? TAG_STRIP_H : 0;
     const topMetaH = (attachments.length > 0 || Boolean(node.notes)) ? TOP_META_STRIP_H : 0;
-    const bodyTopY = box.y + topMetaH + topTagH;
-    const bodyH = box.h - footerHeight - previewHeight - topTagH - topMetaH;
+    // The picture gets a band of its own between the tag strip and the text, so
+    // the text stays centred in what is left rather than being pushed off-centre.
+    const nodeImage = node.image?.thumb ? node.image : null;
+    const imageBandH = nodeImage ? nodeImage.h + NODE_IMAGE_PAD : 0;
+    const imageY = box.y + topMetaH + topTagH + NODE_IMAGE_PAD / 2;
+    const bodyTopY = box.y + topMetaH + topTagH + imageBandH;
+    const bodyH = box.h - footerHeight - previewHeight - topTagH - topMetaH - imageBandH;
     const textX = box.x + NODE_PAD_X + leftPad;
     const lineStartY = bodyTopY + bodyH / 2 - ((lines.length - 1) * NODE_LINE_H) / 2;
 
@@ -2017,6 +2220,29 @@ export function DesktopMindMapEditor({
             stroke={ownColor ? '#ffffff22' : 'var(--mm-node-stroke)'}
             strokeWidth={0.5}
           />
+        )}
+
+        {/* An SVG <image>, deliberately not a foreignObject: the PDF export
+            strips every foreignObject before serializing, and a data: URI in an
+            <image> survives into the standalone SVG and rasterizes. The bitmap
+            was encoded at exactly these dimensions, so it maps 1:1 and there is
+            no crop-versus-letterbox question to answer. */}
+        {nodeImage && (
+          <image
+            href={nodeImage.thumb}
+            x={box.x + (box.w - nodeImage.w) / 2}
+            y={imageY}
+            width={nodeImage.w}
+            height={nodeImage.h}
+            className="mm-node-image"
+            // Inline, not in the stylesheet: the export serializes this element
+            // into a standalone SVG where no class rule follows it, and a glyph
+            // with square corners in the PDF would not match the canvas.
+            style={{ clipPath: 'inset(0 round 5px)' }}
+            onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); void openNodeImage(node); }}
+          >
+            <title>{nodeImage.name ?? 'Image'}</title>
+          </image>
         )}
 
         {hasCheckbox && (
@@ -2316,6 +2542,18 @@ export function DesktopMindMapEditor({
               e.currentTarget.value = '';
             }}
           />
+          <input
+            ref={nodeImageInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0];
+              const target = nodeImageTargetRef.current ?? selectedId;
+              if (file) void attachNodeImage(target, file);
+              e.currentTarget.value = '';
+            }}
+          />
           {/* Mobile file inputs — one per source type */}
           <input ref={mobileFileInputCameraRef} type="file" accept="image/*,video/*" capture="environment" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
           <input ref={mobileFileInputGalleryRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
@@ -2481,6 +2719,7 @@ export function DesktopMindMapEditor({
           </g>
         </svg>
         {fileDropBusyNodeId && <div className="mm-file-drop-badge">Encrypting dropped files…</div>}
+        {nodeImageBusy && <div className="mm-file-drop-badge" data-testid="node-image-busy">Adding the picture…</div>}
         {hoveredNoteData && (
           <div
             ref={hoverPopupRef}
@@ -2521,7 +2760,7 @@ export function DesktopMindMapEditor({
         <div className="mm-statusbar">
           <span>{flattenTree(root).length} node{flattenTree(root).length !== 1 ? 's' : ''}{multiSelect.size > 0 ? ` · ${multiSelect.size} selected` : ''}</span>
           <span>{selNode ? `Selected: ${selNode.text.split('\n')[0]}` : ''}</span>
-          <span className="mm-statusbar-hint">Tab=child · Enter=sibling · F2=rename · F6=attach file · Space=fold · C=check · P=progress · I=icon · D=date · Ctrl+F=search</span>
+          <span className="mm-statusbar-hint">Tab=child · Enter=sibling · F2=rename · F6=attach file · Alt+K=image · Space=fold · C=check · P=progress · I=icon · D=date · Ctrl+F=search</span>
         </div>
       )}
 
@@ -2903,6 +3142,14 @@ export function DesktopMindMapEditor({
             <div className="mm-context-divider" />
             {cmHasChildren && <button className="mm-context-item" onClick={() => { toggleCollapse(contextMenu.nodeId); setContextMenu(null); }}>{cmNode.collapsed ? 'Expand' : 'Collapse'} <kbd>Space</kbd></button>}
             <button className="mm-context-item" onClick={() => { openNotes(contextMenu.nodeId); setContextMenu(null); }}>Notes <kbd>F3</kbd></button>
+            <button className="mm-context-item" data-testid="context-add-image" onClick={() => {
+              nodeImageTargetRef.current = contextMenu.nodeId;
+              nodeImageInputRef.current?.click();
+              setContextMenu(null);
+            }}>{cmNode.image?.thumb ? 'Replace Image…' : 'Add Image…'} <kbd>Alt+K</kbd></button>
+            {cmNode.image?.thumb && (
+              <button className="mm-context-item" data-testid="context-remove-image" onClick={() => { removeNodeImage(contextMenu.nodeId); setContextMenu(null); }}>Remove Image</button>
+            )}
             <button className="mm-context-item" onClick={() => { setShowIconPicker(true); setContextMenu(null); }}>Icon <kbd>I</kbd></button>
             <button className="mm-context-item" onClick={() => {
               cmHasCheckbox ? toggleCheckbox(contextMenu.nodeId) : addCheckbox(contextMenu.nodeId);
@@ -2927,7 +3174,7 @@ export function DesktopMindMapEditor({
             <div className="mm-context-divider" />
             {!cmIsRoot && cmCanMoveUp && <button className="mm-context-item" onClick={() => { moveNode(contextMenu.nodeId, 'up'); setContextMenu(null); }}>Move Up</button>}
             {!cmIsRoot && cmCanMoveDown && <button className="mm-context-item" onClick={() => { moveNode(contextMenu.nodeId, 'down'); setContextMenu(null); }}>Move Down</button>}
-            {!cmIsRoot && <button className="mm-context-item" onClick={() => { duplicateNode(contextMenu.nodeId); setContextMenu(null); }}>Duplicate</button>}
+            {!cmIsRoot && <button className="mm-context-item" onClick={() => { void duplicateNode(contextMenu.nodeId); setContextMenu(null); }}>Duplicate</button>}
             <button className="mm-context-item" onClick={() => { resetNodePosition(contextMenu.nodeId); setContextMenu(null); }}>Reset Position <kbd>R</kbd></button>
             <button className="mm-context-item" onClick={() => { autoAlignSubtree(contextMenu.nodeId); setContextMenu(null); }}>Auto-align subtree <kbd>A</kbd></button>
             {!cmIsRoot && (<><div className="mm-context-divider" /><button className="mm-context-item mm-context-danger" onClick={() => { deleteNode(contextMenu.nodeId); setContextMenu(null); }}>Delete <kbd>Del</kbd></button></>)}
@@ -3172,7 +3419,7 @@ export function DesktopMindMapEditor({
           </div>
           <div className="mm-shortcuts-grid">{[
             ['Tab', 'Add child'], ['⇧Tab', 'Add left child (root)'], ['Enter', 'Add sibling'], ['Del / ⌫', 'Delete node'], ['F2', 'Rename'], ['F3', 'Notes'],
-            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['F7', 'Vault files'], ['F8', 'Share exports'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
+            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['Alt+K', 'Add image to node'], ['F7', 'Vault files'], ['F8', 'Share exports'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
             ['↑ ↓ ← →', 'Navigate (spatial)'], ['⇧+Arrow', 'Multi-select'], ['Ctrl+Click', 'Toggle select'], ['⇧+Drag', 'Rectangle select'],
             ['Home', 'Root'], ['+ −', 'Zoom'], ['Ctrl+S', 'Save'],
             ['C', 'Checkbox'], ['P', 'Progress'], ['I', 'Icons'], ['D', 'Dates'], ['U', 'URL'], ['R', 'Reset pos'],

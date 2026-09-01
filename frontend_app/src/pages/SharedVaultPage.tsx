@@ -48,17 +48,36 @@ function saveBytesToFile(bytes: Uint8Array, fileName: string, contentType: strin
   URL.revokeObjectURL(url);
 }
 
-function OutlinePreview({ node, depth = 0 }: { node: { id: string; text: string; children: Array<{ id: string; text: string; children: unknown[] }> }; depth?: number }) {
+interface OutlineNode {
+  id: string;
+  text: string;
+  image?: { thumb: string; w: number; h: number } | null;
+  children: Array<{ id: string; text: string; children: unknown[] }>;
+}
+
+function OutlinePreview({ node, depth = 0 }: { node: OutlineNode; depth?: number }) {
   if (depth > 2) return null;
   return (
     <li className="mt-2">
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-200">
-        {node.text || 'Untitled node'}
+      <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm text-slate-200">
+        {/* The thumbnail travels inside the share payload, so it renders with
+            no request of its own — the recipient sees the pictures before any
+            attachment has been fetched, or without fetching any at all. */}
+        {node.image?.thumb && (
+          <img
+            src={node.image.thumb}
+            alt=""
+            width={node.image.w}
+            height={node.image.h}
+            className="shrink-0 rounded-md border border-slate-800"
+          />
+        )}
+        <span className="min-w-0">{node.text || 'Untitled node'}</span>
       </div>
       {node.children.length > 0 && (
         <ul className="ml-4 border-l border-slate-800 pl-3">
           {node.children.slice(0, 5).map((child) => (
-            <OutlinePreview key={child.id} node={child as { id: string; text: string; children: Array<{ id: string; text: string; children: unknown[] }> }} depth={depth + 1} />
+            <OutlinePreview key={child.id} node={child as unknown as OutlineNode} depth={depth + 1} />
           ))}
         </ul>
       )}
@@ -424,7 +443,7 @@ export function SharedVaultPage() {
                         Outline
                       </summary>
                       <ul className="mt-3">
-                        <OutlinePreview node={unlocked.payload.tree.root as { id: string; text: string; children: Array<{ id: string; text: string; children: unknown[] }> }} />
+                        <OutlinePreview node={unlocked.payload.tree.root as unknown as OutlineNode} />
                       </ul>
                     </details>
                   </>

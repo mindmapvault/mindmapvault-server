@@ -40,6 +40,15 @@ pub struct InitAttachmentRequest {
     pub encryption_meta: Option<Value>,
 }
 
+/// Duplicating a node duplicates the files on it. The ciphertext is already
+/// sealed under the owner's master key, so the copy is a storage operation
+/// only — the client sends no bytes and the server decrypts nothing.
+#[derive(Debug, Deserialize)]
+pub struct CopyAttachmentRequest {
+    /// The node the copy belongs to — the duplicate's new id.
+    pub node_id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct InitAttachmentResponse {
     pub attachment_id: String,

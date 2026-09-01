@@ -1,4 +1,5 @@
 import { bezierPath, layoutTree } from '../components/MindMapLayout';
+import { NODE_IMAGE_PAD } from '../components/MindMapConstants';
 import { resolveLucideIcon, type LucideIconNode } from '../components/lucideIconRegistry';
 import type { MindMapGraph, MindMapTree, MindMapTreeNode } from '../types';
 import type { ThemeMode } from '../store/theme';
@@ -311,12 +312,25 @@ function renderTreeSvgSync(
       }
     }
 
+    // Node image. `layoutTree` already reserved the band for it, so this has to
+    // draw it or the preview shows a node with an unexplained gap. The data URI
+    // is inside the tree, so the preview needs no request to render it.
+    const nodeImage = node.image?.thumb ? node.image : null;
+    const imageBandH = nodeImage ? (nodeImage.h + NODE_IMAGE_PAD) * scale : 0;
+    if (nodeImage) {
+      const imageW = nodeImage.w * scale;
+      const imageH = nodeImage.h * scale;
+      parts.push(
+        `<image href="${escapeXml(nodeImage.thumb)}" x="${x + (w - imageW) / 2}" y="${y + topTagH + (NODE_IMAGE_PAD / 2) * scale}" width="${imageW}" height="${imageH}" style="clip-path:inset(0 round ${Math.max(1, 5 * scale)}px)"/>`,
+      );
+    }
+
     // Icons row: mirrors live editor's left-padded icon row.
     const iconKeys: string[] = Array.isArray(node.icons) ? node.icons : [];
     const scaledIconSize = ICON_SIZE * scale;
     if (iconKeys.length > 0) {
       let iconX = x + 4 * scale;
-      const iconY = y + topTagH + (h - topTagH - scaledIconSize) / 2;
+      const iconY = y + topTagH + imageBandH + (h - topTagH - imageBandH - scaledIconSize) / 2;
       for (const rawKey of iconKeys.slice(0, 4)) {
         const iconData = resolveLucideIcon(rawKey)?.iconNode;
         if (iconData) {
@@ -334,7 +348,7 @@ function renderTreeSvgSync(
     // Label text — centred, accounts for icon offset.
     const iconXOffset = iconKeys.length > 0 ? (iconKeys.slice(0, 4).length * (ICON_SIZE + 2) * scale) / 2 : 0;
     parts.push(
-      `<text x="${x + w / 2 + iconXOffset / 2}" y="${y + topTagH + (h - topTagH) / 2}" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="${fontSize}" font-weight="${fontWeight}" fill="${textColor}">${escapeXml(clampLabel(node.text, isRoot ? 22 : 18))}</text>`,
+      `<text x="${x + w / 2 + iconXOffset / 2}" y="${y + topTagH + imageBandH + (h - topTagH - imageBandH) / 2}" text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="${fontSize}" font-weight="${fontWeight}" fill="${textColor}">${escapeXml(clampLabel(node.text, isRoot ? 22 : 18))}</text>`,
     );
 
     // Note dot (amber) — top-right of node, matching live editor.
