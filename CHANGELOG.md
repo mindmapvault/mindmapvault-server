@@ -4,7 +4,11 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.4.0] - 2026-09-01
+
+The jump from 0.3.x marks the first release where the whole account
+lifecycle works self-hosted: sign up (open or by invite), administer, change
+your password, leave. Release notes: `docs/RELEASE_0.4.0.md`.
 
 ### Added
 - **Changing your password works now, from the settings hub's Account screen.** It was disabled on purpose: the old flow re-encrypted titles and keys but never re-wrapped attachment file keys, which are derived from the password — one password change and every attachment was unreadable forever. The rebuilt flow (design: `docs/PASSWORD_ROTATION.md`) re-encrypts everything the password protects — both private keys, every title and note, and every attachment's wrapped file key, pending uploads included — entirely in the browser, and commits it in one all-or-nothing transaction. Attachments written before v0.3.22 with the legacy key wrap are upgraded to the current format in the same pass. Vault contents, version history and shares are untouched: they are keyed to the key-pair or a share passphrase, neither of which changes.
