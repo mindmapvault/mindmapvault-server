@@ -94,6 +94,10 @@ cargo test --manifest-path backend/Cargo.toml
 node scripts/check_no_committed_secrets.mjs
 ```
 
+## Running This Yourself
+
+[mindmapvault.com/homelab](https://www.mindmapvault.com/homelab/) is the page for self-hosters: what you administer, what it costs to run, and the writing about how it is built. It is kept current with what is actually shipping, and every release links back to it.
+
 ## Published Image
 
 The same image is published to two registries on every release. Docker Hub is the default the installer and `docker-compose.yml` use; both carry identical digests, so pick whichever you prefer.

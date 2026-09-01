@@ -311,6 +311,12 @@ reachable from the public internet with only the token in front of it.
 
 ## Published Images
 
+> Release notes link to [mindmapvault.com/homelab](https://www.mindmapvault.com/homelab/),
+> which is the evergreen page for self-hosters. Keep that link in the notes for
+> each release; write a blog post only when a release has something worth
+> explaining, and link it from the hub rather than tying a post to every version.
+
+
 Every release publishes the same image to two registries, with identical
 digests. Use whichever you prefer:
 

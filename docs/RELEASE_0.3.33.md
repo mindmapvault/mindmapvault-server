@@ -175,3 +175,10 @@ One thing this release does not change, and cannot: **there is no password
 reset.** Each person's password is what decrypts their vaults and it never
 reaches the server. If someone loses it, that data is gone — deleting the
 account and starting again is the only way forward.
+
+---
+
+Running this yourself? [mindmapvault.com/homelab](https://www.mindmapvault.com/homelab/)
+is kept current with what is actually shipping, and there is a longer write-up
+of this release at [Self-Hosting MindMapVault Grew
+Up](https://www.mindmapvault.com/blog/self-hosting-grew-up/).
