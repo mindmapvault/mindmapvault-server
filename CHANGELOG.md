@@ -4,7 +4,10 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.4.1] - 2026-09-01
+
+A note editor worth writing in, and the fix that makes an upgrade actually
+reach the people using the server. Release notes: `docs/RELEASE_0.4.1.md`.
 
 ### Added
 - **Notes are now an Obsidian-style live-Markdown editor** (ported from the FOSS app, 0.3.32). Markdown renders as you type and the syntax reappears only on the line the caret is in, so there is no second preview pane and nothing to toggle to see what you wrote. Headings, emphasis, quotes, code, links, task checkboxes you can click, and images rendered inline — attachments included, resolved from `attachment://` to the decrypted blob. Enter continues a list, Tab indents, Ctrl+B/I/K do the obvious. Write/Read still exist for reading a long note, on the button or Ctrl+E. The stored note is plain Markdown, byte for byte what was typed. CodeMirror loads as its own chunk the first time a note is opened, so the editor bundle is unchanged for everyone else.
