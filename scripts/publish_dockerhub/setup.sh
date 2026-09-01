@@ -72,6 +72,11 @@ log_error() {
   echo "${COLOR_RED}✖${COLOR_RESET}  $1" >&2
 }
 
+# `${var,,}` needs bash 4; macOS still ships 3.2, so lowercase the portable way.
+to_lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 prompt_input() {
   local prompt="$1"
   local answer=""
@@ -107,7 +112,7 @@ ask_yes_no() {
   esac
 
   answer="$(prompt_input "${prompt} ${suffix}: ")"
-  answer="${answer,,}"
+  answer="$(to_lower "${answer}")"
   if [[ -z "${answer}" ]]; then
     answer="${normalized_default}"
   fi
@@ -236,7 +241,7 @@ ask_secret_with_existing() {
     answer="$(prompt_input "${name}: Enter=keep current, gen=generate new, or paste new value: ")"
     if [[ -z "${answer}" ]]; then
       echo "${existing_value}"
-    elif [[ "${answer,,}" == "gen" ]]; then
+    elif [[ "$(to_lower "${answer}")" == "gen" ]]; then
       echo "${generated_value}"
     else
       echo "${answer}"
@@ -371,7 +376,7 @@ if [[ "${ENV_FILE_EXISTED_AT_START}" -eq 1 ]]; then
   MODE_DEFAULT="update"
 fi
 MODE_CHOICE="$(prompt_input "Mode [install/update] (${MODE_DEFAULT}): ")"
-MODE_CHOICE="${MODE_CHOICE,,}"
+MODE_CHOICE="$(to_lower "${MODE_CHOICE}")"
 if [[ -z "${MODE_CHOICE}" ]]; then
   MODE_CHOICE="${MODE_DEFAULT}"
 fi
