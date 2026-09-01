@@ -232,30 +232,75 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to Docker Hub
-        if: steps.image.outputs.dockerhub_enabled == 'true'
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # One command per target registry. imagetools copies the blobs across
-      # from GHCR when the target is Docker Hub.
-      - name: Create manifest list and push
+      # GHCR first and on its own, so a problem with Docker Hub credentials
+      # cannot cost us the GHCR publish as well. This repository has a history
+      # of Docker Hub auth trouble; the two registries are kept independent so
+      # one failing is one failure, not two.
+      - name: Push GHCR tags
         working-directory: /tmp/digests
         shell: bash
+        env:
+          GHCR: ${{ steps.image.outputs.ghcr }}
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ steps.image.outputs.ghcr }}@sha256:%s ' *)
+          sources="$(printf "${GHCR}@sha256:%s " *)"
+          targets="$(jq -cr --arg img "$GHCR:" \
+            '.tags | map(select(startswith($img))) | map("-t " + .) | join(" ")' \
+            <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          echo "Pushing: $targets"
+          docker buildx imagetools create $targets $sources
+
+      - name: Log in to Docker Hub
+        if: steps.image.outputs.dockerhub_enabled == 'true'
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          # A secret pasted through a browser easily picks up a trailing
+          # newline, and Docker Hub rejects the resulting Basic auth header as
+          # malformed rather than as bad credentials — which reads like a
+          # broken token and is not. Strip whitespace before use. Neither value
+          # is ever echoed.
+          username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
+          token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '[:space:]')"
+
+          if [ -z "$username" ] || [ -z "$token" ]; then
+            echo "::error::DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is empty. Set both, or unset DOCKERHUB_NAMESPACE to publish to GHCR only."
+            exit 1
+          fi
+
+          printf '%s' "$token" | docker login docker.io --username "$username" --password-stdin
+
+      # imagetools copies the blobs across from GHCR; the architectures are not
+      # rebuilt or re-uploaded from the runners.
+      - name: Push Docker Hub tags
+        if: steps.image.outputs.dockerhub_enabled == 'true'
+        working-directory: /tmp/digests
+        shell: bash
+        env:
+          GHCR: ${{ steps.image.outputs.ghcr }}
+          DOCKERHUB: ${{ steps.image.outputs.dockerhub }}
+        run: |
+          sources="$(printf "${GHCR}@sha256:%s " *)"
+          targets="$(jq -cr --arg img "$DOCKERHUB:" \
+            '.tags | map(select(startswith($img))) | map("-t " + .) | join(" ")' \
+            <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          echo "Pushing: $targets"
+          docker buildx imagetools create $targets $sources
 
       # Proves the tags resolve and are multi-arch before anyone pulls them.
       - name: Verify published tags
         shell: bash
+        env:
+          DOCKERHUB_ENABLED: ${{ steps.image.outputs.dockerhub_enabled }}
         run: |
           failed=0
           while read -r tag; do
             [ -n "$tag" ] || continue
+            # Skip anything that was deliberately not pushed.
+            case "$tag" in
+              docker.io/*) [ "$DOCKERHUB_ENABLED" = "true" ] || continue ;;
+            esac
             echo "── $tag"
             if ! platforms="$(docker buildx imagetools inspect --raw "$tag" \
                 | jq -r '.manifests[]? | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture' \
