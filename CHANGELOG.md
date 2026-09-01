@@ -4,7 +4,11 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.5.0] - 2026-09-02
+
+The first release that changes what a map looks like rather than what the
+server does with it — plus two fixes for bugs that could lose work, both found
+while building it. Release notes: `docs/RELEASE_0.5.0.md`.
 
 ### Added
 - **Pictures on the nodes themselves.** Add one from the node's context menu, by dropping an image onto a node, with Ctrl+V, or with **Alt+K** — the shortcut FreeMind uses for the same thing. A thumbnail is drawn on the node at its own aspect ratio inside a 64×64 box — no crop, no letterbox — and clicking it opens the full-resolution original. The thumbnail lives inside the map, so it inherits the vault's encryption, needs no request to render, and appears in the vault-list preview and on a shared link with nothing fetched at all. The original is kept as an ordinary encrypted attachment; a node whose original has been deleted still shows its picture, and only click-through stops working. PNG and PDF exports include the pictures; the text formats (Markdown, FreeMind, Freeplane, XMind, WiseMapping) drop them.
