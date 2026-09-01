@@ -31,7 +31,7 @@ What this server does not include: sync, offline client features, team managemen
 Pull the published image:
 
 ```bash
-docker pull ghcr.io/mindmapvault/mindmapvault-server:latest
+docker pull kornelko2/mindmapvault-server:latest
 ```
 
 Or start the full local stack (PostgreSQL + S3 + server) with Docker Compose:
@@ -96,11 +96,18 @@ node scripts/check_no_committed_secrets.mjs
 
 ## Published Image
 
+The same image is published to two registries on every release. Docker Hub is the default the installer and `docker-compose.yml` use; both carry identical digests, so pick whichever you prefer.
+
 ```text
+kornelko2/mindmapvault-server:latest
 ghcr.io/mindmapvault/mindmapvault-server:latest
 ```
 
-Images are built and published automatically via GitHub Actions on pushes to `main` and on version tags. The workflow configuration lives in `.github/workflows/build-server-image.yml`.
+Both are multi-arch — `linux/amd64` and `linux/arm64` — so they run on a Raspberry Pi or an Ampere VPS as well as on x86.
+
+`latest` tracks the newest release, not the newest commit. A push to `main` publishes only a `sha-` tag; version tags and `latest` are written when a `v*` tag is pushed. Pin a version in production.
+
+Built by `.github/workflows/build-server-image.yml`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#published-images) for how publishing is wired up and how to republish a release.
 
 ## Contributing
 

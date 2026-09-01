@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+- **The recommended install pulled a four-month-old image.** `scripts/publish_dockerhub/setup.sh` and the default `docker-compose.yml` both pull from Docker Hub, but Docker Hub publishing was removed from the build workflow in May, so everything since went to GHCR alone and the Docker Hub tag stopped moving. Releases now publish the same digests to both registries; a fork without the Docker Hub secrets still publishes to GHCR alone rather than failing. `docs/DEPLOYMENT.md` documents both registries, what each tag means, and how to republish a release to a registry it did not reach.
+
 ## [0.3.33] - 2026-08-31
 
 ### Added

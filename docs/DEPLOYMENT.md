@@ -309,6 +309,69 @@ Treat `/admin/` as an internal surface: restrict it at the proxy layer by
 source address, or behind your own authentication, rather than leaving it
 reachable from the public internet with only the token in front of it.
 
+## Published Images
+
+Every release publishes the same image to two registries, with identical
+digests. Use whichever you prefer:
+
+| Registry | Image |
+| --- | --- |
+| Docker Hub | `kornelko2/mindmapvault-server` |
+| GHCR | `ghcr.io/mindmapvault/mindmapvault-server` |
+
+Docker Hub is the default: it is what `docker-compose.yml` and the guided
+installer in `scripts/publish_dockerhub/` pull. GHCR needs no account to pull
+and is convenient if you already authenticate to GitHub.
+
+Both are multi-arch, `linux/amd64` and `linux/arm64`, each built on a runner of
+its own architecture rather than under emulation.
+
+### What The Tags Mean
+
+| Tag | Written when | Use it for |
+| --- | --- | --- |
+| `vX.Y.Z` | a `v*` git tag is pushed | production — pin this |
+| `latest` | a `v*` git tag is pushed | trying it out; tracks the newest **release** |
+| `sha-<commit>` | any push to `main` | reproducing a specific commit |
+
+`latest` deliberately does not follow `main`. A push to the default branch
+publishes only its `sha-` tag, so `latest` always means "newest release" rather
+than "newest commit".
+
+### How Publishing Works
+
+`.github/workflows/build-server-image.yml` builds each architecture on a native
+runner and pushes it to GHCR by digest, then a second job joins the digests
+into one multi-arch manifest and pushes that manifest to both registries. The
+architectures are therefore built and uploaded once, not once per registry, and
+the two registries cannot drift apart. The job then inspects every tag it wrote
+and fails if one is missing an architecture.
+
+Docker Hub publishing needs three repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `DOCKERHUB_NAMESPACE` | the user or org the image lives under |
+| `DOCKERHUB_USERNAME` | account used to log in |
+| `DOCKERHUB_TOKEN` | an access token with write permission |
+
+If `DOCKERHUB_NAMESPACE` is unset — as in a fork — the workflow logs a notice
+and publishes to GHCR alone rather than failing.
+
+### Republishing A Release
+
+To publish an existing release to a registry it did not reach, run the workflow
+manually and give it the release tag:
+
+```bash
+gh workflow run build-server-image.yml --ref main -f release_tag=v0.3.33
+```
+
+The tag has to match the version in `backend/Cargo.toml` on the ref you run
+from; the job fails rather than publish one version's code under another's tag.
+This exists so a release can be pushed to a newly-wired registry without moving
+the git tag.
+
 ## Persistence And Backups
 
 The compose stack stores durable data in named volumes:
@@ -361,21 +424,15 @@ docker compose ps
 curl http://127.0.0.1:8090/health
 ```
 
-If you use the published image from GitHub Container Registry, set `SERVER_IMAGE` before startup:
+The compose file defaults to the Docker Hub image. To pin a version, or to use
+GHCR instead, set `SERVER_IMAGE` before startup:
 
-```powershell
-$env:SERVER_IMAGE = 'ghcr.io/mindmapvault/mindmapvault-server:latest'
-docker compose up -d postgres garage server
+```bash
+SERVER_IMAGE='kornelko2/mindmapvault-server:v0.3.33' docker compose up -d postgres garage server
+SERVER_IMAGE='ghcr.io/mindmapvault/mindmapvault-server:v0.3.33' docker compose up -d postgres garage server
 ```
 
-If Docker Hub publishing is configured for the repository, you can use the Docker Hub image name instead:
-
-```powershell
-$env:SERVER_IMAGE = 'docker.io/<dockerhub-namespace>/mindmapvault-server:v0.3.26'
-docker compose up -d postgres garage server
-```
-
-On tag pushes like `v0.3.26`, the publish workflow emits version tags like `v0.3.26` in addition to the original Git ref tag and `latest` on the default branch.
+See [Published Images](#published-images) for what the tags mean.
 
 ## Common Operations
 

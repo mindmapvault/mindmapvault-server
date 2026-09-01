@@ -44,7 +44,9 @@ services:
       retries: 10
 
   server:
-    # Pin a version tag for production, e.g. kornelko2/mindmapvault-server:0.3.26
+    # Pin a version for production, e.g. kornelko2/mindmapvault-server:v0.3.33.
+    # ghcr.io/mindmapvault/mindmapvault-server carries the same digests if you
+    # prefer GHCR. See docs/DEPLOYMENT.md#published-images.
     image: ${SERVER_IMAGE:-kornelko2/mindmapvault-server:latest}
     container_name: mindmapvault-server
     restart: unless-stopped
