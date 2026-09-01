@@ -94,9 +94,12 @@ let shareId = '';
   });
   check('create share 200', res.status === 200, `status ${res.status}`);
   shareId = body?.share_id ?? '';
+  // Derived from --base-url rather than hardcoded: the point of this check is
+  // that the server echoes back whatever host the request arrived on, so
+  // pinning a port here would pass for the wrong reason on any other one.
   check('share_url is built from the request host, not a hosted domain',
     typeof body?.share_url === 'string'
-      && body.share_url.includes('127.0.0.1:8099/shared/')
+      && body.share_url.startsWith(`${new URL(BASE).origin}/shared/`)
       && !body.share_url.includes('mindmapvault.com'),
     body?.share_url);
 }
