@@ -100,6 +100,22 @@ export interface StorageSummary {
   plan_limit_bytes?: number;
 }
 
+// The account's own record of itself. Only the fields the app reads are
+// declared: the endpoint also returns plan and access-grant data, which this
+// build has no billing to make use of.
+export interface UserProfile {
+  username: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+}
+
+export interface UpdateUserProfileRequest {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+}
+
 export interface SubscriptionSummaryResponse {
   subscription_tier: 'free' | 'paid';
   storage_limit_bytes: number;

@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+- **A settings hub in the app, reached from a gear in the toolbar.** Three screens: **Account**, **Appearance** and **Help**. It replaces the theme popover, which had grown into a single scrolling column holding accent colours, autosave, auto-logout, the install button, support links and account deletion — with the delete-account form widening the whole popover whenever it was available.
+- **Your name and email can be filled in from the app.** The server has had `GET`/`PUT /api/auth/profile` since before this repository was split out, and the admin console has always shown and searched those fields, but nothing in the app could set them. The Account screen now does, and says plainly what most of this product does not have to: unlike your vaults, these three fields are stored unencrypted and are visible to whoever runs the server.
+- The Account screen states that nobody — including the operator — can reset your password, in the place someone goes looking for that button.
+
+### Changed
+- Light and dark mode, the accent colour and autosave now live on an **Appearance** screen with room to explain each one, rather than stacked in a dropdown. The theme toggles already in the vault-list and editor toolbars are unchanged.
+
 ### Fixed
 - **The guided installer could not run on macOS.** `scripts/publish_dockerhub/setup.sh` used `${var,,}`, which needs bash 4; macOS ships bash 3.2 and the README tells people to run it with `bash setup.sh`, so it died at step 3 of 7 with "bad substitution" on every Mac.
 - **The installer exposed Postgres and Garage on every interface.** The 0.3.31 fix that bound those ports to `127.0.0.1` went into the repository's `docker-compose.yml` but not into the installer's copy — the one self-hosters actually deploy. Docker's published ports are inserted ahead of ufw-style firewalls, so those services were reachable from the network regardless of the host firewall. Same for `RUST_LOG`, which still defaulted to `backend=debug` there.

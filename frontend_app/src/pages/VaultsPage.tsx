@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import encryptedVaultApi from '../api/encryptedVault';
 import { mindmapsApi } from '../api/mindmaps';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { ThemePanel } from '../components/ThemePanel';
+import { SettingsButton } from '../components/SettingsButton';
 import { LogoWithText } from '../components/Logo';
 import { UnlockModal } from '../components/UnlockModal';
 
@@ -1674,7 +1674,10 @@ export function VaultsPage() {
                   </svg>
                 )}
               </button>
-              <ThemePanel />
+              <SettingsButton
+                className="rounded-lg border border-slate-600 p-2 text-slate-300 transition hover:border-slate-500 hover:text-white"
+                iconClassName="h-4 w-4"
+              />
               {isLocalMode && (
                 <button
                   onClick={() => navigate('/change-password')}

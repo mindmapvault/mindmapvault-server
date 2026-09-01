@@ -1,4 +1,10 @@
-import type { Argon2Params, LoginResponse, SaltResponse } from '../types';
+import type {
+  Argon2Params,
+  LoginResponse,
+  SaltResponse,
+  UpdateUserProfileRequest,
+  UserProfile,
+} from '../types';
 import { api } from './client';
 
 export interface KeyBundleResponse {
@@ -56,6 +62,11 @@ export const authApi = {
 
   login: (username: string, auth_token: string) =>
     api.post<LoginResponse>('/auth/login', { username, auth_token }),
+
+  getProfile: () => api.get<UserProfile>('/auth/profile'),
+
+  updateProfile: (body: UpdateUserProfileRequest) =>
+    api.put<UserProfile>('/auth/profile', body),
 
   deleteProfile: () =>
     api.delete<{ message: string; deleted_vaults: number }>('/auth/profile'),

@@ -13,7 +13,7 @@ import {
   uid,
 } from './MindMapHelpers';
 import { COLOR_PALETTE, NODE_COLORS, PROGRESS_PRESETS } from './MindMapConstants';
-import { ThemePanel } from './ThemePanel';
+import { SettingsButton } from './SettingsButton';
 import type { MindMapEditorProps } from './MindMapEditor.types';
 
 const MOBILE_COLORS = [...NODE_COLORS, ...COLOR_PALETTE.slice(0, 10)].filter(
@@ -672,7 +672,7 @@ export function MobileMindMapEditor({
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
             )}
           </button>
-          <ThemePanel />
+          <SettingsButton className="rounded-full border border-[var(--border-muted)] p-2" iconClassName="h-4 w-4" />
           <span className="ml-auto rounded-full bg-[var(--bg-secondary)] px-3 py-1.5">{flattenAll(root).length} nodes</span>
         </div>
         {(saveMsg || error) && (
