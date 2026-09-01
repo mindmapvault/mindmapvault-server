@@ -4,6 +4,7 @@ import { authApi } from '../api/auth';
 import { DEFAULT_CLOUD_SERVER_URL, setServerUrl } from '../api/client';
 import { DesktopTauriBadge } from '../components/DesktopTauriBadge';
 import { LogoBlock } from '../components/Logo';
+import { PasswordInput } from '../components/PasswordInput';
 import { PwaInstallButton } from '../components/PwaInstallButton';
 import { aesDecrypt } from '../crypto/aes';
 import { deriveMasterAesKey, deriveMasterKey, deriveAuthToken } from '../crypto/kdf';
@@ -279,13 +280,11 @@ export function LoginPage() {
 
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-300">Password</label>
-              <input
-                type="password"
+              <PasswordInput
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••••••"
                 autoComplete="current-password"
-                className="w-full rounded-lg border border-slate-600 bg-surface px-4 py-2.5 text-white placeholder-slate-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
 
