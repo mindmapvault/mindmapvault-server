@@ -363,3 +363,59 @@
   color: var(--text-primary) !important;
 }
 .light .encrypted-vault-dialog__field-label { color: var(--text-secondary) !important; }
+
+/* ── New-version prompt ───────────────────────────────────────────────────── */
+/* Fixed rather than in the layout flow: it can appear on any page, and pushing
+   the app down mid-session is worse than sitting over it. */
+.mm-update-banner {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 10px 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 13px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.mm-update-banner__text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mm-update-banner__action {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mm-update-banner__action:hover:not(:disabled) { background: var(--accent-hover); }
+.mm-update-banner__action:disabled { opacity: 0.6; cursor: default; }
+
+.mm-update-banner__dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.mm-update-banner__dismiss:hover { color: var(--text-primary); }

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from '../components/ProtectedRoute';
+import { UpdateBanner } from '../components/UpdateBanner';
 import { isTauri } from '../storage';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
@@ -80,6 +81,7 @@ export default function AppRoot() {
 
   return (
     <BrowserRouter>
+      <UpdateBanner />
       <Suspense fallback={
         <div className="flex min-h-screen items-center justify-center bg-surface">
           <svg className="h-8 w-8 animate-spin text-accent" viewBox="0 0 24 24" fill="none" aria-hidden="true">

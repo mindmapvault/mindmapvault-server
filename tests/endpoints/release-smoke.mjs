@@ -189,5 +189,27 @@ let attachmentId = '';
   check('/ serves the app', (await titleAt('/')).includes('App'), await titleAt('/'));
 }
 
+// Upgrades are only visible if the entry point revalidates. A cached
+// index.html keeps asking for the previous release's asset names, and a cached
+// sw.js keeps the old worker in charge — between them a new version can be
+// deployed and never reach a single browser.
+{
+  const cacheAt = async (path) =>
+    (await fetch(`${BASE}${path}`)).headers.get('cache-control') ?? '';
+  for (const path of ['/', '/admin/', '/sw.js']) {
+    const value = await cacheAt(path);
+    check(`${path} is served no-cache so an upgrade is picked up`,
+      /no-cache|no-store|max-age=0/.test(value), value || 'no cache-control');
+  }
+  const assetPath = (await fetch(`${BASE}/`).then((r) => r.text()))
+    .match(/\/assets\/[A-Za-z0-9._-]+\.js/)?.[0];
+  check('the app shell references a hashed asset', Boolean(assetPath), assetPath ?? 'none');
+  if (assetPath) {
+    const value = await cacheAt(assetPath);
+    check('hashed assets are cached long — their names change every build',
+      /immutable/.test(value), value || 'no cache-control');
+  }
+}
+
 console.log(failures === 0 ? '\nAll smoke checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -38,6 +38,7 @@ use error::AppError;
 use middleware::auth::{JwtService, KeyVersionCache};
 use middleware::request_cleanup::release_request_caches;
 use middleware::request_id::request_id_layer;
+use middleware::static_cache::static_cache_headers;
 use middleware::throttle::AuthThrottle;
 use models::instance_settings::{InstanceSettings, InstanceSettingsHandle};
 use models::status::PurgeStatusHandle;
@@ -281,10 +282,21 @@ async fn main() -> anyhow::Result<()> {
         let sql_store = sql_store.expect("sql_store must be initialized");
         let app_dir = app_dist_dir();
         let admin_dir = admin_dist_dir();
-        let app_static_service = ServeDir::new(&app_dir)
-            .fallback(ServeFile::new(format!("{app_dir}/index.html")));
-        let admin_static_service = ServeDir::new(&admin_dir)
-            .fallback(ServeFile::new(format!("{admin_dir}/index.html")));
+        // Wrapped in a Router each so the cache-policy middleware sees the
+        // path the static service was actually asked for — `nest_service`
+        // strips the `/admin/` prefix before the inner service runs, which is
+        // what makes one `/assets/` check correct for both apps.
+        let app_static_service = Router::new()
+            .fallback_service(
+                ServeDir::new(&app_dir).fallback(ServeFile::new(format!("{app_dir}/index.html"))),
+            )
+            .layer(from_fn(static_cache_headers));
+        let admin_static_service = Router::new()
+            .fallback_service(
+                ServeDir::new(&admin_dir)
+                    .fallback(ServeFile::new(format!("{admin_dir}/index.html"))),
+            )
+            .layer(from_fn(static_cache_headers));
 
         let public_state = PublicState {
             settings: settings.clone(),

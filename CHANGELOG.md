@@ -12,6 +12,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - The note dialog is one screen instead of a stack. Labels and attachments moved behind a **Details** disclosure, collapsed by default, which is also where Delete note lives; the writing surface gets the window.
 - `tests/ui/note-editor.mjs` — the editor driven in a real browser: markers hidden and revealed by the caret, a task checkbox ticked, list continuation, an uploaded image resolved to a blob URL, the Read↔Write round trip, autosave surviving Escape, and the note round-tripping through the encrypted vault.
 
+### Fixed
+- **An upgraded server kept serving the old app.** The service worker registered with no update callback, so a new release installed itself and then waited indefinitely — every user stayed on the build they first loaded until they happened to hard-reload. The app now offers a Reload when a new version is waiting. `index.html`, `/admin/` and `sw.js` are also served `no-cache` (hashed assets keep a one-year `immutable`); without that the entry point could be cached and go on requesting the previous release's filenames.
+- The vault-files dialog closes on Escape, like every other dialog in the editor. A pending delete or revoke confirmation takes the Escape first.
+- Removed `MobileMindMapEditor.tsx`: dead code that nothing imported, kept building and had to be edited in step with the real editor. Its unreachable "Download .mmv" button — never wired to anything — goes with it. The touch editor is `MindMapEditor`'s own mobile branch and is unaffected.
+- The sign-in page reported **APP v0.3.33** on a 0.4.0 release: `frontend_app/package.json` was missed in the release bump.
+
 ## [0.4.0] - 2026-09-01
 
 The jump from 0.3.x marks the first release where the whole account

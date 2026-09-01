@@ -131,6 +131,22 @@ export function EncryptedVaultDialog({
     setActiveTab(initialTab);
   }, [initialTab]);
 
+  // Every other dialog in the editor closes on Escape; this one only had the ×
+  // and the overlay. A pending confirmation goes first, so Escape never closes
+  // the dialog out from under a question it has asked.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      if (deleteTarget) { setDeleteTarget(null); return; }
+      if (revokeTarget) { setRevokeTarget(null); return; }
+      onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, deleteTarget, revokeTarget, onClose]);
+
   const attachmentCount = attachments.filter((item) => item.status === 'available').length;
   const activeShareCount = shares.filter((item) => !item.revoked).length;
   const selectedNodeLabel = useMemo(
