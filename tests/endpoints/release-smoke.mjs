@@ -164,5 +164,30 @@ let attachmentId = '';
   check('CORS does not allow https://app.mindmapvault.com', (await probe('https://app.mindmapvault.com')) === null);
 }
 
+// The app and the admin console share one origin, and the app's service worker
+// is scoped to all of it. Its navigation fallback has to be told which paths
+// belong to the server, or it answers /admin/ with the app's shell and the
+// console becomes unreachable in any browser that has opened the app.
+{
+  const res = await fetch(`${BASE}/sw.js`);
+  if (res.status !== 200) {
+    check('service worker is served', false, `status ${res.status}`);
+  } else {
+    const sw = await res.text();
+    const denylist = sw.match(/denylist:\[([^\]]*)\]/)?.[1] ?? '';
+    check('service worker has a navigation denylist', Boolean(denylist), denylist || 'none');
+    check('and it excludes /admin/ from the app shell', denylist.includes('admin'), denylist);
+    check('and excludes the API', denylist.includes('api'), denylist);
+  }
+}
+
+// The console and the app must be different documents at their own paths.
+{
+  const titleAt = async (path) => (await fetch(`${BASE}${path}`).then((r) => r.text()))
+    .match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
+  check('/admin/ serves the admin console', (await titleAt('/admin/')).includes('Admin'), await titleAt('/admin/'));
+  check('/ serves the app', (await titleAt('/')).includes('App'), await titleAt('/'));
+}
+
 console.log(failures === 0 ? '\nAll smoke checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

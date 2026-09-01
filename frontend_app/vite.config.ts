@@ -42,6 +42,20 @@ const pwaPlugin = VitePWA({
   },
   workbox: {
     navigateFallback: '/index.html',
+    // This app and the admin console are served from one origin by the
+    // self-hosted server, and this worker's scope is that whole origin. Without
+    // a denylist the fallback answers *every* navigation with the app's shell,
+    // so anyone who had opened the app then got the app's sign-in page at
+    // /admin/ — the console became unreachable in that browser until the
+    // worker was cleared by hand.
+    //
+    // Paths the server owns, which the worker must never answer for:
+    navigateFallbackDenylist: [
+      /^\/admin(\/|$)/,
+      /^\/api\//,
+      /^\/share\//,
+      /^\/health$/,
+    ],
     globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff2}'],
     runtimeCaching: [
       {
