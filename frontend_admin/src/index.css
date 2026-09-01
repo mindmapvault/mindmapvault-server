@@ -10,7 +10,13 @@
  * reader who cannot separate red from green.
  */
 
+/* Dark is the base. Light is applied two ways: automatically when the operating
+   system asks for it, and explicitly when the operator picks it in the header.
+   The explicit choice wins in both directions, which is why the automatic rule
+   is guarded against an explicit "dark". */
 :root {
+  color-scheme: dark;
+
   /* Surfaces, from the page backdrop up to a raised control. */
   --bg-page: #11151c;
   --bg-surface: #171c25;
@@ -33,6 +39,12 @@
   --warn: #c98a1e;
   --danger: #cf4d4d;
 
+  /* Tinted backgrounds for a failed or flagged card. Separate tokens because
+     a wash that reads as "slightly red" on near-black is far too strong on
+     white. */
+  --danger-wash: rgba(207, 77, 77, 0.08);
+  --danger-line: rgba(207, 77, 77, 0.4);
+
   --radius: 6px;
   --radius-lg: 8px;
 
@@ -42,6 +54,64 @@
   color: var(--text-main);
   background: var(--bg-page);
   -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --bg-page: #f2f4f7;
+    --bg-surface: #ffffff;
+    --bg-raised: #eef1f5;
+    --bg-sunken: #f7f9fb;
+
+    --line: #dce2e9;
+    --line-strong: #bcc6d2;
+
+    --text-main: #1b2431;
+    --text-muted: #55616f;
+    --text-faint: #6d7987;
+
+    /* Darkened so the contrast against white clears WCAG AA at text size —
+       the dark-mode versions are legible on near-black and washed out here. */
+    --accent: #2f6fd0;
+    --accent-hover: #2a63bb;
+    --accent-quiet: rgba(47, 111, 208, 0.1);
+
+    --ok: #1c7a45;
+    --warn: #8a6110;
+    --danger: #b3312f;
+
+    --danger-wash: rgba(179, 49, 47, 0.06);
+    --danger-line: rgba(179, 49, 47, 0.35);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-page: #f2f4f7;
+  --bg-surface: #ffffff;
+  --bg-raised: #eef1f5;
+  --bg-sunken: #f7f9fb;
+
+  --line: #dce2e9;
+  --line-strong: #bcc6d2;
+
+  --text-main: #1b2431;
+  --text-muted: #55616f;
+  --text-faint: #6d7987;
+
+  --accent: #2f6fd0;
+  --accent-hover: #2a63bb;
+  --accent-quiet: rgba(47, 111, 208, 0.1);
+
+  --ok: #1c7a45;
+  --warn: #8a6110;
+  --danger: #b3312f;
+
+  --danger-wash: rgba(179, 49, 47, 0.06);
+  --danger-line: rgba(179, 49, 47, 0.35);
 }
 
 * {
@@ -259,11 +329,11 @@ code {
 
 .danger-button {
   color: var(--danger);
-  border-color: rgba(207, 77, 77, 0.4);
+  border-color: var(--danger-line);
 }
 
 .danger-button:hover:not(:disabled) {
-  background: rgba(207, 77, 77, 0.12);
+  background: var(--danger-wash);
   border-color: var(--danger);
 }
 
@@ -320,7 +390,7 @@ code {
 
 .nav-item.is-active {
   background: var(--accent-quiet);
-  border-color: rgba(59, 125, 221, 0.35);
+  border-color: var(--accent);
 }
 
 .nav-badge {
@@ -407,6 +477,17 @@ code {
   justify-items: end;
 }
 
+.topbar-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.landing-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .session-chip {
   display: inline-flex;
   gap: 7px;
@@ -420,6 +501,39 @@ code {
   height: 6px;
   border-radius: 50%;
   background: var(--ok);
+}
+
+/* Theme control. Small, unobtrusive, and out of the way of the actions the
+   page is actually for. */
+.theme-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.theme-option {
+  padding: 4px 9px;
+  border: none;
+  border-right: 1px solid var(--line);
+  background: var(--bg-sunken);
+  color: var(--text-faint);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.theme-option:last-child {
+  border-right: none;
+}
+
+.theme-option:hover {
+  color: var(--text-main);
+}
+
+.theme-option.is-active {
+  background: var(--bg-raised);
+  color: var(--text-main);
+  font-weight: 600;
 }
 
 /* ── Panels ───────────────────────────────────────────────────────────────── */
@@ -467,10 +581,10 @@ code {
 .error-banner {
   margin: 0;
   padding: 10px 14px;
-  border: 1px solid rgba(207, 77, 77, 0.4);
+  border: 1px solid var(--danger-line);
   border-left: 3px solid var(--danger);
   border-radius: var(--radius);
-  background: rgba(207, 77, 77, 0.08);
+  background: var(--danger-wash);
   color: var(--text-main);
   font-size: 0.88rem;
 }
@@ -552,7 +666,7 @@ code {
 
 .health-card.is-down {
   border-left-color: var(--danger);
-  background: rgba(207, 77, 77, 0.06);
+  background: var(--danger-wash);
 }
 
 .health-card.is-down .health-dot {

@@ -132,11 +132,13 @@ type InvitesResponse = {
   register_url: string;
 };
 
+type ThemeChoice = 'system' | 'light' | 'dark';
 type AdminView = 'status' | 'people' | 'settings' | 'maintenance';
 type AccountFilter = 'all' | 'active' | 'locked';
 type UserSort = 'created_desc' | 'storage_desc' | 'vaults_desc' | 'username_asc';
 
 const ADMIN_TOKEN_KEY = 'mindmapvault-admin-token';
+const THEME_KEY = 'mindmapvault-admin-theme';
 const USERS_PAGE_SIZE = 12;
 const MEGABYTE = 1024 * 1024;
 
@@ -181,6 +183,37 @@ class AdminRequestError extends Error {
     super(message);
     this.name = 'AdminRequestError';
     this.status = status;
+  }
+}
+
+// Theme. "system" follows the operating system; the other two override it.
+// Stored per browser, so a shared machine does not impose one operator's
+// choice on the next. Storage can throw outright in a locked-down browser, so
+// every access is guarded and simply falls back to following the system.
+function readThemeChoice(): ThemeChoice {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark' || saved === 'system') {
+      return saved;
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  return 'system';
+}
+
+function applyThemeChoice(choice: ThemeChoice) {
+  const root = document.documentElement;
+  if (choice === 'system') {
+    delete root.dataset.theme;
+  } else {
+    root.dataset.theme = choice;
+  }
+
+  try {
+    localStorage.setItem(THEME_KEY, choice);
+  } catch {
+    /* the theme still applies for this page view */
   }
 }
 
@@ -406,8 +439,13 @@ export default function App() {
 
   const [purgeRunning, setPurgeRunning] = useState(false);
   const [purgeNotice, setPurgeNotice] = useState('');
+  const [theme, setTheme] = useState<ThemeChoice>(() => readThemeChoice());
 
   const deferredUserQuery = useDeferredValue(userQuery);
+
+  useEffect(() => {
+    applyThemeChoice(theme);
+  }, [theme]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? '';
@@ -848,6 +886,24 @@ export default function App() {
           </section>
 
           {error && <p className="error-banner">{error}</p>}
+
+          <div className="landing-footer">
+              <div className="theme-toggle" role="group" aria-label="Colour theme">
+                {(['system', 'light', 'dark'] as ThemeChoice[]).map((choice) => (
+                  <button
+                    key={choice}
+                    type="button"
+                    className={choice === theme ? 'theme-option is-active' : 'theme-option'}
+                    onClick={() => setTheme(choice)}
+                    aria-pressed={choice === theme}
+                  >
+                    {choice === 'system' && 'Auto'}
+                    {choice === 'light' && 'Light'}
+                    {choice === 'dark' && 'Dark'}
+                  </button>
+                ))}
+              </div>
+          </div>
         </section>
       ) : (
         <section className="control-plane">
@@ -909,9 +965,26 @@ export default function App() {
                 <p className="lede workspace-lede">{viewMeta.description}</p>
               </div>
               <div className="topbar-controls">
-                <div className="session-chip">
-                  <span className="session-dot" aria-hidden="true" />
-                  <span>{loading ? 'Checking…' : `Checked ${formatAgo(status?.generated_at)}`}</span>
+                <div className="topbar-meta">
+                  <div className="session-chip">
+                    <span className="session-dot" aria-hidden="true" />
+                    <span>{loading ? 'Checking…' : `Checked ${formatAgo(status?.generated_at)}`}</span>
+                  </div>
+                  <div className="theme-toggle" role="group" aria-label="Colour theme">
+                {(['system', 'light', 'dark'] as ThemeChoice[]).map((choice) => (
+                      <button
+                    key={choice}
+                    type="button"
+                    className={choice === theme ? 'theme-option is-active' : 'theme-option'}
+                    onClick={() => setTheme(choice)}
+                    aria-pressed={choice === theme}
+                  >
+                    {choice === 'system' && 'Auto'}
+                    {choice === 'light' && 'Light'}
+                    {choice === 'dark' && 'Dark'}
+                      </button>
+                ))}
+                  </div>
                 </div>
                 <div className="topbar-actions">
                   <button
