@@ -35,7 +35,7 @@ use chrono::Utc;
 use config::AppConfig;
 use db::{minio::MinioClient, postgres::PostgresDb, sql_store::DynSqlStore};
 use error::AppError;
-use middleware::auth::JwtService;
+use middleware::auth::{JwtService, KeyVersionCache};
 use middleware::request_cleanup::release_request_caches;
 use middleware::request_id::request_id_layer;
 use middleware::throttle::AuthThrottle;
@@ -241,6 +241,9 @@ async fn main() -> anyhow::Result<()> {
         InstanceSettingsHandle::new(stored)
     };
     let throttle = Arc::new(AuthThrottle::new());
+    // User id → current key_version, so write requests can refuse sessions
+    // that predate a password rotation without a DB read per request.
+    let key_versions = KeyVersionCache::new();
     let purge_status = PurgeStatusHandle::new();
     let started_at = Utc::now();
 
@@ -308,6 +311,7 @@ async fn main() -> anyhow::Result<()> {
             jwt: jwt.clone(),
             settings: settings.clone(),
             throttle: throttle.clone(),
+            key_versions: key_versions.clone(),
         };
 
         let mindmaps_state = MindMapsSqlState {
@@ -316,6 +320,7 @@ async fn main() -> anyhow::Result<()> {
             jwt: jwt.clone(),
             diagnostics_enabled: cfg.enable_diagnostics_routes,
             settings: settings.clone(),
+            key_versions: key_versions.clone(),
         };
 
         Router::new()

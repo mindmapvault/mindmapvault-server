@@ -1,26 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { authApi } from '../api/auth';
+import { PasswordRotationForm } from '../components/PasswordRotationForm';
 import { buildPasswordRotationBundle } from '../crypto/keyRotation';
 import type { LocalProfileForRotation, VaultEntryForRotation } from '../crypto/keyRotation';
-import { getServerStorage } from '../storage';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
-
-/**
- * Password rotation is disabled because it destroys attachments.
- *
- * Attachments wrap their per-file key with the master key
- * (`key_wrap: 'master-aes-256-gcm'` in crypto/encryptedVault.ts). Rotation
- * derives a *new* master key and re-encrypts titles, notes and the private
- * keys — but never re-wraps attachment keys. After a password change every
- * attachment is wrapped with a master key that no longer exists, and cannot be
- * decrypted again. The loss is silent and irreversible.
- *
- * Re-enable only once rotation re-wraps attachment keys for notes and nodes,
- * with a test covering a vault that has attachments.
- */
-const ROTATION_ENABLED = false;
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
@@ -29,7 +13,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 export function ChangePasswordPage() {
   const navigate = useNavigate();
-  const { sessionKeys, setSessionKeys, setTokens, username } = useAuthStore();
+  const { sessionKeys, setSessionKeys } = useAuthStore();
   const mode = useModeStore((s) => s.mode);
   const isLocalMode = mode === 'local';
 
@@ -52,7 +36,7 @@ export function ChangePasswordPage() {
     setError('');
 
     if (!currentPassword) { setError('Current password is required'); return; }
-    if (newPassword.length < 8) { setError('New password must be at least 8 characters'); return; }
+    if (newPassword.length < 12) { setError('New password must be at least 12 characters'); return; }
     if (newPassword === currentPassword) { setError('New password must differ from the current password'); return; }
     if (newPassword !== confirmPassword) { setError('New passwords do not match'); return; }
 
@@ -84,79 +68,6 @@ export function ChangePasswordPage() {
         if (sessionKeys) {
           setSessionKeys({ ...sessionKeys, masterKey: bundle.newMasterKey });
         }
-      } else {
-        // ── Server path ───────────────────────────────────────────────────
-        // Fetch the key bundle (includes argon2_salt/params for re-deriving
-        // the master key) and the full vault list so we can build the
-        // rotation bundle entirely client-side.  The server never sees
-        // plaintext keys or passwords.
-        setProgress('Fetching key bundle from server…');
-        const keyBundle = await authApi.getKeyBundle();
-
-        setProgress('Loading vault list…');
-        const serverStorage = getServerStorage();
-        const vaultItems = await serverStorage.listVaults();
-
-        const profile: LocalProfileForRotation = {
-          username: username ?? '',
-          argon2_salt: keyBundle.argon2_salt,
-          argon2_params: keyBundle.argon2_params,
-          classical_public_key: keyBundle.classical_public_key,
-          pq_public_key: keyBundle.pq_public_key,
-          classical_priv_encrypted: keyBundle.classical_priv_encrypted,
-          pq_priv_encrypted: keyBundle.pq_priv_encrypted,
-          key_version: keyBundle.key_version,
-          created_at: '',
-        };
-
-        const vaults: VaultEntryForRotation[] = vaultItems.map((v) => ({
-          id: v.id,
-          title_encrypted: v.title_encrypted,
-          vault_note_encrypted: v.vault_note_encrypted ?? null,
-        }));
-
-        setProgress(
-          `Verifying current password and re-encrypting ${vaults.length} vault title${vaults.length === 1 ? '' : 's'}… (this takes a few seconds)`,
-        );
-        const bundle = await buildPasswordRotationBundle(
-          currentPassword,
-          newPassword,
-          profile,
-          vaults,
-        );
-
-        // Submit the rotation bundle.  The server:
-        //   1. Re-verifies current_auth_token against the stored hash.
-        //   2. Checks that every vault in the account is covered by updated_vaults.
-        //   3. Commits credential row + all vault title/note updates in a single
-        //      DB transaction — all-or-nothing, no partial rotation possible.
-        //   4. Returns fresh JWT tokens.
-        // Vault blobs in object storage are NOT touched: they are KEM-encrypted
-        // to the user's keypair which is unchanged, so all historical blob
-        // versions remain decryptable after the rotation.
-        setProgress('Committing rotation on server…');
-        const rotateResp = await authApi.rotateCredentials({
-          current_auth_token: bundle.currentAuthToken,
-          new_auth_token: bundle.newAuthToken,
-          new_argon2_salt: bundle.newProfile.argon2_salt,
-          new_argon2_params: bundle.newProfile.argon2_params,
-          new_classical_priv_encrypted: bundle.newProfile.classical_priv_encrypted,
-          new_pq_priv_encrypted: bundle.newProfile.pq_priv_encrypted,
-          new_key_version: bundle.newProfile.key_version,
-          updated_vaults: bundle.updatedVaults.map((v) => ({
-            id: v.id,
-            title_encrypted: v.title_encrypted,
-            vault_note_encrypted: v.vault_note_encrypted,
-          })),
-        });
-
-        // Update session: new master key + fresh tokens.
-        if (sessionKeys) {
-          setSessionKeys({ ...sessionKeys, masterKey: bundle.newMasterKey });
-        }
-        if (username) {
-          setTokens(rotateResp.access_token, rotateResp.refresh_token, username);
-        }
       }
 
       setProgress('');
@@ -182,23 +93,26 @@ export function ChangePasswordPage() {
     }
   };
 
-  if (!ROTATION_ENABLED) {
+  // Server accounts get the shared rotation flow — the same form as the
+  // settings hub's Account tab, which is where web users normally find it.
+  // Everything below this branch is the local (Tauri) path.
+  if (!isLocalMode) {
     return (
-      <div className="mx-auto max-w-md p-6">
-        <div
-          className="rounded-lg px-3 py-2 text-sm"
-          style={{ background: 'rgba(234,179,8,0.12)', color: '#eab308' }}
-        >
-          <p className="font-medium">Changing your password is temporarily unavailable.</p>
-          <p className="mt-1" style={{ color: 'var(--text-muted)' }}>
-            Rotating the password would make existing attachments in your notes and nodes
-            impossible to decrypt. We have disabled it until that is fixed, rather than risk
-            your data. Your vaults and attachments are unaffected in the meantime.
-          </p>
+      <div className="min-h-screen bg-[var(--bg)] flex flex-col items-center justify-center px-4 py-12">
+        <div className="w-full max-w-md">
+          <div className="mb-6 flex items-center gap-3">
+            <button
+              onClick={() => navigate('/vaults')}
+              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--fg-muted)] transition hover:border-[var(--accent)] hover:text-[var(--fg)]"
+            >
+              ← Back
+            </button>
+            <h1 className="text-xl font-semibold text-[var(--fg)]">Change Password</h1>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-6">
+            <PasswordRotationForm />
+          </div>
         </div>
-        <button className="mt-4 text-sm underline" onClick={() => navigate('/vaults')}>
-          Back to vaults
-        </button>
       </div>
     );
   }
@@ -263,7 +177,7 @@ export function ChangePasswordPage() {
                     autoComplete="new-password"
                     disabled={working}
                     className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--fg)] placeholder-[var(--fg-muted)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-60"
-                    placeholder="New password (min 8 characters)"
+                    placeholder="New password (min 12 characters)"
                   />
                 </label>
 

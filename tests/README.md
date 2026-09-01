@@ -7,7 +7,10 @@ Current layout:
 - `tests/performance/load-test.mjs` - JavaScript load test for the backend server
 - `tests/endpoints/release-smoke.mjs` - release-critical behaviour against a running backend
 - `tests/endpoints/share-flow.mjs` - end-to-end encrypted share flow, owner and recipient sides
+- `tests/endpoints/password-rotation.mjs` - the rotation contract: manifest, coverage, atomicity, stale sessions
 - `tests/ui/settings-hub.mjs` - the in-app settings hub, driven in a real browser
+- `tests/ui/password-rotation.mjs` - password rotation with the real client crypto (needs the vite DEV server, which serves the source modules the test drives in-page)
+- `tests/ui/rotation-multi-account.mjs` - rotation across three accounts at once: isolation, a cross-account forgery, parallel rotations, and a decrypt-everything sweep (same vite dev server requirement)
 
 Both endpoint scripts take `--base-url` (default `http://127.0.0.1:8090`) and exit non-zero on
 failure. They need PostgreSQL and an S3 store that returns version ids — Garage does by default,

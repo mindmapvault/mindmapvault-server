@@ -298,6 +298,12 @@ For the same reason, **you cannot reset anyone's password.** Their password is
 what decrypts their vaults. If they lose it, that data is gone; the only path
 forward is deleting the account and starting again.
 
+Someone who still knows their password can change it themselves, from the
+app's settings (Account → Password). The change happens in their browser,
+re-encrypts everything the password protects — attachments included — and
+signs their other devices out; the server never sees the old password or the
+new one. Design and guarantees: `docs/PASSWORD_ROTATION.md`.
+
 ### Protecting `/admin/`
 
 The admin console authenticates with a single static bearer token

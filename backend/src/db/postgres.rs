@@ -14,7 +14,7 @@ use crate::{
         MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate,
         NewMindMap,
         NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, NewUser,
-        RotateCredentialsUpdate,
+        RotateCredentialsUpdate, RotationAttachmentRecord,
         SqlStore,
         StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment,
         StoredUser,
@@ -38,6 +38,12 @@ use crate::{
 #[derive(Clone)]
 pub struct PostgresDb {
     client: Arc<Client>,
+    /// Kept so short-lived work that must be ISOLATED — the password-rotation
+    /// transaction — can open its own connection. On the shared `client`, a
+    /// BEGIN/COMMIT pair is not a private transaction: any other handler's
+    /// statement awaited in between executes on the same connection and joins
+    /// (or aborts) the transaction.
+    dsn: Arc<str>,
 }
 
 impl PostgresDb {
@@ -69,6 +75,7 @@ impl PostgresDb {
 
         let this = Self {
             client: Arc::new(client),
+            dsn: Arc::from(dsn),
         };
         tracing::info!("Ensuring SQL schema");
         tokio::time::timeout(Duration::from_secs(10), this.ensure_schema())
@@ -76,6 +83,30 @@ impl PostgresDb {
             .context("timed out while ensuring SQL schema")??;
         tracing::info!("Connected to SQL backend");
         Ok(this)
+    }
+
+    /// Opens a private connection for work that needs a genuinely isolated
+    /// transaction. Everything else in the process shares `self.client` —
+    /// one connection — so a BEGIN/COMMIT there is not private: statements
+    /// from concurrent handlers land inside the transaction, get rolled back
+    /// with it, or abort it. The connection closes when the returned client
+    /// is dropped.
+    async fn dedicated_client(&self) -> Result<Client, AppError> {
+        let (client, connection) = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio_postgres::connect(&self.dsn, NoTls),
+        )
+        .await
+        .map_err(|_| AppError::Internal("timed out opening a dedicated SQL connection".to_string()))?
+        .map_err(|e| AppError::Internal(format!("failed to open a dedicated SQL connection: {e}")))?;
+
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::debug!("dedicated SQL connection closed: {error}");
+            }
+        });
+
+        Ok(client)
     }
 
     async fn ensure_schema(&self) -> anyhow::Result<()> {
@@ -459,97 +490,240 @@ impl SqlStore for PostgresDb {
             Argon2,
         };
 
-        // Hash new_auth_token before touching the DB — raw token must never rest on disk.
+        use std::collections::HashSet;
+
+        // Hash new_auth_token before opening the transaction — the raw token
+        // must never rest on disk, and the expensive Argon2id step must not
+        // hold the user row lock.
         let salt = SaltString::generate(&mut OsRng);
         let new_auth_hash = Argon2::default()
             .hash_password(update.new_auth_token.as_bytes(), &salt)
             .map_err(|e| AppError::Internal(format!("argon2 hash error: {e}")))?
             .to_string();
 
-        // Explicit transaction. We cannot call client.transaction() because the
-        // client is behind Arc<Client>. On a single connection, all statements
-        // between BEGIN and COMMIT are serialised, giving us all-or-nothing
-        // semantics: credential row + every vault title either all commit
-        // together or nothing changes.
-        self.client
-            .execute("BEGIN", &[])
+        // A dedicated connection, not the shared one: on `self.client`, any
+        // concurrent handler's statement would execute inside this
+        // transaction — rolled back with it on failure, or aborting it on
+        // error. On our own connection the Transaction API also rolls back
+        // automatically if we return early and drop it.
+        let mut conn = self.dedicated_client().await?;
+        let tx = conn
+            .transaction()
             .await
             .map_err(|e| AppError::Internal(format!("begin transaction failed: {e}")))?;
 
-        let result: Result<(), AppError> = async {
-            let affected = self
-                .client
-                .execute(
-                    "UPDATE users
-                     SET auth_hash                = $1,
-                         argon2_salt              = $2,
-                         argon2_params            = $3,
-                         classical_priv_encrypted = $4,
-                         pq_priv_encrypted        = $5,
-                         key_version              = $6
-                     WHERE id = $7",
-                    &[
-                        &new_auth_hash,
-                        &update.new_argon2_salt,
-                        &Json(&update.new_argon2_params),
-                        &update.new_classical_priv_encrypted,
-                        &update.new_pq_priv_encrypted,
-                        &(update.new_key_version as i32),
-                        &user_id,
-                    ],
+        // ── Lock the user row; re-check the version under the lock ────────
+        // The row lock serialises rotations against each other; the check
+        // catches a rotation that already happened from another session.
+        let row = tx
+            .query_opt(
+                "SELECT key_version FROM users WHERE id = $1 FOR UPDATE",
+                &[&user_id],
+            )
+            .await?
+            .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
+        let current_kv = row.get::<_, i32>("key_version") as u32;
+        if update.new_key_version != current_kv + 1 {
+            return Err(AppError::BadRequest(format!(
+                "new_key_version must be {} (current {} + 1)",
+                current_kv + 1,
+                current_kv,
+            )));
+        }
+
+        // ── Complete coverage, checked inside the transaction ─────────────
+        // Nothing encrypted under the old key may survive the commit, so the
+        // submitted sets must exactly equal what the database holds right
+        // now — not what it held when the client took its snapshot.
+        let vault_rows = tx
+            .query(
+                "SELECT id,
+                        (vault_note_encrypted IS NOT NULL AND vault_note_encrypted <> '') AS has_note
+                 FROM mind_maps WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        let submitted_vaults: HashSet<&str> =
+            update.updated_vaults.iter().map(|v| v.id.as_str()).collect();
+        let owned_vaults: HashSet<&str> =
+            vault_rows.iter().map(|r| r.get::<_, &str>("id")).collect();
+
+        let missing = owned_vaults.difference(&submitted_vaults).count();
+        if missing > 0 {
+            return Err(AppError::BadRequest(format!(
+                "rotation bundle is incomplete — {missing} vault(s) missing",
+            )));
+        }
+        let unknown = submitted_vaults.difference(&owned_vaults).count();
+        if unknown > 0 {
+            return Err(AppError::BadRequest(format!(
+                "rotation bundle references {unknown} unknown vault(s)",
+            )));
+        }
+
+        // A vault whose note holds ciphertext needs a re-encrypted note in
+        // the bundle; `None` means "preserve", which would preserve it under
+        // the dead key.
+        let notes_by_id: std::collections::HashMap<&str, Option<&str>> = update
+            .updated_vaults
+            .iter()
+            .map(|v| (v.id.as_str(), v.vault_note_encrypted.as_deref()))
+            .collect();
+        let stranded_notes = vault_rows
+            .iter()
+            .filter(|r| r.get::<_, bool>("has_note"))
+            .filter(|r| {
+                !matches!(
+                    notes_by_id.get(r.get::<_, &str>("id")),
+                    Some(Some(note)) if !note.is_empty()
                 )
-                .await?;
-
-            if affected == 0 {
-                return Err(AppError::NotFound("user not found".to_string()));
-            }
-
-            // The route handler enforces complete coverage — every vault owned by
-            // this user must appear in updated_vaults — so after the transaction
-            // commits no vault retains a title encrypted with the old key.
-            for vault in &update.updated_vaults {
-                let note_value: Option<String> = vault
-                    .vault_note_encrypted
-                    .as_ref()
-                    .and_then(|n| if n.is_empty() { None } else { Some(n.clone()) });
-
-                self.client
-                    .execute(
-                        "UPDATE mind_maps
-                         SET title_encrypted      = $1,
-                             vault_note_encrypted = CASE WHEN $2::boolean
-                                                         THEN $3::text
-                                                         ELSE vault_note_encrypted
-                                                    END
-                         WHERE id = $4 AND user_id = $5",
-                        &[
-                            &vault.title_encrypted,
-                            &vault.vault_note_encrypted.is_some(),
-                            &note_value,
-                            &vault.id,
-                            &user_id,
-                        ],
-                    )
-                    .await?;
-            }
-
-            Ok(())
+            })
+            .count();
+        if stranded_notes > 0 {
+            return Err(AppError::BadRequest(format!(
+                "rotation bundle leaves {stranded_notes} vault note(s) under the old key",
+            )));
         }
-        .await;
 
-        match result {
-            Ok(()) => {
-                self.client
-                    .execute("COMMIT", &[])
-                    .await
-                    .map_err(|e| AppError::Internal(format!("commit failed: {e}")))?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.client.execute("ROLLBACK", &[]).await;
-                Err(e)
-            }
+        // Same for attachments: every row with a wrapped file key, in any
+        // status but `deleted` — pending uploads carry wraps from init time.
+        let attachment_rows = tx
+            .query(
+                "SELECT a.id
+                 FROM mind_map_attachments a
+                 JOIN mind_maps m ON a.map_id = m.id
+                 WHERE m.user_id = $1
+                   AND a.status <> 'deleted'
+                   AND a.encryption_meta ? 'wrapped_key_b64'",
+                &[&user_id],
+            )
+            .await?;
+        let submitted_attachments: HashSet<&str> = update
+            .updated_attachments
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect();
+        let owned_attachments: HashSet<&str> =
+            attachment_rows.iter().map(|r| r.get::<_, &str>("id")).collect();
+
+        let missing = owned_attachments.difference(&submitted_attachments).count();
+        if missing > 0 {
+            return Err(AppError::BadRequest(format!(
+                "rotation bundle is incomplete — {missing} attachment(s) missing",
+            )));
         }
+        let unknown = submitted_attachments.difference(&owned_attachments).count();
+        if unknown > 0 {
+            return Err(AppError::BadRequest(format!(
+                "rotation bundle references {unknown} unknown attachment(s)",
+            )));
+        }
+
+        // ── Writes ────────────────────────────────────────────────────────
+        tx.execute(
+            "UPDATE users
+             SET auth_hash                = $1,
+                 argon2_salt              = $2,
+                 argon2_params            = $3,
+                 classical_priv_encrypted = $4,
+                 pq_priv_encrypted        = $5,
+                 key_version              = $6
+             WHERE id = $7",
+            &[
+                &new_auth_hash,
+                &update.new_argon2_salt,
+                &Json(&update.new_argon2_params),
+                &update.new_classical_priv_encrypted,
+                &update.new_pq_priv_encrypted,
+                &(update.new_key_version as i32),
+                &user_id,
+            ],
+        )
+        .await?;
+
+        for vault in &update.updated_vaults {
+            let note_value: Option<String> = vault
+                .vault_note_encrypted
+                .as_ref()
+                .and_then(|n| if n.is_empty() { None } else { Some(n.clone()) });
+
+            tx.execute(
+                "UPDATE mind_maps
+                 SET title_encrypted      = $1,
+                     vault_note_encrypted = CASE WHEN $2::boolean
+                                                 THEN $3::text
+                                                 ELSE vault_note_encrypted
+                                            END
+                 WHERE id = $4 AND user_id = $5",
+                &[
+                    &vault.title_encrypted,
+                    &vault.vault_note_encrypted.is_some(),
+                    &note_value,
+                    &vault.id,
+                    &user_id,
+                ],
+            )
+            .await?;
+        }
+
+        // Only the wrap changes: merge the two governed fields into the
+        // stored metadata, leave format/algorithm/anything else untouched.
+        // Every rotated wrap comes out `hkdf-attachment-v1`, which is what
+        // retires the legacy `master-aes-256-gcm` wraps.
+        for attachment in &update.updated_attachments {
+            tx.execute(
+                "UPDATE mind_map_attachments AS a
+                 SET encryption_meta = a.encryption_meta
+                     || jsonb_build_object('wrapped_key_b64', $1::text,
+                                           'key_wrap', 'hkdf-attachment-v1')
+                 FROM mind_maps AS m
+                 WHERE a.id = $2 AND a.map_id = m.id AND m.user_id = $3",
+                &[&attachment.wrapped_key_b64, &attachment.id, &user_id],
+            )
+            .await?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| AppError::Internal(format!("commit failed: {e}")))
+    }
+
+    async fn load_user_key_version(&self, user_id: &str) -> Result<Option<u32>, AppError> {
+        let row = self
+            .client
+            .query_opt("SELECT key_version FROM users WHERE id = $1", &[&user_id])
+            .await?;
+        Ok(row.map(|r| r.get::<_, i32>("key_version") as u32))
+    }
+
+    async fn list_rotation_attachments(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<RotationAttachmentRecord>, AppError> {
+        // Must select exactly the rows the rotation transaction will demand
+        // coverage of — keep this predicate in lockstep with the one there.
+        let rows = self
+            .client
+            .query(
+                "SELECT a.id, a.map_id, a.encryption_meta
+                 FROM mind_map_attachments a
+                 JOIN mind_maps m ON a.map_id = m.id
+                 WHERE m.user_id = $1
+                   AND a.status <> 'deleted'
+                   AND a.encryption_meta ? 'wrapped_key_b64'
+                 ORDER BY a.uploaded_at",
+                &[&user_id],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| RotationAttachmentRecord {
+                id: row.get("id"),
+                map_id: row.get("map_id"),
+                encryption_meta: row.get::<_, Json<serde_json::Value>>("encryption_meta").0,
+            })
+            .collect())
     }
 
     async fn update_user_stripe_customer_id(

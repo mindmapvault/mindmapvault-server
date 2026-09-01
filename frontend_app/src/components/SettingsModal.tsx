@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { authApi } from '../api/auth';
 import type { UserProfile } from '../types';
+import { PasswordRotationForm } from './PasswordRotationForm';
 import { PwaInstallButton } from './PwaInstallButton';
 import { VaultIcon } from './Logo';
 import { useAuthStore } from '../store/auth';
@@ -299,11 +300,15 @@ function AccountTab({
 
       <section className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
         <SectionLabel>Password</SectionLabel>
-        <p className="text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-          Your password never reaches the server — it is what decrypts your vaults in this
-          browser. That also means nobody, including whoever runs this server, can reset it
-          for you.
-        </p>
+        {hasServerAccount ? (
+          <PasswordRotationForm />
+        ) : (
+          <p className="text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
+            Your password never reaches the server — it is what decrypts your vaults in this
+            browser. That also means nobody, including whoever runs this server, can reset it
+            for you.
+          </p>
+        )}
       </section>
 
       {hasServerAccount && (

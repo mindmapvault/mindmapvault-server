@@ -30,6 +30,33 @@ export interface RotateCredentialsBody {
     title_encrypted: string;
     vault_note_encrypted: string | null;
   }>;
+  // Every attachment file key re-wrapped under the new master key. The
+  // server rejects bundles missing any attachment it knows about — a missed
+  // one would be unreadable under every password from then on.
+  updated_attachments: Array<{
+    id: string;
+    wrapped_key_b64: string;
+  }>;
+}
+
+// One snapshot of everything a password rotation must rewrite. The
+// attachment list mirrors exactly what the server will demand coverage of.
+export interface RotationManifest {
+  key_version: number;
+  argon2_salt: string;
+  argon2_params: Argon2Params;
+  classical_priv_encrypted: string;
+  pq_priv_encrypted: string;
+  vaults: Array<{
+    id: string;
+    title_encrypted: string;
+    vault_note_encrypted: string | null;
+  }>;
+  attachments: Array<{
+    id: string;
+    map_id: string;
+    encryption_meta: { wrapped_key_b64?: string; key_wrap?: string } | null;
+  }>;
 }
 
 // What an unauthenticated client is told about the server it is talking to.
@@ -73,6 +100,9 @@ export const authApi = {
 
   getKeyBundle: () =>
     api.get<KeyBundleResponse>('/auth/keys'),
+
+  getRotationManifest: () =>
+    api.get<RotationManifest>('/auth/rotation-manifest'),
 
   rotateCredentials: (body: RotateCredentialsBody) =>
     api.post<{ ok: boolean; access_token: string; refresh_token: string }>(

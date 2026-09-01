@@ -11,12 +11,12 @@ use uuid::Uuid;
 
 use crate::{
     db::{minio::MinioClient, sql_store::{
-        DynSqlStore, NewUser, RotateCredentialsUpdate, RotateVaultEntry,
+        DynSqlStore, NewUser, RotateAttachmentEntry, RotateCredentialsUpdate, RotateVaultEntry,
         StoredMindMap, UserProfileUpdate,
     }},
     error::AppError,
     middleware::{
-        auth::{AuthenticatedUser, JwtService},
+        auth::{AuthenticatedUser, JwtService, KeyVersionCache},
         client_ip::ClientIp,
         throttle::AuthThrottle,
     },
@@ -43,11 +43,24 @@ pub struct AuthSqlState {
     pub jwt: Arc<JwtService>,
     pub settings: InstanceSettingsHandle,
     pub throttle: Arc<AuthThrottle>,
+    pub key_versions: KeyVersionCache,
 }
 
 impl FromRef<AuthSqlState> for Arc<JwtService> {
     fn from_ref(state: &AuthSqlState) -> Self {
         state.jwt.clone()
+    }
+}
+
+impl FromRef<AuthSqlState> for DynSqlStore {
+    fn from_ref(state: &AuthSqlState) -> Self {
+        state.db.clone()
+    }
+}
+
+impl FromRef<AuthSqlState> for KeyVersionCache {
+    fn from_ref(state: &AuthSqlState) -> Self {
+        state.key_versions.clone()
     }
 }
 
@@ -64,6 +77,7 @@ pub fn router(state: AuthSqlState) -> Router {
         .route("/login", post(login))
         .route("/refresh", post(refresh))
         .route("/keys", get(get_keys))
+        .route("/rotation-manifest", get(rotation_manifest))
         .route("/rotate-credentials", post(rotate_credentials))
         .route("/subscription", get(get_subscription))
         .route("/capabilities", get(get_capabilities))
@@ -296,8 +310,9 @@ async fn login(
 
     state.throttle.record_success(&body.username);
 
-    let access_token = state.jwt.issue_access_token(&user.id)?;
-    let refresh_token = state.jwt.issue_refresh_token(&user.id)?;
+    let access_token = state.jwt.issue_access_token(&user.id, user.key_version)?;
+    let refresh_token = state.jwt.issue_refresh_token(&user.id, user.key_version)?;
+    state.key_versions.set(&user.id, user.key_version);
 
     tracing::info!(user_id = %user.id, "user logged in");
 
@@ -327,7 +342,18 @@ async fn refresh(
     if user.is_locked {
         return Err(AppError::Unauthorized("account is locked".to_string()));
     }
-    let access_token = state.jwt.issue_access_token(&claims.sub)?;
+    // A refresh token minted before a password rotation belongs to a device
+    // that still derives keys from the old password; renewing it would keep
+    // that device writing undecryptable ciphertext for up to the refresh
+    // lifetime. Tokens without the claim predate it — refuse those too, which
+    // costs each device one re-login after the upgrade.
+    if claims.kv != Some(user.key_version) {
+        return Err(AppError::Unauthorized(
+            "this session was signed in before the password changed — sign in again".to_string(),
+        ));
+    }
+    state.key_versions.set(&user.id, user.key_version);
+    let access_token = state.jwt.issue_access_token(&claims.sub, user.key_version)?;
     Ok(Json(serde_json::json!({ "access_token": access_token })))
 }
 
@@ -711,22 +737,68 @@ fn known_version_ids(
     version_ids
 }
 
+/// GET /api/auth/rotation-manifest
+///
+/// One snapshot of everything a password rotation must rewrite: the key
+/// bundle, every vault's title and note, and the `encryption_meta` of every
+/// attachment whose file key is wrapped with a password-derived key. The
+/// attachment list uses the same predicate as the rotation transaction's
+/// coverage check, so a client that rewraps exactly this list submits a
+/// complete bundle — unless something changed in between, which the
+/// in-transaction check then catches.
+async fn rotation_manifest(
+    State(state): State<AuthSqlState>,
+    user: AuthenticatedUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db_user = state
+        .db
+        .load_user_by_id(&user.0)
+        .await?
+        .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
+
+    let vaults = state.db.list_mind_maps(&user.0).await?;
+    let attachments = state.db.list_rotation_attachments(&user.0).await?;
+
+    Ok(Json(serde_json::json!({
+        "key_version": db_user.key_version,
+        "argon2_salt": db_user.argon2_salt,
+        "argon2_params": db_user.argon2_params,
+        "classical_priv_encrypted": db_user.classical_priv_encrypted,
+        "pq_priv_encrypted": db_user.pq_priv_encrypted,
+        "vaults": vaults.iter().map(|v| serde_json::json!({
+            "id": v.id,
+            "title_encrypted": v.title_encrypted,
+            "vault_note_encrypted": v.vault_note_encrypted,
+        })).collect::<Vec<_>>(),
+        "attachments": attachments.iter().map(|a| serde_json::json!({
+            "id": a.id,
+            "map_id": a.map_id,
+            "encryption_meta": a.encryption_meta,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
 /// POST /api/auth/rotate-credentials
 ///
-/// Atomically updates the user's auth hash, argon2 parameters, and both wrapped
-/// private keys, then re-encrypts every vault title/note in the same DB
-/// transaction.  Returns new JWT tokens so the session stays valid.
+/// Atomically updates the user's auth hash, argon2 parameters and both
+/// wrapped private keys, re-encrypts every vault title/note, and re-wraps
+/// every attachment file key — one DB transaction on a dedicated connection.
+/// Returns new JWT tokens (carrying the new key version) so the rotating
+/// session stays valid; every other session fails the key-version check and
+/// must sign in again with the new password.
 ///
 /// Safety properties:
 /// - `current_auth_token` re-verifies the current password even over an active
 ///   JWT session (prevents a stolen token from rotating credentials).
-/// - The server enforces that the bundle covers EVERY vault owned by the user.
-///   If any vault is absent the request is rejected before the DB is touched.
-/// - The DB transaction is all-or-nothing: either all credential + title updates
-///   commit together or the database is left completely unchanged.
+/// - Version agreement and complete coverage — every vault AND every
+///   attachment with a wrapped file key — are enforced INSIDE the transaction,
+///   under a `FOR UPDATE` lock on the user row, in `rotate_user_credentials`.
+///   A miss on either set aborts with the database unchanged.
 /// - Vault blobs in object storage are never touched here because they are
 ///   KEM-encrypted to the user's key-pair, which is unchanged during rotation.
-///   All historical blob versions remain decryptable after a successful rotation.
+///   All historical blob versions remain decryptable after a successful
+///   rotation. Attachment blobs are untouched too — only their ~60-byte
+///   wrapped file key in `encryption_meta` changes.
 async fn rotate_credentials(
     State(state): State<AuthSqlState>,
     auth: AuthenticatedUser,
@@ -753,34 +825,20 @@ async fn rotate_credentials(
 
     verify_auth_token(&body.current_auth_token, &db_user.auth_hash)?;
 
-    // Prevent version skew: the client must agree on the current key_version.
-    if body.new_key_version != db_user.key_version + 1 {
-        return Err(AppError::BadRequest(format!(
-            "new_key_version must be {} (current {} + 1)",
-            db_user.key_version + 1,
-            db_user.key_version,
-        )));
-    }
-
-    // ── Complete-coverage check ───────────────────────────────────────────────
-    // Every vault owned by the user must appear in updated_vaults.  A missing
-    // vault would retain its old title ciphertext (wrong key) after rotation.
-    let all_vaults = state.db.list_mind_maps(&auth.0).await?;
-    let submitted_ids: std::collections::HashSet<&str> = body
-        .updated_vaults
-        .iter()
-        .map(|v| v.id.as_str())
-        .collect();
-    let missing: Vec<&str> = all_vaults
-        .iter()
-        .filter(|v| !submitted_ids.contains(v.id.as_str()))
-        .map(|v| v.id.as_str())
-        .collect();
-    if !missing.is_empty() {
-        return Err(AppError::BadRequest(format!(
-            "rotation bundle is incomplete — {} vault(s) missing",
-            missing.len(),
-        )));
+    // Shape checks only — version agreement and complete coverage of vaults
+    // and attachments are enforced inside the rotation transaction, where
+    // they hold against the database as it is at commit time rather than as
+    // it was when this request was built.
+    for attachment in &body.updated_attachments {
+        if attachment.id.is_empty() {
+            return Err(AppError::BadRequest("attachment id must not be empty".to_string()));
+        }
+        if attachment.wrapped_key_b64.is_empty() || attachment.wrapped_key_b64.len() > 1024 {
+            return Err(AppError::BadRequest(format!(
+                "wrapped_key_b64 for attachment {} is empty or implausibly large",
+                attachment.id,
+            )));
+        }
     }
 
     // ── Execute atomic rotation ───────────────────────────────────────────────
@@ -791,6 +849,14 @@ async fn rotate_credentials(
             id: v.id,
             title_encrypted: v.title_encrypted,
             vault_note_encrypted: v.vault_note_encrypted,
+        })
+        .collect();
+    let updated_attachments = body
+        .updated_attachments
+        .into_iter()
+        .map(|a| RotateAttachmentEntry {
+            id: a.id,
+            wrapped_key_b64: a.wrapped_key_b64,
         })
         .collect();
 
@@ -806,15 +872,20 @@ async fn rotate_credentials(
                 new_pq_priv_encrypted: body.new_pq_priv_encrypted,
                 new_key_version: body.new_key_version,
                 updated_vaults,
+                updated_attachments,
             },
         )
         .await?;
 
+    // Publish the new key version so every other session's next WRITE is
+    // refused (VerifiedWriter) instead of storing old-key ciphertext.
+    state.key_versions.set(&auth.0, body.new_key_version);
+
     // ── Re-issue tokens ───────────────────────────────────────────────────────
-    // The existing JWT remains valid until expiry (stateless), but we return
-    // fresh tokens so the client session stays seamless.
-    let access_token = state.jwt.issue_access_token(&auth.0)?;
-    let refresh_token = state.jwt.issue_refresh_token(&auth.0)?;
+    // The rotating session gets tokens carrying the new key version, so it
+    // alone continues seamlessly.
+    let access_token = state.jwt.issue_access_token(&auth.0, body.new_key_version)?;
+    let refresh_token = state.jwt.issue_refresh_token(&auth.0, body.new_key_version)?;
 
     Ok(Json(serde_json::json!({
         "ok": true,

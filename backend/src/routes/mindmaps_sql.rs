@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::{
     db::{minio::MinioClient, sql_store::{DynSqlStore, MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate, MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate, NewMindMap, NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment}},
     error::{AppError, PlanErrorMetadata},
-    middleware::auth::{AuthenticatedUser, JwtService},
+    middleware::auth::{AuthenticatedUser, JwtService, KeyVersionCache, VerifiedWriter},
     models::{
         attachment::{AttachmentDownloadResponse, AttachmentMetadata, AttachmentStatus, CompleteAttachmentUploadRequest, InitAttachmentRequest, InitAttachmentResponse, UpdateAttachmentRequest},
         instance_settings::InstanceSettingsHandle,
@@ -41,11 +41,24 @@ pub struct MindMapsSqlState {
     pub jwt: Arc<JwtService>,
     pub diagnostics_enabled: bool,
     pub settings: InstanceSettingsHandle,
+    pub key_versions: KeyVersionCache,
 }
 
 impl FromRef<MindMapsSqlState> for Arc<JwtService> {
     fn from_ref(state: &MindMapsSqlState) -> Self {
         state.jwt.clone()
+    }
+}
+
+impl FromRef<MindMapsSqlState> for DynSqlStore {
+    fn from_ref(state: &MindMapsSqlState) -> Self {
+        state.db.clone()
+    }
+}
+
+impl FromRef<MindMapsSqlState> for KeyVersionCache {
+    fn from_ref(state: &MindMapsSqlState) -> Self {
+        state.key_versions.clone()
     }
 }
 
@@ -220,7 +233,7 @@ async fn list_mind_maps(
 
 async fn create_mind_map(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Json(body): Json<UpsertMindMapRequest>,
 ) -> Result<Json<MindMapCreatedResponse>, AppError> {
     validate_upsert(&body)?;
@@ -276,7 +289,7 @@ async fn create_mind_map(
 
 async fn confirm_upload(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path(id): Path<String>,
     Json(body): Json<ConfirmUploadRequest>,
 ) -> Result<Json<ConfirmUploadResponse>, AppError> {
@@ -330,7 +343,7 @@ async fn confirm_upload(
 
 async fn upload_blob(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ConfirmUploadResponse>, AppError> {
@@ -393,7 +406,7 @@ async fn get_mind_map(
 
 async fn update_mind_map(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path(id): Path<String>,
     Json(body): Json<UpsertMindMapRequest>,
 ) -> Result<Json<PresignedUrlResponse>, AppError> {
@@ -427,7 +440,7 @@ async fn update_mind_map(
 
 async fn delete_mind_map(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
@@ -511,7 +524,7 @@ async fn list_attachments(
 
 async fn init_attachment(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path(id): Path<String>,
     Json(body): Json<InitAttachmentRequest>,
 ) -> Result<Json<InitAttachmentResponse>, AppError> {
@@ -556,7 +569,7 @@ async fn init_attachment(
 
 async fn upload_attachment_blob(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, attachment_id)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<ConfirmUploadResponse>, AppError> {
@@ -576,7 +589,7 @@ async fn upload_attachment_blob(
 
 async fn complete_attachment_upload(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, attachment_id)): Path<(String, String)>,
     Json(body): Json<CompleteAttachmentUploadRequest>,
 ) -> Result<Json<AttachmentMetadata>, AppError> {
@@ -632,7 +645,7 @@ async fn get_attachment(
 
 async fn update_attachment(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, attachment_id)): Path<(String, String)>,
     Json(body): Json<UpdateAttachmentRequest>,
 ) -> Result<Json<AttachmentMetadata>, AppError> {
@@ -680,7 +693,7 @@ async fn get_attachment_download_url(
 
 async fn delete_attachment(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, attachment_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     find_owned(&state.db, &id, &user.0).await?;
@@ -839,7 +852,7 @@ fn known_version_ids(
 
 async fn delete_vault_version(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, version_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
@@ -881,7 +894,7 @@ async fn delete_vault_version(
 
 async fn update_vault_meta(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path(id): Path<String>,
     Json(body): Json<UpdateVaultMetaRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1034,7 +1047,7 @@ async fn list_shares(
 
 async fn create_share(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<CreateMapShareRequest>,
@@ -1090,7 +1103,7 @@ async fn create_share(
 
 async fn upload_share_blob(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, share_id)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<ConfirmUploadResponse>, AppError> {
@@ -1111,7 +1124,7 @@ async fn upload_share_blob(
 
 async fn complete_share_upload(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     headers: HeaderMap,
     Path((id, share_id)): Path<(String, String)>,
     Json(body): Json<CompleteMapShareUploadRequest>,
@@ -1152,7 +1165,7 @@ async fn complete_share_upload(
 
 async fn revoke_share(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     headers: HeaderMap,
     Path((id, share_id)): Path<(String, String)>,
 ) -> Result<Json<MapShareOwnerSummary>, AppError> {
@@ -1173,7 +1186,7 @@ async fn revoke_share(
 
 async fn init_share_attachment(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, share_id)): Path<(String, String)>,
     Json(body): Json<InitMapShareAttachmentRequest>,
 ) -> Result<Json<InitMapShareAttachmentResponse>, AppError> {
@@ -1235,7 +1248,7 @@ async fn init_share_attachment(
 
 async fn upload_share_attachment_blob(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, share_id, attachment_id)): Path<(String, String, String)>,
     body: Bytes,
 ) -> Result<Json<ConfirmUploadResponse>, AppError> {
@@ -1260,7 +1273,7 @@ async fn upload_share_attachment_blob(
 
 async fn complete_share_attachment_upload(
     State(state): State<MindMapsSqlState>,
-    user: AuthenticatedUser,
+    user: VerifiedWriter,
     Path((id, share_id, attachment_id)): Path<(String, String, String)>,
     Json(body): Json<CompleteMapShareAttachmentUploadRequest>,
 ) -> Result<Json<MapShareAttachmentMetadata>, AppError> {

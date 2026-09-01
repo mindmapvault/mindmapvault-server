@@ -207,6 +207,14 @@ pub struct RotateCredentialsRequest {
     /// The server rejects partial bundles — missing vaults would become
     /// unreadable after rotation.
     pub updated_vaults: Vec<RotateVaultApiEntry>,
+    /// Every attachment file key re-wrapped under the new master key's
+    /// attachment-wrap key. Same completeness rule as vaults: a missing
+    /// attachment would keep a wrap that no password can open, so the server
+    /// rejects the bundle. Defaults to empty for old clients, which the
+    /// coverage check then rejects for any account that has attachments —
+    /// failing closed rather than rotating those attachments into oblivion.
+    #[serde(default)]
+    pub updated_attachments: Vec<RotateAttachmentApiEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,6 +223,16 @@ pub struct RotateVaultApiEntry {
     pub title_encrypted: String,
     /// None → keep existing note; Some("") → clear note; Some(ct) → update.
     pub vault_note_encrypted: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RotateAttachmentApiEntry {
+    pub id: String,
+    /// The file key wrapped under HKDF(new_master_key,
+    /// "crypt-mind-attachment-wrap-v1") — stored into
+    /// `encryption_meta.wrapped_key_b64` with `key_wrap` forced to
+    /// `hkdf-attachment-v1`.
+    pub wrapped_key_b64: String,
 }
 
 /// Optional profile update sent by the client.

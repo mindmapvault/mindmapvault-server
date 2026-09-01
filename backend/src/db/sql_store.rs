@@ -102,6 +102,10 @@ pub struct RotateCredentialsUpdate {
     pub new_pq_priv_encrypted: String,
     pub new_key_version: u32,
     pub updated_vaults: Vec<RotateVaultEntry>,
+    /// One entry per attachment whose file key is wrapped with a
+    /// password-derived key — the store requires this set to exactly match
+    /// what it finds inside the rotation transaction.
+    pub updated_attachments: Vec<RotateAttachmentEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +114,25 @@ pub struct RotateVaultEntry {
     pub title_encrypted: String,
     /// `None` → preserve existing note; `Some("")` → clear note; `Some(ct)` → update.
     pub vault_note_encrypted: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RotateAttachmentEntry {
+    pub id: String,
+    /// The attachment's file key, re-wrapped under the NEW master key's
+    /// HKDF attachment-wrap key. Only this and `key_wrap` change in the
+    /// stored `encryption_meta`; the rest of the metadata is preserved.
+    pub wrapped_key_b64: String,
+}
+
+/// What the client needs to know about one attachment to re-wrap its file
+/// key during a password rotation: the stored `encryption_meta` carries the
+/// current wrap (`wrapped_key_b64`) and which key wrapped it (`key_wrap`).
+#[derive(Debug, Clone)]
+pub struct RotationAttachmentRecord {
+    pub id: String,
+    pub map_id: String,
+    pub encryption_meta: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -450,6 +473,16 @@ pub trait SqlStore: Send + Sync {
         user_id: &str,
         update: RotateCredentialsUpdate,
     ) -> Result<(), AppError>;
+    /// The user's current `key_version` alone — cheap enough for the
+    /// write-path session check to call on a cold cache.
+    async fn load_user_key_version(&self, user_id: &str) -> Result<Option<u32>, AppError>;
+    /// Every attachment the rotation must re-wrap: wrapped key present,
+    /// status not `deleted` (pending uploads already carry wraps — the
+    /// metadata is written at init, before the blob arrives).
+    async fn list_rotation_attachments(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<RotationAttachmentRecord>, AppError>;
     async fn update_user_stripe_customer_id(
         &self,
         user_id: &str,
