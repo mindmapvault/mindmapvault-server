@@ -295,18 +295,21 @@ export function EditorPage() {
     Object.values(previewBlobUrlCacheRef.current).forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
+  // Newly uploaded attachments are merged into the tree that gets saved.
+  //
+  // Deliberately *not* into `initialTree`: the editor treats a new `initialTree`
+  // as a document to load and resets its whole working tree from it, history
+  // included. Feeding an attachment-ref sync back through that prop threw away
+  // every edit made since the vault was opened — including, for an upload, the
+  // very change that was being made when the refs arrived. Rendering does not
+  // need it either: the editor merges `externalNodeAttachments` for display.
   useEffect(() => {
     if (!currentTree) return;
     const syncedCurrent = syncTreeAttachmentRefs(currentTree, externalNodeAttachments);
     if (syncedCurrent.changed) {
       setCurrentTree(syncedCurrent.tree);
     }
-    if (!initialTree) return;
-    const syncedInitial = syncTreeAttachmentRefs(initialTree, externalNodeAttachments);
-    if (syncedInitial.changed) {
-      setInitialTree(syncedInitial.tree);
-    }
-  }, [currentTree, externalNodeAttachments, initialTree]);
+  }, [currentTree, externalNodeAttachments]);
 
   const openSecurePanel = useCallback((tab: SecureVaultTab) => {
     if (isLocalMode) return;

@@ -4,6 +4,11 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+- **An attachment upload discarded unsaved edits.** Refreshed attachment references were fed back through the editor's `initialTree` prop, which the editor treats as a document to load — so it reset its whole working tree, history included, throwing away everything changed since the vault was opened. Including, for an upload, the change being made at that moment.
+
 ## [0.4.1] - 2026-09-01
 
 A note editor worth writing in, and the fix that makes an upgrade actually
