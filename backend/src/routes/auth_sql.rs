@@ -15,17 +15,23 @@ use crate::{
         StoredMindMap, UserProfileUpdate,
     }},
     error::AppError,
-    middleware::auth::{AuthenticatedUser, JwtService},
+    middleware::{
+        auth::{AuthenticatedUser, JwtService},
+        client_ip::ClientIp,
+        throttle::AuthThrottle,
+    },
     models::{
         access::{AccessSource, SubscriptionMode, UiSurface, UserAccessGrant},
         attachment::AttachmentStatus,
+        instance_settings::InstanceSettingsHandle,
+        invite::normalize_invite_code,
         mindmap::VersionSnapshot,
         settings::{UpdateUserAccountSettingsRequest, UserAccountSettings},
         user::{
             AccountCapabilitiesResponse, AccountStorageResponse, KeyBundleResponse,
             LoginRequest, LoginResponse, ProfileResponse, RegisterRequest,
             RotateCredentialsRequest, SaltResponse, SubscriptionSummaryResponse,
-            SubscriptionTier, UpdateProfileRequest,
+            SubscriptionTier, UpdateProfileRequest, MAX_UPLOAD_BODY_BYTES,
         },
     },
 };
@@ -35,11 +41,19 @@ pub struct AuthSqlState {
     pub db: DynSqlStore,
     pub minio: MinioClient,
     pub jwt: Arc<JwtService>,
+    pub settings: InstanceSettingsHandle,
+    pub throttle: Arc<AuthThrottle>,
 }
 
 impl FromRef<AuthSqlState> for Arc<JwtService> {
     fn from_ref(state: &AuthSqlState) -> Self {
         state.jwt.clone()
+    }
+}
+
+impl FromRef<AuthSqlState> for InstanceSettingsHandle {
+    fn from_ref(state: &AuthSqlState) -> Self {
+        state.settings.clone()
     }
 }
 
@@ -69,10 +83,31 @@ struct RefreshRequest {
     refresh_token: String,
 }
 
+/// Counts one request against the caller's per-minute auth allowance.
+///
+/// Applied to the three unauthenticated routes — salt lookup, register and
+/// login — because those are the ones a stranger can call in a loop. The rest
+/// of this router needs a valid token first.
+fn count_auth_request(state: &AuthSqlState, client_ip: ClientIp) -> Result<(), AppError> {
+    let limit = state.settings.get().auth_rate_limit_per_minute;
+    state
+        .throttle
+        .check_address(client_ip.0, limit)
+        .map_err(|retry_after| {
+            AppError::TooManyRequests(
+                "too many attempts; please wait and try again".to_string(),
+                retry_after.as_secs().max(1),
+            )
+        })
+}
+
 async fn get_salt(
     State(state): State<AuthSqlState>,
+    client_ip: ClientIp,
     Query(q): Query<SaltQuery>,
 ) -> Result<Json<SaltResponse>, AppError> {
+    count_auth_request(&state, client_ip)?;
+
     if q.username.is_empty() {
         return Err(AppError::BadRequest("username is required".to_string()));
     }
@@ -91,8 +126,11 @@ async fn get_salt(
 
 async fn register(
     State(state): State<AuthSqlState>,
+    client_ip: ClientIp,
     Json(body): Json<RegisterRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    count_auth_request(&state, client_ip)?;
+
     if body.username.trim().is_empty() {
         return Err(AppError::BadRequest("username cannot be empty".to_string()));
     }
@@ -103,19 +141,62 @@ async fn register(
         return Err(AppError::BadRequest("missing required crypto fields".to_string()));
     }
 
-    if state.db.load_user_by_username(&body.username).await?.is_some() {
-        return Err(AppError::Conflict("username already taken".to_string()));
+    let username = body.username.trim().to_string();
+    let now = Utc::now();
+
+    // On a closed instance an invite is the only way through. It is claimed
+    // here — before the account is written — so two people racing one code
+    // cannot both use it; if the sign-up then fails, it is handed back below.
+    let claimed_invite = if state.settings.get().registration_enabled {
+        None
+    } else {
+        let code = body
+            .invite_code
+            .as_deref()
+            .map(normalize_invite_code)
+            .filter(|code| !code.is_empty())
+            .ok_or_else(|| {
+                AppError::Forbidden("registration is closed on this server".to_string())
+            })?;
+
+        let invite = state
+            .db
+            .claim_registration_invite(&code, &username, now)
+            .await?
+            .ok_or_else(|| {
+                // One message for wrong, spent and expired alike: telling them
+                // apart would let someone probe which codes exist.
+                AppError::Forbidden("this invite code is not valid".to_string())
+            })?;
+
+        Some(invite)
+    };
+
+    // From here on any failure has to give the invite back.
+    let release_invite = |error: AppError| async {
+        if let Some(invite) = claimed_invite.as_ref() {
+            if let Err(release_error) = state.db.release_registration_invite(&invite.id).await {
+                tracing::warn!(?release_error, "could not release invite after a failed sign-up");
+            }
+        }
+        error
+    };
+
+    if state.db.load_user_by_username(&username).await?.is_some() {
+        return Err(release_invite(AppError::Conflict("username already taken".to_string())).await);
     }
 
     let user_id = Uuid::new_v4().to_string();
-    let now = Utc::now();
-    let auth_hash = hash_auth_token(&body.auth_token)?;
+    let auth_hash = match hash_auth_token(&body.auth_token) {
+        Ok(hash) => hash,
+        Err(error) => return Err(release_invite(error).await),
+    };
 
-    state
+    let created = state
         .db
         .create_user(NewUser {
             id: user_id,
-            username: body.username.trim().to_string(),
+            username: username.clone(),
             auth_hash,
             argon2_salt: body.argon2_salt,
             argon2_params: body.argon2_params,
@@ -149,32 +230,71 @@ async fn register(
                 note: Some("Default encrypted app access".to_string()),
             }],
         })
-        .await?;
+        .await;
 
-    tracing::info!("new user registered");
+    if let Err(error) = created {
+        return Err(release_invite(error).await);
+    }
+
+    if claimed_invite.is_some() {
+        tracing::info!("new user registered with an invite");
+    } else {
+        tracing::info!("new user registered");
+    }
     Ok(Json(serde_json::json!({ "message": "registered successfully" })))
 }
 
 async fn login(
     State(state): State<AuthSqlState>,
+    client_ip: ClientIp,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
+    count_auth_request(&state, client_ip)?;
+
     if body.username.is_empty() || body.auth_token.is_empty() {
         return Err(AppError::BadRequest("username and auth_token are required".to_string()));
     }
 
-    let user = state
-        .db
-        .load_user_by_username(&body.username)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("invalid credentials".to_string()))?;
+    let settings = state.settings.get();
+
+    // Checked before the account is even looked up, so a locked-out attacker
+    // learns nothing further and costs the database nothing.
+    if let Some(remaining) = state.throttle.lockout_remaining(&body.username) {
+        return Err(AppError::TooManyRequests(
+            "too many failed sign-in attempts; please wait and try again".to_string(),
+            remaining.as_secs().max(1),
+        ));
+    }
+
+    let user = match state.db.load_user_by_username(&body.username).await? {
+        Some(user) => user,
+        None => {
+            // An unknown username counts as a failure too. Skipping it here
+            // would make a wrong username measurably cheaper than a wrong
+            // password, which is a username oracle.
+            state.throttle.record_failure(
+                &body.username,
+                settings.failed_login_threshold,
+                settings.failed_login_lockout_minutes,
+            );
+            return Err(AppError::Unauthorized("invalid credentials".to_string()));
+        }
+    };
 
     if user.is_locked {
         return Err(AppError::Unauthorized("account is locked".to_string()));
     }
 
-    verify_auth_token(&body.auth_token, &user.auth_hash)
-        .map_err(|_| AppError::Unauthorized("invalid credentials".to_string()))?;
+    if verify_auth_token(&body.auth_token, &user.auth_hash).is_err() {
+        state.throttle.record_failure(
+            &body.username,
+            settings.failed_login_threshold,
+            settings.failed_login_lockout_minutes,
+        );
+        return Err(AppError::Unauthorized("invalid credentials".to_string()));
+    }
+
+    state.throttle.record_success(&body.username);
 
     let access_token = state.jwt.issue_access_token(&user.id)?;
     let refresh_token = state.jwt.issue_refresh_token(&user.id)?;
@@ -333,7 +453,15 @@ async fn get_storage(
         total_bytes += all_map_attachment_bytes;
     }
 
-    let plan_limit_bytes = subscription_tier.storage_limit_bytes();
+    // The instance setting is the authority here, not the subscription tier.
+    // Reporting the tier's cap would tell a self-hosted user they are over a
+    // 25 MB "free plan" limit that this server does not have and never
+    // enforced.
+    let plan_limit_bytes = state
+        .settings
+        .get()
+        .storage_limit()
+        .unwrap_or(i64::MAX);
     Ok(Json(AccountStorageResponse {
         total_bytes,
         attachment_count,
@@ -356,11 +484,19 @@ async fn get_capabilities(
         .await?
         .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
     let subscription_tier = db_user.effective_subscription_tier(Utc::now());
+    let settings = state.settings.get();
 
     Ok(Json(AccountCapabilitiesResponse {
         plan_tier: subscription_tier.as_str().to_string(),
-        storage_limit_bytes: subscription_tier.storage_limit_bytes(),
-        max_attachment_size_bytes: subscription_tier.max_attachment_size_bytes(),
+        // Both caps come from the instance settings; a self-hosted install has
+        // no plan to be limited by. The attachment cap still cannot exceed what
+        // the transport will carry, so it is clamped rather than advertised as
+        // something an upload would then fail on.
+        storage_limit_bytes: settings.storage_limit().unwrap_or(i64::MAX),
+        max_attachment_size_bytes: settings
+            .attachment_limit()
+            .unwrap_or(MAX_UPLOAD_BODY_BYTES as i64)
+            .min(MAX_UPLOAD_BODY_BYTES as i64),
         can_export_large_maps: subscription_tier.can_export_large_maps(),
         can_use_admin_controls: subscription_tier.can_use_admin_controls(),
     }))

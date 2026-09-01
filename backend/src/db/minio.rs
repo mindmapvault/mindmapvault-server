@@ -11,7 +11,7 @@ use aws_sdk_s3::{
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use crate::{config::AppConfig, error::AppError};
+use crate::{config::AppConfig, error::AppError, models::status::BucketStats};
 
 /// A single stored version of a mind map blob in MinIO.
 #[derive(Debug, Clone, Serialize)]
@@ -126,6 +126,81 @@ impl MinioClient {
             bucket,
             presign_expiry: Duration::from_secs(cfg.s3_presign_expiry_secs),
         })
+    }
+
+    /// Asks the object store whether the bucket is still there.
+    ///
+    /// The cheapest call that proves the endpoint is reachable, the
+    /// credentials are still accepted, and the bucket exists — which is the
+    /// whole of what "storage is up" means for this server.
+    pub async fn health_check(&self) -> Result<(), String> {
+        self.client
+            .head_bucket()
+            .bucket(&self.bucket)
+            .send()
+            .await
+            .map(|_| ())
+            // The SDK's error text can carry the endpoint and the bucket, so
+            // the caller gets a short summary rather than the whole thing.
+            .map_err(|error| {
+                tracing::warn!(?error, "object storage health check failed");
+                "the object store did not answer".to_string()
+            })
+    }
+
+    pub fn bucket_name(&self) -> &str {
+        &self.bucket
+    }
+
+    /// Counts what is actually in the bucket, for the status page.
+    ///
+    /// Lists **versions**, not current objects: this bucket is versioned, every
+    /// vault save leaves an older version behind until it is pruned, and those
+    /// occupy space. A current-objects listing would report a number well under
+    /// what the disk is really holding.
+    ///
+    /// Bounded by `max_pages` so one status request cannot walk an enormous
+    /// bucket. When the limit is hit the figures come back marked truncated, so
+    /// the console can present them as a floor rather than a total.
+    pub async fn bucket_stats(&self, max_pages: usize) -> Result<BucketStats, String> {
+        let mut stats = BucketStats::default();
+        let mut key_marker: Option<String> = None;
+        let mut version_marker: Option<String> = None;
+
+        for _ in 0..max_pages {
+            let mut request = self.client.list_object_versions().bucket(&self.bucket);
+            if let Some(key) = key_marker.take() {
+                request = request.key_marker(key);
+            }
+            if let Some(version) = version_marker.take() {
+                request = request.version_id_marker(version);
+            }
+
+            let response = request.send().await.map_err(|error| {
+                tracing::warn!(?error, "bucket listing failed");
+                "could not list the bucket".to_string()
+            })?;
+
+            for version in response.versions() {
+                stats.object_count += 1;
+                stats.size_bytes += version.size().unwrap_or(0).max(0) as u64;
+            }
+
+            if !response.is_truncated().unwrap_or(false) {
+                return Ok(stats);
+            }
+
+            key_marker = response.next_key_marker().map(str::to_string);
+            version_marker = response.next_version_id_marker().map(str::to_string);
+
+            // A truncated response with no marker would loop forever.
+            if key_marker.is_none() && version_marker.is_none() {
+                return Ok(stats);
+            }
+        }
+
+        stats.truncated = true;
+        Ok(stats)
     }
 
     /// Creates the bucket if it does not yet exist.

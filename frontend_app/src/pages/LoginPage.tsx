@@ -60,6 +60,9 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showInstallPanel, setShowInstallPanel] = useState(!isDesktop);
+  // Only hides the sign-up link once the server confirms it is closed; an
+  // unreachable or older backend leaves the link where it has always been.
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
   const postAuthRedirect = useMemo(() => getSafeRedirectPath(searchParams), [searchParams]);
   const registrationSucceeded = searchParams.get('registered') === '1';
   const appVersion = packageJson.version;
@@ -76,6 +79,30 @@ export function LoginPage() {
     if (appMode === 'server') return;
     navigate('/local-unlock', { replace: true });
   }, [appMode, isDesktop, navigate]);
+
+  useEffect(() => {
+    if (isDesktop) {
+      return;
+    }
+
+    let cancelled = false;
+    authApi
+      .getInstanceInfo()
+      .then((info) => {
+        if (!cancelled) {
+          setRegistrationEnabled(info.registration_enabled);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRegistrationEnabled(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop]);
 
   useEffect(() => {
     if (isDesktop) {
@@ -296,12 +323,14 @@ export function LoginPage() {
           </form>
         </div>
 
-        <p className="mt-4 text-center text-sm text-slate-500">
-          No account?{' '}
-          <Link to={`/register${searchParams.toString() ? `?${searchParams.toString()}` : ''}`} className="text-accent hover:underline">
-            Create one
-          </Link>
-        </p>
+        {registrationEnabled !== false && (
+          <p className="mt-4 text-center text-sm text-slate-500">
+            No account?{' '}
+            <Link to={`/register${searchParams.toString() ? `?${searchParams.toString()}` : ''}`} className="text-accent hover:underline">
+              Create one
+            </Link>
+          </p>
+        )}
 
         <p className="mt-2 text-center text-xs text-slate-500">
           Prefer the hosted in Cloud?{' '}

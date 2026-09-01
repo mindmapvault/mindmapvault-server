@@ -1,74 +1,77 @@
 import { FormEvent, useDeferredValue, useEffect, useMemo, useState } from 'react';
 
-type AdminMetrics = {
-  total_users: number;
-  free_users: number;
-  paid_users: number;
-  locked_users: number;
-  active_subscriptions: number;
-  total_vaults: number;
-  total_used_bytes: number;
-  feedback_count: number;
-  archived_feedback_count: number;
+// This console is for someone running MindMapVault on their own hardware — a
+// box in a cupboard, a VPS, a NAS — usually for themselves and a handful of
+// people they know. It answers four questions, in the order they get asked:
+// is it working, who is on it, what are the rules, and what needs tidying.
+//
+// It is deliberately not a business dashboard. There are no plans, no billing
+// and no revenue here, because this build has none of those things.
+
+type DependencyHealth = {
+  reachable: boolean;
+  latency_ms: number;
+  detail?: string | null;
+};
+
+type PurgeStatus = {
+  last_run_at?: string | null;
+  last_cleared: number;
+  last_error?: string | null;
+};
+
+type StatusWarning = {
+  code: string;
+  title: string;
+  detail: string;
+};
+
+type DiskUsage = {
+  path: string;
+  total_bytes: number;
+  available_bytes: number;
+  used_bytes: number;
+};
+
+type AdminStatus = {
+  generated_at: string;
+  version: string;
+  started_at: string;
+  uptime_seconds: number;
+  server: {
+    memory_bytes?: number | null;
+    disk?: DiskUsage | null;
+    disk_used_percent?: number | null;
+  };
+  database: DependencyHealth;
+  database_stats?: { version?: string | null; size_bytes?: number | null } | null;
+  object_storage: DependencyHealth;
+  storage_bucket: string;
+  bucket_stats?: { object_count: number; size_bytes: number; truncated: boolean } | null;
+  totals: {
+    accounts: number;
+    locked_accounts: number;
+    vaults: number;
+    stored_bytes: number;
+    open_invites: number;
+  };
+  purge: PurgeStatus;
+  warnings: StatusWarning[];
 };
 
 type AdminUser = {
   id: string;
   username: string;
   created_at: string;
-  subscription_tier: string;
-  effective_subscription_tier: string;
-  plan_source: string;
-  stripe_customer_id?: string | null;
-  stripe_subscription_id?: string | null;
-  stripe_subscription_status?: string | null;
-  subscription_current_period_end?: string | null;
   first_name?: string | null;
   last_name?: string | null;
   email?: string | null;
   is_locked: boolean;
   locked_reason?: string | null;
   admin_note?: string | null;
-  manual_subscription_tier?: string | null;
-  manual_subscription_expires_at?: string | null;
-  manual_subscription_reason?: string | null;
-  manual_subscription_granted_by?: string | null;
-  access_grants: UserAccessGrant[];
   vault_count: number;
   used_bytes: number;
-  storage_limit_bytes: number;
-};
-
-type UserAccessGrant = {
-  subscription_mode: string;
-  ui_surface: string;
-  plan: string;
-  source: string;
-  granted_at: string;
-  expires_at?: string | null;
-  note?: string | null;
-};
-
-type AccessGrantDraft = {
-  subscription_mode: string;
-  ui_surface: string;
-  plan: string;
-  source: string;
-  granted_at: string;
-  expires_at: string;
-  note: string;
-};
-
-type AdminFeedback = {
-  public_id: string;
-  name?: string | null;
-  email?: string | null;
-  subject: string;
-  message: string;
-  page_url?: string | null;
-  created_at: string;
-  is_archived: boolean;
-  archived_at?: string | null;
+  storage_limit_bytes?: number | null;
 };
 
 type AdminAuditEvent = {
@@ -84,49 +87,91 @@ type AdminAuditEvent = {
 
 type AdminOverview = {
   generated_at: string;
-  metrics: AdminMetrics;
+  metrics: {
+    total_users: number;
+    locked_users: number;
+    total_vaults: number;
+    total_used_bytes: number;
+  };
   users: AdminUser[];
-  feedback: AdminFeedback[];
   audit_events: AdminAuditEvent[];
 };
 
-type AdminView = 'overview' | 'users' | 'feedback';
-type PlanFilter = 'all' | 'paid' | 'free';
-type AccessFilter = 'all' | 'open' | 'locked';
-type PlanSourceFilter = 'all' | 'admin_override' | 'stripe' | 'base';
+type InstanceSettings = {
+  registration_enabled: boolean;
+  user_storage_limit_bytes: number;
+  max_attachment_size_bytes: number;
+  auth_rate_limit_per_minute: number;
+  failed_login_threshold: number;
+  failed_login_lockout_minutes: number;
+  trust_proxy_headers: boolean;
+  updated_at: string;
+};
+
+type AdminSettingsResponse = {
+  settings: InstanceSettings;
+  observed_client_address: string;
+  forwarded_header_present: boolean;
+  max_upload_body_bytes: number;
+};
+
+type Invite = {
+  id: string;
+  code: string;
+  label?: string | null;
+  created_at: string;
+  expires_at?: string | null;
+  used_at?: string | null;
+  used_by_username?: string | null;
+  status: 'open' | 'used' | 'expired';
+};
+
+type InvitesResponse = {
+  invites: Invite[];
+  invites_required: boolean;
+  register_url: string;
+};
+
+type AdminView = 'status' | 'people' | 'settings' | 'maintenance';
+type AccountFilter = 'all' | 'active' | 'locked';
 type UserSort = 'created_desc' | 'storage_desc' | 'vaults_desc' | 'username_asc';
-type FeedbackFilter = 'all' | 'active' | 'archived';
 
 const ADMIN_TOKEN_KEY = 'mindmapvault-admin-token';
 const USERS_PAGE_SIZE = 12;
-const FEEDBACK_PAGE_SIZE = 12;
-const SUBSCRIPTION_MODE_OPTIONS = ['private_encrypted', 'shared_plaintext', 'realtime_collaboration', 'kanban'] as const;
-const UI_SURFACE_OPTIONS = ['encrypted_vault_app', 'shared_map_app', 'collaboration_app', 'kanban_app', 'admin_dashboard'] as const;
-const ACCESS_PLAN_OPTIONS = ['free', 'paid'] as const;
-const ACCESS_SOURCE_OPTIONS = ['legacy_base', 'stripe', 'admin_override', 'direct_grant'] as const;
+const MEGABYTE = 1024 * 1024;
 
 const VIEW_META: Record<AdminView, { title: string; description: string; eyebrow: string }> = {
-  overview: {
-    title: 'Operations view for users, plans, support actions, and storage pressure.',
-    description: 'Use the snapshot workspace to track growth, billing ownership, support load, and the latest admin interventions from one place.',
-    eyebrow: 'Overview',
+  status: {
+    title: 'System status',
+    description:
+      'What it is running, whether the database and file storage are answering, how much is stored, and anything about the current setup worth knowing before it bites you.',
+    eyebrow: 'Status',
   },
-  users: {
-    title: 'User operations workspace for account, plan, and support management.',
-    description: 'Search accounts, filter by billing source or access state, and apply manual paid overrides without colliding with Stripe-owned plan state.',
-    eyebrow: 'Users',
+  people: {
+    title: 'Users and access',
+    description:
+      'Every account on this server, what it is using, and the invite codes you hand out. Locking an account keeps its data and blocks sign-in; deleting removes the account and every vault in it.',
+    eyebrow: 'People',
   },
-  feedback: {
-    title: 'Feedback inbox for moderation and product signal cleanup.',
-    description: 'Search the latest submissions, archive noise instead of deleting by default, and remove entries only when they should disappear completely.',
-    eyebrow: 'Feedback',
+  settings: {
+    title: 'Server settings',
+    description:
+      'Who may sign up, how much each account may store, and how hard someone may hammer the sign-in form. Changes apply immediately — nothing needs restarting.',
+    eyebrow: 'Settings',
+  },
+  maintenance: {
+    title: 'Maintenance',
+    description:
+      'The cleanup job, what to back up, and a log of every change made from this console.',
+    eyebrow: 'Maintenance',
   },
 };
 
 const NAV_ITEMS: Array<{ id: AdminView; label: string; caption: string }> = [
-  { id: 'overview', label: 'Overview', caption: 'Metrics, storage, and timeline' },
-  { id: 'users', label: 'Users', caption: 'Accounts, notes, and plan overrides' },
-  { id: 'feedback', label: 'Feedback', caption: 'Archive, restore, and delete' },
+  { id: 'status', label: 'Status', caption: 'Health, version, and what is stored' },
+  { id: 'people', label: 'People', caption: 'Accounts and invite codes' },
+  { id: 'settings', label: 'Settings', caption: 'Sign-ups, limits, and throttling' },
+  { id: 'maintenance', label: 'Maintenance', caption: 'Cleanup, backups, and the log' },
 ];
 
 class AdminRequestError extends Error {
@@ -145,53 +190,79 @@ function getApiBase() {
     return configured.trim().replace(/\/$/, '');
   }
 
-  if (typeof window !== 'undefined') {
-    const { hostname } = window.location;
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return 'http://127.0.0.1:8090/api';
-    }
-  }
-
-  return 'https://api.mindmapvault.com/api';
+  // Same origin by default. The server serves this console and the API from
+  // one process, and the dev server proxies /api to whatever VITE_BACKEND_URL
+  // points at, so a relative base is right in both.
+  //
+  // It used to fall back to a hardcoded localhost:8090 and then to the hosted
+  // SaaS API, which meant the console was inert on every self-hosted install
+  // reached by its real hostname — it was asking a domain the operator does
+  // not run for their users.
+  return '/api';
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (!value) {
+    return '—';
+  }
 
-  return new Intl.DateTimeFormat(undefined, {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return '—';
+  }
+
+  return parsed.toLocaleString(undefined, {
     year: 'numeric',
     month: 'short',
-    day: '2-digit',
+    day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(date);
+  });
 }
 
-function formatDateForInput(value?: string | null) {
+// How long ago, in the words someone would actually use.
+function formatAgo(value?: string | null) {
   if (!value) {
-    return '';
+    return 'never';
   }
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'never';
   }
 
-  const pad = (input: number) => input.toString().padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const seconds = Math.max(0, Math.round((Date.now() - parsed.getTime()) / 1000));
+  if (seconds < 60) {
+    return 'just now';
+  }
+  if (seconds < 3600) {
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  }
+  if (seconds < 86400) {
+    const hours = Math.round(seconds / 3600);
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+  const days = Math.round(seconds / 86400);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
-function planLabel(user: AdminUser) {
-  const effective = user.effective_subscription_tier === 'paid' ? 'Paid' : 'Free';
-  const source = user.plan_source === 'admin_override' ? 'manual' : user.plan_source;
-  const status = user.stripe_subscription_status?.trim();
-  return status ? `${effective} · ${source} · ${status}` : `${effective} · ${source}`;
-}
+function formatUptime(seconds: number) {
+  if (seconds < 60) {
+    return `${Math.max(0, Math.round(seconds))}s`;
+  }
 
-function formatPercent(value: number) {
-  return `${Math.round(value)}%`;
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
 }
 
 function formatBytes(value: number) {
@@ -200,16 +271,32 @@ function formatBytes(value: number) {
   }
 
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let amount = value;
-  let unitIndex = 0;
-
-  while (amount >= 1024 && unitIndex < units.length - 1) {
-    amount /= 1024;
-    unitIndex += 1;
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
   }
 
-  const digits = amount >= 10 || unitIndex === 0 ? 0 : 1;
-  return `${amount.toFixed(digits)} ${units[unitIndex]}`;
+  return `${size < 10 && unit > 0 ? size.toFixed(1) : Math.round(size)} ${units[unit]}`;
+}
+
+// Byte caps are entered in MB, which is how an operator thinks about them, and
+// stored as bytes. Zero means unlimited on both sides of the conversion.
+function bytesToMegabytesInput(value: number) {
+  if (!value) {
+    return '0';
+  }
+  const megabytes = value / MEGABYTE;
+  return Number.isInteger(megabytes) ? String(megabytes) : megabytes.toFixed(2);
+}
+
+function megabytesInputToBytes(value: string) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.round(parsed * MEGABYTE);
 }
 
 function normalizeQuery(value: string) {
@@ -224,36 +311,6 @@ function matchesQuery(fields: Array<string | null | undefined>, query: string) {
   return fields.some((field) => (field ?? '').toLowerCase().includes(query));
 }
 
-function statusTone(user: AdminUser) {
-  const status = user.stripe_subscription_status?.toLowerCase();
-  if (status === 'active' || status === 'trialing') {
-    return 'tone-positive';
-  }
-  if (user.plan_source === 'admin_override') {
-    return 'tone-accent';
-  }
-  if (user.effective_subscription_tier === 'paid') {
-    return 'tone-sky';
-  }
-  return 'tone-muted';
-}
-
-function accessTone(user: AdminUser) {
-  return user.is_locked ? 'tone-danger' : 'tone-positive';
-}
-
-function feedbackTone(item: AdminFeedback) {
-  return item.is_archived ? 'tone-muted' : 'tone-positive';
-}
-
-function capacityPercent(user: AdminUser) {
-  if (!user.storage_limit_bytes || user.storage_limit_bytes <= 0) {
-    return 0;
-  }
-
-  return Math.min(100, (user.used_bytes / user.storage_limit_bytes) * 100);
-}
-
 function pageCount(total: number, pageSize: number) {
   return Math.max(1, Math.ceil(total / pageSize));
 }
@@ -264,78 +321,93 @@ function paginate<T>(items: T[], page: number, pageSize: number) {
 }
 
 function compareUsers(left: AdminUser, right: AdminUser, sort: UserSort) {
-  if (sort === 'storage_desc') {
-    return right.used_bytes - left.used_bytes || right.vault_count - left.vault_count;
+  switch (sort) {
+    case 'storage_desc':
+      return right.used_bytes - left.used_bytes;
+    case 'vaults_desc':
+      return right.vault_count - left.vault_count;
+    case 'username_asc':
+      return left.username.localeCompare(right.username);
+    case 'created_desc':
+    default:
+      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
   }
-  if (sort === 'vaults_desc') {
-    return right.vault_count - left.vault_count || right.used_bytes - left.used_bytes;
-  }
-  if (sort === 'username_asc') {
-    return left.username.localeCompare(right.username);
-  }
-  return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
 }
 
-function labelFromSnakeCase(value: string) {
-  return value
-    .split('_')
-    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-    .join(' ');
+// PostgreSQL reports its version with the packaging suffix attached
+// ("16.15 (Debian 16.15-1.pgdg12+2)"). The number is the useful part.
+function shortVersion(value: string) {
+  return value.split(' ')[0];
 }
 
-function grantToDraft(grant: UserAccessGrant): AccessGrantDraft {
-  return {
-    subscription_mode: grant.subscription_mode,
-    ui_surface: grant.ui_surface,
-    plan: grant.plan,
-    source: grant.source,
-    granted_at: formatDateForInput(grant.granted_at),
-    expires_at: formatDateForInput(grant.expires_at),
-    note: grant.note ?? '',
-  };
+// Thresholds match the ones the server warns at, so the colour and the warning
+// on the same page never disagree.
+function diskTone(percent: number) {
+  if (percent >= 92) {
+    return 'tone-danger';
+  }
+  if (percent >= 80) {
+    return 'tone-warning';
+  }
+  return 'tone-positive';
 }
 
-function createEmptyGrantDraft(): AccessGrantDraft {
-  return {
-    subscription_mode: 'shared_plaintext',
-    ui_surface: 'shared_map_app',
-    plan: 'free',
-    source: 'direct_grant',
-    granted_at: formatDateForInput(new Date().toISOString()),
-    expires_at: '',
-    note: '',
-  };
+function diskFill(percent: number) {
+  if (percent >= 92) {
+    return 'is-critical';
+  }
+  if (percent >= 80) {
+    return 'is-warning';
+  }
+  return 'is-ok';
+}
+
+// How full an account is, as a percentage, when there is a limit to be full of.
+function usagePercent(user: AdminUser) {
+  if (!user.storage_limit_bytes || user.storage_limit_bytes <= 0) {
+    return null;
+  }
+  return Math.min(100, Math.round((user.used_bytes / user.storage_limit_bytes) * 100));
 }
 
 export default function App() {
   const apiBase = useMemo(() => getApiBase(), []);
-  const [activeView, setActiveView] = useState<AdminView>('overview');
+  const [activeView, setActiveView] = useState<AdminView>('status');
   const [tokenInput, setTokenInput] = useState('');
   const [token, setToken] = useState('');
   const [restoredToken, setRestoredToken] = useState('');
+  const [status, setStatus] = useState<AdminStatus | null>(null);
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
   const [userQuery, setUserQuery] = useState('');
-  const [feedbackQuery, setFeedbackQuery] = useState('');
-  const [planFilter, setPlanFilter] = useState<PlanFilter>('all');
-  const [accessFilter, setAccessFilter] = useState<AccessFilter>('all');
-  const [planSourceFilter, setPlanSourceFilter] = useState<PlanSourceFilter>('all');
+  const [accountFilter, setAccountFilter] = useState<AccountFilter>('all');
   const [userSort, setUserSort] = useState<UserSort>('created_desc');
-  const [feedbackFilter, setFeedbackFilter] = useState<FeedbackFilter>('all');
   const [userPage, setUserPage] = useState(1);
-  const [feedbackPage, setFeedbackPage] = useState(1);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [adminNoteDraft, setAdminNoteDraft] = useState('');
   const [lockedReasonDraft, setLockedReasonDraft] = useState('');
-  const [planTierDraft, setPlanTierDraft] = useState('');
-  const [planExpiryDraft, setPlanExpiryDraft] = useState('');
-  const [planReasonDraft, setPlanReasonDraft] = useState('');
-  const [accessGrantDrafts, setAccessGrantDrafts] = useState<AccessGrantDraft[]>([]);
   const [activeUserActionId, setActiveUserActionId] = useState('');
-  const [activeFeedbackActionId, setActiveFeedbackActionId] = useState('');
+
+  const [instance, setInstance] = useState<AdminSettingsResponse | null>(null);
+  const [settingsDraft, setSettingsDraft] = useState<InstanceSettings | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsNotice, setSettingsNotice] = useState('');
+
+  const [invites, setInvites] = useState<InvitesResponse | null>(null);
+  const [inviteLabel, setInviteLabel] = useState('');
+  const [inviteExpiryDays, setInviteExpiryDays] = useState('14');
+  const [inviteNeverExpires, setInviteNeverExpires] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState('');
+  const [copiedInviteId, setCopiedInviteId] = useState('');
+
+  const [purgeRunning, setPurgeRunning] = useState(false);
+  const [purgeNotice, setPurgeNotice] = useState('');
+
   const deferredUserQuery = useDeferredValue(userQuery);
-  const deferredFeedbackQuery = useDeferredValue(feedbackQuery);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(ADMIN_TOKEN_KEY) ?? '';
@@ -351,18 +423,33 @@ export default function App() {
     void authenticate(restoredToken, { persist: false, restored: true });
   }, [loading, restoredToken, token]);
 
+  // Fetched the first time each screen is opened, then left alone so an
+  // in-progress edit is never overwritten underneath the operator.
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+    if (activeView === 'settings' && !instance) {
+      void loadInstanceSettings(token);
+    }
+    if (activeView === 'people' && !invites) {
+      void loadInvites(token);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, token, instance, invites]);
+
   function clearStoredSession() {
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     setToken('');
     setRestoredToken('');
+    setStatus(null);
     setOverview(null);
+    setInstance(null);
+    setSettingsDraft(null);
+    setInvites(null);
   }
 
-  async function requestAdmin<T>(
-    path: string,
-    activeToken: string,
-    init?: RequestInit,
-  ) {
+  async function requestAdmin<T>(path: string, activeToken: string, init?: RequestInit) {
     const headers = new Headers(init?.headers);
     headers.set('Authorization', `Bearer ${activeToken}`);
     if (init?.body && !headers.has('Content-Type')) {
@@ -376,387 +463,350 @@ export default function App() {
 
     const data = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) {
-      const message = data.error ?? 'Failed to load admin overview';
-      throw new AdminRequestError(message, response.status);
+      throw new AdminRequestError(data.error ?? 'The server refused that request', response.status);
     }
 
     return data;
   }
 
-  async function requestOverview(activeToken: string) {
-    return requestAdmin<AdminOverview>('/admin/overview', activeToken);
+  async function loadSnapshot(activeToken: string) {
+    const [nextStatus, nextOverview] = await Promise.all([
+      requestAdmin<AdminStatus>('/admin/status', activeToken),
+      requestAdmin<AdminOverview>('/admin/overview', activeToken),
+    ]);
+
+    return { nextStatus, nextOverview };
   }
 
-  async function authenticate(
-    activeToken: string,
-    options: { persist: boolean; restored?: boolean },
-  ) {
+  async function authenticate(activeToken: string, options: { persist: boolean; restored?: boolean }) {
     setLoading(true);
     setError('');
 
     try {
-      const data = await requestOverview(activeToken);
+      const { nextStatus, nextOverview } = await loadSnapshot(activeToken);
       if (options.persist) {
         sessionStorage.setItem(ADMIN_TOKEN_KEY, activeToken);
       }
       setToken(activeToken);
       setRestoredToken('');
-      setOverview(data);
+      setStatus(nextStatus);
+      setOverview(nextOverview);
     } catch (err) {
-      const shouldClearSession = err instanceof AdminRequestError && err.status === 401;
-      if (shouldClearSession) {
+      if (err instanceof AdminRequestError && err.status === 401) {
         clearStoredSession();
       }
       if (options.restored) {
-        setError('Saved admin session is no longer valid. Enter the token again to continue.');
+        setError('That saved session is no longer valid. Enter the admin token again.');
       } else {
-        setError(err instanceof Error ? err.message : 'Failed to load admin overview');
+        setError(err instanceof Error ? err.message : 'Could not reach the server');
       }
     } finally {
       setLoading(false);
     }
   }
 
-  async function loadOverview(activeToken: string) {
+  async function refresh(activeToken: string) {
     setLoading(true);
     setError('');
 
     try {
-      const data = await requestOverview(activeToken);
-      setOverview(data);
-    } catch (err) {
-      const shouldClearSession = err instanceof AdminRequestError && err.status === 401;
-      if (shouldClearSession) {
-        clearStoredSession();
+      const { nextStatus, nextOverview } = await loadSnapshot(activeToken);
+      setStatus(nextStatus);
+      setOverview(nextOverview);
+      // Invites go stale the moment someone uses one, and this is the only
+      // button an operator will think to press. The settings form is left
+      // alone on purpose — refetching it would discard an edit in progress.
+      if (invites) {
+        await loadInvites(activeToken);
       }
-      setError(err instanceof Error ? err.message : 'Failed to load admin overview');
+    } catch (err) {
+      if (err instanceof AdminRequestError && err.status === 401) {
+        clearStoredSession();
+        setError('That session expired. Enter the admin token again.');
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Could not reach the server');
     } finally {
       setLoading(false);
     }
   }
 
-  async function runUserAction(path: string, body: Record<string, unknown>) {
-    setLoading(true);
-    setError('');
-
-    try {
-      const data = await requestAdmin<AdminOverview>(path, token, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      setOverview(data);
-    } catch (err) {
-      const shouldClearSession = err instanceof AdminRequestError && err.status === 401;
-      if (shouldClearSession) {
-        clearStoredSession();
-      }
-      setError(err instanceof Error ? err.message : 'Failed to run admin action');
-    } finally {
-      setLoading(false);
-      setActiveUserActionId('');
-    }
-  }
-
-  async function runFeedbackAction(path: string, body?: Record<string, unknown>) {
-    setLoading(true);
-    setError('');
-
-    try {
-      const data = await requestAdmin<AdminOverview>(path, token, {
-        method: 'POST',
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      setOverview(data);
-    } catch (err) {
-      const shouldClearSession = err instanceof AdminRequestError && err.status === 401;
-      if (shouldClearSession) {
-        clearStoredSession();
-      }
-      setError(err instanceof Error ? err.message : 'Failed to run admin action');
-    } finally {
-      setLoading(false);
-      setActiveFeedbackActionId('');
-    }
-  }
-
-  const selectedUser = overview?.users.find((user) => user.id === selectedUserId) ?? null;
-
-  useEffect(() => {
-    if (!overview?.users.length) {
-      setSelectedUserId('');
-      return;
-    }
-
-    if (!selectedUserId || !overview.users.some((user) => user.id === selectedUserId)) {
-      setSelectedUserId(overview.users[0].id);
-    }
-  }, [overview, selectedUserId]);
-
-  useEffect(() => {
-    if (!selectedUser) {
-      setAdminNoteDraft('');
-      setLockedReasonDraft('');
-      setPlanTierDraft('');
-      setPlanExpiryDraft('');
-      setPlanReasonDraft('');
-      setAccessGrantDrafts([]);
-      return;
-    }
-
-    setAdminNoteDraft(selectedUser.admin_note ?? '');
-    setLockedReasonDraft(selectedUser.locked_reason ?? '');
-    setPlanTierDraft(selectedUser.manual_subscription_tier ?? '');
-    setPlanExpiryDraft(formatDateForInput(selectedUser.manual_subscription_expires_at));
-    setPlanReasonDraft(selectedUser.manual_subscription_reason ?? '');
-    setAccessGrantDrafts(selectedUser.access_grants.map(grantToDraft));
-  }, [selectedUser]);
-
-  useEffect(() => {
-    setUserPage(1);
-  }, [deferredUserQuery, planFilter, accessFilter, planSourceFilter, userSort]);
-
-  useEffect(() => {
-    setFeedbackPage(1);
-  }, [deferredFeedbackQuery, feedbackFilter]);
-
-  function handleToggleUserLock(user: AdminUser) {
-    setActiveUserActionId(user.id);
-    void runUserAction(`/admin/users/${encodeURIComponent(user.id)}/account-lock`, {
-      locked: !user.is_locked,
-      reason: user.is_locked ? null : lockedReasonDraft || user.locked_reason || null,
-    });
-  }
-
-  function handleDeleteUser(user: AdminUser) {
-    const confirmed = window.confirm(
-      `Delete ${user.username} and all stored vault data? This will remove the account and every encrypted blob version.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setActiveUserActionId(user.id);
-    void runUserAction(`/admin/users/${encodeURIComponent(user.id)}/delete-account`, {
-      delete_all_data: true,
-    });
-  }
-
-  function handleSaveAdminDetails() {
-    if (!selectedUser) {
-      return;
-    }
-
-    setActiveUserActionId(selectedUser.id);
-    void runUserAction(`/admin/users/${encodeURIComponent(selectedUser.id)}/admin-details`, {
-      admin_note: adminNoteDraft || null,
-      locked_reason: lockedReasonDraft || null,
-    });
-  }
-
-  function handleSavePlanOverride() {
-    if (!selectedUser) {
-      return;
-    }
-
-    const expiresAt = planExpiryDraft ? new Date(planExpiryDraft).toISOString() : null;
-    setActiveUserActionId(selectedUser.id);
-    void runUserAction(`/admin/users/${encodeURIComponent(selectedUser.id)}/plan-override`, {
-      manual_subscription_tier: planTierDraft || null,
-      manual_subscription_expires_at: expiresAt,
-      reason: planReasonDraft || null,
-    });
-  }
-
-  function handleClearPlanOverride() {
-    if (!selectedUser) {
-      return;
-    }
-
-    setPlanTierDraft('');
-    setPlanExpiryDraft('');
-    setPlanReasonDraft('');
-    setActiveUserActionId(selectedUser.id);
-    void runUserAction(`/admin/users/${encodeURIComponent(selectedUser.id)}/plan-override`, {
-      manual_subscription_tier: null,
-      manual_subscription_expires_at: null,
-      reason: null,
-    });
-  }
-
-  function handleAddAccessGrant() {
-    setAccessGrantDrafts((current) => [...current, createEmptyGrantDraft()]);
-  }
-
-  function handleAccessGrantDraftChange(index: number, field: keyof AccessGrantDraft, value: string) {
-    setAccessGrantDrafts((current) =>
-      current.map((draft, draftIndex) =>
-        draftIndex === index
-          ? {
-              ...draft,
-              [field]: value,
-            }
-          : draft,
-      ),
-    );
-  }
-
-  function handleRemoveAccessGrant(index: number) {
-    setAccessGrantDrafts((current) => current.filter((_, draftIndex) => draftIndex !== index));
-  }
-
-  function handleSaveAccessGrants() {
-    if (!selectedUser) {
-      return;
-    }
-
-    const access_grants = accessGrantDrafts
-      .filter((grant) => grant.subscription_mode && grant.ui_surface && grant.plan && grant.source && grant.granted_at)
-      .map((grant) => ({
-        subscription_mode: grant.subscription_mode,
-        ui_surface: grant.ui_surface,
-        plan: grant.plan,
-        source: grant.source,
-        granted_at: new Date(grant.granted_at).toISOString(),
-        expires_at: grant.expires_at ? new Date(grant.expires_at).toISOString() : null,
-        note: grant.note.trim() || null,
-      }));
-
-    setActiveUserActionId(selectedUser.id);
-    void runUserAction(`/admin/users/${encodeURIComponent(selectedUser.id)}/access-grants`, {
-      access_grants,
-    });
-  }
-
-  function handleToggleFeedbackArchive(item: AdminFeedback) {
-    setActiveFeedbackActionId(item.public_id);
-    void runFeedbackAction(`/admin/feedback/${encodeURIComponent(item.public_id)}/archive`, {
-      archived: !item.is_archived,
-    });
-  }
-
-  function handleDeleteFeedback(item: AdminFeedback) {
-    const confirmed = window.confirm(`Delete feedback "${item.subject}" from the admin inbox?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setActiveFeedbackActionId(item.public_id);
-    void runFeedbackAction(`/admin/feedback/${encodeURIComponent(item.public_id)}/delete`);
-  }
-
-  function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleAuthSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = tokenInput.trim();
     if (!trimmed) {
       return;
     }
-
-    setActiveView('overview');
     void authenticate(trimmed, { persist: true });
   }
 
   function handleLogout() {
     clearStoredSession();
     setTokenInput('');
-    setUserQuery('');
-    setFeedbackQuery('');
-    setPlanFilter('all');
-    setAccessFilter('all');
-    setPlanSourceFilter('all');
-    setFeedbackFilter('all');
-    setUserSort('created_desc');
-    setSelectedUserId('');
-    setActiveView('overview');
     setError('');
+    setActiveView('status');
   }
 
-  const metrics = overview?.metrics;
-  const hasSession = Boolean(token);
-  const totalUsers = metrics?.total_users ?? 0;
-  const paidShare = totalUsers > 0 && metrics ? (metrics.paid_users / totalUsers) * 100 : 0;
-  const feedbackPerUser = totalUsers > 0 && metrics ? metrics.feedback_count / totalUsers : 0;
-  const usersWithEmail = overview?.users.filter((user) => Boolean(user.email?.trim())).length ?? 0;
-  const reachableShare = totalUsers > 0 ? (usersWithEmail / totalUsers) * 100 : 0;
-  const expiringSoonCount =
-    overview?.users.filter((user) => {
-      if (!user.subscription_current_period_end) {
-        return false;
-      }
-      const timestamp = new Date(user.subscription_current_period_end).getTime();
-      if (Number.isNaN(timestamp)) {
-        return false;
-      }
-      const sevenDaysFromNow = Date.now() + 7 * 24 * 60 * 60 * 1000;
-      return timestamp <= sevenDaysFromNow;
-    }).length ?? 0;
-  const activeFeedbackCount = overview?.feedback.filter((item) => !item.is_archived).length ?? 0;
-  const manualOverrideCount = overview?.users.filter((user) => user.plan_source === 'admin_override').length ?? 0;
-  const multiAccessUsersCount = overview?.users.filter((user) => user.access_grants.length > 1).length ?? 0;
+  // ── Settings ───────────────────────────────────────────────────────────────
 
-  const filteredUsers = useMemo(() => {
-    if (!overview) {
-      return [];
+  async function loadInstanceSettings(activeToken: string) {
+    setSettingsError('');
+    try {
+      const data = await requestAdmin<AdminSettingsResponse>('/admin/settings', activeToken);
+      setInstance(data);
+      setSettingsDraft(data.settings);
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : 'Could not read the settings');
+    }
+  }
+
+  async function handleSaveSettings() {
+    if (!settingsDraft || !token) {
+      return;
     }
 
+    setSettingsSaving(true);
+    setSettingsError('');
+    setSettingsNotice('');
+
+    try {
+      const data = await requestAdmin<AdminSettingsResponse>('/admin/settings', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          registration_enabled: settingsDraft.registration_enabled,
+          user_storage_limit_bytes: settingsDraft.user_storage_limit_bytes,
+          max_attachment_size_bytes: settingsDraft.max_attachment_size_bytes,
+          auth_rate_limit_per_minute: settingsDraft.auth_rate_limit_per_minute,
+          failed_login_threshold: settingsDraft.failed_login_threshold,
+          failed_login_lockout_minutes: settingsDraft.failed_login_lockout_minutes,
+          trust_proxy_headers: settingsDraft.trust_proxy_headers,
+        }),
+      });
+      setInstance(data);
+      setSettingsDraft(data.settings);
+      setSettingsNotice('Saved. These rules are in effect now.');
+      // The status warnings and the invite requirement both follow from these,
+      // so pull them fresh rather than leaving stale advice on screen.
+      setInvites(null);
+      await refresh(token);
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : 'Could not save the settings');
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  function updateSettingsDraft(patch: Partial<InstanceSettings>) {
+    setSettingsNotice('');
+    setSettingsDraft((current) => (current ? { ...current, ...patch } : current));
+  }
+
+  // ── Invites ────────────────────────────────────────────────────────────────
+
+  async function loadInvites(activeToken: string) {
+    setInviteError('');
+    try {
+      setInvites(await requestAdmin<InvitesResponse>('/admin/invites', activeToken));
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : 'Could not read the invite codes');
+    }
+  }
+
+  async function handleCreateInvite(event: FormEvent) {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+
+    setInviteBusy(true);
+    setInviteError('');
+
+    try {
+      const days = Number.parseInt(inviteExpiryDays, 10);
+      const data = await requestAdmin<InvitesResponse>('/admin/invites', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          label: inviteLabel.trim() || null,
+          expires_in_days: inviteNeverExpires || !Number.isFinite(days) ? null : days,
+        }),
+      });
+      setInvites(data);
+      setInviteLabel('');
+      // The sidebar shows how many invites are open, on every screen.
+      setStatus(await requestAdmin<AdminStatus>('/admin/status', token));
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : 'Could not create an invite code');
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function handleRevokeInvite(invite: Invite) {
+    if (!token) {
+      return;
+    }
+    const name = invite.label ? `the invite for ${invite.label}` : 'this invite';
+    if (!window.confirm(`Revoke ${name}? Anyone holding the code will no longer be able to use it.`)) {
+      return;
+    }
+
+    setInviteBusy(true);
+    setInviteError('');
+    try {
+      setInvites(await requestAdmin<InvitesResponse>(`/admin/invites/${invite.id}`, token, { method: 'DELETE' }));
+      setStatus(await requestAdmin<AdminStatus>('/admin/status', token));
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : 'Could not revoke that invite');
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  function inviteLink(invite: Invite) {
+    if (!invites) {
+      return invite.code;
+    }
+    return `${invites.register_url}?invite=${encodeURIComponent(invite.code)}`;
+  }
+
+  async function copyToClipboard(text: string, inviteId: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedInviteId(inviteId);
+      window.setTimeout(() => setCopiedInviteId(''), 2000);
+    } catch {
+      // Clipboard access is blocked outside a secure context, which is exactly
+      // where a home server on plain http lives. Say so instead of failing mute.
+      setInviteError('This browser would not let the page copy. Select the link and copy it by hand.');
+    }
+  }
+
+  // ── People ─────────────────────────────────────────────────────────────────
+
+  const users = overview?.users ?? [];
+
+  const filteredUsers = useMemo(() => {
     const query = normalizeQuery(deferredUserQuery);
-    return [...overview.users]
+    return users
       .filter((user) => {
-        const planMatches = planFilter === 'all' || user.effective_subscription_tier === planFilter;
-        const accessMatches =
-          accessFilter === 'all' ||
-          (accessFilter === 'locked' && user.is_locked) ||
-          (accessFilter === 'open' && !user.is_locked);
-        const sourceMatches = planSourceFilter === 'all' || user.plan_source === planSourceFilter;
-        if (!planMatches || !accessMatches || !sourceMatches) {
+        if (accountFilter === 'locked' && !user.is_locked) {
           return false;
         }
-
+        if (accountFilter === 'active' && user.is_locked) {
+          return false;
+        }
         return matchesQuery(
-          [
-            user.username,
-            user.email,
-            user.first_name,
-            user.last_name,
-            user.subscription_tier,
-            user.effective_subscription_tier,
-            user.stripe_subscription_status,
-            user.admin_note,
-            user.locked_reason,
-            user.manual_subscription_reason,
-            ...user.access_grants.map((grant) => `${grant.subscription_mode} ${grant.ui_surface} ${grant.plan} ${grant.source} ${grant.note ?? ''}`),
-          ],
+          [user.username, user.email, user.first_name, user.last_name, user.admin_note],
           query,
         );
       })
       .sort((left, right) => compareUsers(left, right, userSort));
-  }, [accessFilter, deferredUserQuery, overview, planFilter, planSourceFilter, userSort]);
+  }, [users, accountFilter, deferredUserQuery, userSort]);
 
-  const filteredUsedBytes = filteredUsers.reduce((total, user) => total + user.used_bytes, 0);
-  const pagedUsers = paginate(filteredUsers, userPage, USERS_PAGE_SIZE);
-  const userPages = pageCount(filteredUsers.length, USERS_PAGE_SIZE);
+  const totalUserPages = pageCount(filteredUsers.length, USERS_PAGE_SIZE);
+  const safeUserPage = Math.min(userPage, totalUserPages);
+  const pagedUsers = paginate(filteredUsers, safeUserPage, USERS_PAGE_SIZE);
+  const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
+  const selectedUserKey = selectedUser?.id ?? '';
 
-  const filteredFeedback = useMemo(() => {
-    if (!overview) {
-      return [];
+  useEffect(() => {
+    setUserPage(1);
+  }, [accountFilter, deferredUserQuery, userSort]);
+
+  useEffect(() => {
+    if (!selectedUser) {
+      setAdminNoteDraft('');
+      setLockedReasonDraft('');
+      return;
+    }
+    setAdminNoteDraft(selectedUser.admin_note ?? '');
+    setLockedReasonDraft(selectedUser.locked_reason ?? '');
+    // Keyed on the id alone: refetching the overview replaces the object, and
+    // depending on it would wipe whatever the operator has typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedUserKey]);
+
+  async function runUserAction(user: AdminUser, path: string, body: unknown) {
+    if (!token) {
+      return;
     }
 
-    const query = normalizeQuery(deferredFeedbackQuery);
-    return overview.feedback.filter((item) => {
-      const archiveMatches =
-        feedbackFilter === 'all' ||
-        (feedbackFilter === 'active' && !item.is_archived) ||
-        (feedbackFilter === 'archived' && item.is_archived);
-      if (!archiveMatches) {
-        return false;
-      }
+    setActiveUserActionId(user.id);
+    setError('');
+    try {
+      const next = await requestAdmin<AdminOverview>(path, token, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setOverview(next);
+      // Account changes move the numbers on the status page too.
+      setStatus(await requestAdmin<AdminStatus>('/admin/status', token));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'That action did not go through');
+    } finally {
+      setActiveUserActionId('');
+    }
+  }
 
-      return matchesQuery([item.subject, item.message, item.name, item.email, item.page_url], query);
+  function handleToggleLock(user: AdminUser) {
+    const locking = !user.is_locked;
+    if (locking && !window.confirm(`Lock ${user.username}? They will not be able to sign in. Their vaults are untouched.`)) {
+      return;
+    }
+    void runUserAction(user, `/admin/users/${user.id}/account-lock`, {
+      locked: locking,
+      reason: locking ? lockedReasonDraft.trim() || null : null,
     });
-  }, [deferredFeedbackQuery, feedbackFilter, overview]);
+  }
 
-  const pagedFeedback = paginate(filteredFeedback, feedbackPage, FEEDBACK_PAGE_SIZE);
-  const feedbackPages = pageCount(filteredFeedback.length, FEEDBACK_PAGE_SIZE);
-  const topUsers = (overview?.users ?? []).slice().sort((left, right) => right.used_bytes - left.used_bytes).slice(0, 5);
+  function handleSaveNote(user: AdminUser) {
+    void runUserAction(user, `/admin/users/${user.id}/admin-details`, {
+      admin_note: adminNoteDraft.trim() || null,
+      locked_reason: lockedReasonDraft.trim() || null,
+    });
+  }
+
+  function handleDeleteUser(user: AdminUser) {
+    const typed = window.prompt(
+      `Deleting ${user.username} removes the account and all ${user.vault_count} vault(s) in it, permanently. There is no undo and no backup taken.\n\nType the username to confirm:`,
+    );
+    if (typed !== user.username) {
+      return;
+    }
+    void runUserAction(user, `/admin/users/${user.id}/delete-account`, { delete_all_data: true });
+    setSelectedUserId('');
+  }
+
+  // ── Maintenance ────────────────────────────────────────────────────────────
+
+  async function handleRunPurge() {
+    if (!token) {
+      return;
+    }
+
+    setPurgeRunning(true);
+    setPurgeNotice('');
+    setError('');
+    try {
+      const result = await requestAdmin<{ cleared: number; purge: PurgeStatus }>(
+        '/admin/maintenance/purge-shares',
+        token,
+        { method: 'POST' },
+      );
+      setPurgeNotice(
+        result.cleared === 0
+          ? 'Nothing to clear — no expired or revoked shares were waiting.'
+          : `Cleared ${result.cleared} expired share${result.cleared === 1 ? '' : 's'}.`,
+      );
+      await refresh(token);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The cleanup could not run');
+    } finally {
+      setPurgeRunning(false);
+    }
+  }
+
+  const hasSession = Boolean(token);
   const viewMeta = VIEW_META[activeView];
 
   return (
@@ -766,18 +816,21 @@ export default function App() {
       {!hasSession ? (
         <section className="landing-shell">
           <section className="hero">
-            <p className="eyebrow">MindMapVault control plane</p>
-            <h1>Secure admin workspace for support, billing, and usage oversight.</h1>
+            <p className="eyebrow">MindMapVault server</p>
+            <h1>MindMapVault server administration</h1>
             <p className="lede">
-              Unlock the control plane with the admin token, then work from a dedicated internal surface instead of stitching together production checks by hand.
+              Server health, user accounts, access rules and maintenance. Sign in with the value of{' '}
+              <code>ADMIN_API_TOKEN</code> from this deployment's environment.
             </p>
           </section>
 
           <section className="auth-panel">
             <div>
-              <p className="panel-label">Access</p>
-              <strong>Protected admin session</strong>
-              <p className="panel-help">Enter the admin bearer token to unlock the control plane. It stays only in this browser session.</p>
+              <p className="panel-label">Authentication</p>
+              <strong>Admin token</strong>
+              <p className="panel-help">
+                It is kept in this browser tab only, and forgotten when you close it.
+              </p>
             </div>
 
             <form className="auth-form" onSubmit={handleAuthSubmit}>
@@ -789,7 +842,7 @@ export default function App() {
                 className="token-input"
               />
               <button type="submit" className="primary-button" disabled={!tokenInput.trim() || loading}>
-                {loading ? 'Loading…' : 'Open dashboard'}
+                {loading ? 'Checking…' : 'Open console'}
               </button>
             </form>
           </section>
@@ -800,12 +853,14 @@ export default function App() {
         <section className="control-plane">
           <aside className="sidepanel">
             <div className="sidepanel-brand">
-              <p className="eyebrow">MindMapVault control plane</p>
-              <h2>Admin workspace</h2>
-              <p className="panel-help">Switch between overview, users, and feedback while keeping support, billing, and moderation actions separate.</p>
+              <p className="eyebrow">MindMapVault server</p>
+              <h2>Admin console</h2>
+              <p className="panel-help">
+                {status ? `Version ${status.version} · up ${formatUptime(status.uptime_seconds)}` : 'Loading…'}
+              </p>
             </div>
 
-            <nav className="sidepanel-nav" aria-label="Admin sections">
+            <nav className="sidepanel-nav" aria-label="Console sections">
               {NAV_ITEMS.map((item) => (
                 <button
                   key={item.id}
@@ -824,23 +879,23 @@ export default function App() {
             </nav>
 
             <div className="sidepanel-summary">
-              <p className="panel-label">Snapshot</p>
+              <p className="panel-label">Right now</p>
               <div className="summary-stack">
                 <article className="summary-card">
-                  <span>Total users</span>
-                  <strong>{metrics?.total_users ?? '—'}</strong>
+                  <span>Accounts</span>
+                  <strong>{status?.totals.accounts ?? '—'}</strong>
                 </article>
                 <article className="summary-card">
-                  <span>Stored vaults</span>
-                  <strong>{metrics?.total_vaults ?? '—'}</strong>
+                  <span>Vaults</span>
+                  <strong>{status?.totals.vaults ?? '—'}</strong>
                 </article>
                 <article className="summary-card">
-                  <span>Used capacity</span>
-                  <strong>{metrics ? formatBytes(metrics.total_used_bytes) : '—'}</strong>
+                  <span>Stored</span>
+                  <strong>{status ? formatBytes(status.totals.stored_bytes) : '—'}</strong>
                 </article>
                 <article className="summary-card">
-                  <span>Multi-surface</span>
-                  <strong>{multiAccessUsersCount}</strong>
+                  <span>Open invites</span>
+                  <strong>{status?.totals.open_invites ?? '—'}</strong>
                 </article>
               </div>
             </div>
@@ -856,19 +911,19 @@ export default function App() {
               <div className="topbar-controls">
                 <div className="session-chip">
                   <span className="session-dot" aria-hidden="true" />
-                  <span>{loading ? 'Refreshing snapshot' : `Updated ${formatDate(overview?.generated_at)}`}</span>
+                  <span>{loading ? 'Checking…' : `Checked ${formatAgo(status?.generated_at)}`}</span>
                 </div>
                 <div className="topbar-actions">
                   <button
                     type="button"
                     className="primary-button"
-                    onClick={() => void loadOverview(token)}
+                    onClick={() => void refresh(token)}
                     disabled={loading}
                   >
-                    {loading ? 'Refreshing…' : 'Refresh data'}
+                    {loading ? 'Checking…' : 'Check again'}
                   </button>
                   <button type="button" className="secondary-button" onClick={handleLogout}>
-                    End session
+                    Sign out
                   </button>
                 </div>
               </div>
@@ -876,301 +931,346 @@ export default function App() {
 
             {error && <p className="error-banner">{error}</p>}
 
-            {activeView === 'overview' && metrics && overview && (
-              <>
-                <section className="metric-grid" aria-label="admin metrics">
-                  <article className="metric-card metric-card-primary">
-                    <p className="metric-label">Registered users</p>
-                    <strong className="metric-value">{metrics.total_users}</strong>
-                    <p className="metric-detail">All cloud accounts currently stored in the selected backend.</p>
-                  </article>
-                  <article className="metric-card metric-card-violet">
-                    <p className="metric-label">Stored vaults</p>
-                    <strong className="metric-value">{metrics.total_vaults}</strong>
-                    <p className="metric-detail">Encrypted vault records currently associated with registered users.</p>
-                  </article>
-                  <article className="metric-card metric-card-rose">
-                    <p className="metric-label">Used capacity</p>
-                    <strong className="metric-value">{formatBytes(metrics.total_used_bytes)}</strong>
-                    <p className="metric-detail">Total encrypted blob storage currently consumed across all vault versions.</p>
-                  </article>
-                  <article className="metric-card metric-card-orange">
-                    <p className="metric-label">Paid plans</p>
-                    <strong className="metric-value">{metrics.paid_users}</strong>
-                    <p className="metric-detail">Users whose effective plan currently resolves to paid.</p>
-                  </article>
-                  <article className="metric-card metric-card-sky">
-                    <p className="metric-label">Active subscriptions</p>
-                    <strong className="metric-value">{metrics.active_subscriptions}</strong>
-                    <p className="metric-detail">Stripe subscriptions currently marked active or trialing.</p>
-                  </article>
-                  <article className="metric-card metric-card-mint">
-                    <p className="metric-label">Feedback items</p>
-                    <strong className="metric-value">{metrics.feedback_count}</strong>
-                    <p className="metric-detail">Total stored feedback submissions from the public site.</p>
-                  </article>
-                  <article className="metric-card metric-card-slate">
-                    <p className="metric-label">Archived feedback</p>
-                    <strong className="metric-value">{metrics.archived_feedback_count}</strong>
-                    <p className="metric-detail">Items hidden from the active inbox without being deleted.</p>
-                  </article>
-                  <article className="metric-card metric-card-deep">
-                    <p className="metric-label">Manual overrides</p>
-                    <strong className="metric-value">{manualOverrideCount}</strong>
-                    <p className="metric-detail">Accounts currently resolving their plan from an admin override instead of Stripe or base state.</p>
-                  </article>
-                </section>
-
-                <section className="insight-grid" aria-label="usage insights">
-                  <article className="insight-card accent-indigo">
-                    <p className="panel-label">Conversion</p>
-                    <h2>{formatPercent(paidShare)}</h2>
-                    <p className="panel-help">Paid share across all registered users.</p>
-                  </article>
-                  <article className="insight-card accent-sky">
-                    <p className="panel-label">Reachability</p>
-                    <h2>{formatPercent(reachableShare)}</h2>
-                    <p className="panel-help">Users with an email address on file for direct follow-up.</p>
-                  </article>
-                  <article className="insight-card accent-mint">
-                    <p className="panel-label">Feedback density</p>
-                    <h2>{feedbackPerUser.toFixed(2)}</h2>
-                    <p className="panel-help">Feedback submissions per registered user.</p>
-                  </article>
-                  <article className="insight-card accent-rose">
-                    <p className="panel-label">Locked users</p>
-                    <h2>{metrics.locked_users}</h2>
-                    <p className="panel-help">Accounts currently prevented from starting new sessions.</p>
-                  </article>
-                </section>
-
-                <section className="status-row status-row-wide">
-                  <div className="notes-card">
-                    <h2>Snapshot time</h2>
-                    <p>{formatDate(overview.generated_at)}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Expiring in 7 days</h2>
-                    <p>{expiringSoonCount}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Active feedback</h2>
-                    <p>{activeFeedbackCount}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Locked accounts</h2>
-                    <p>{metrics.locked_users}</p>
-                  </div>
-                </section>
-
-                <section className="workspace-grid workspace-grid-extended">
-                  <article className="workspace-card workspace-primary">
-                    <div className="panel-header">
+            {/* ── Status ──────────────────────────────────────────────────── */}
+            {activeView === 'status' && status && (
+              <section className="view-stack">
+                {status.warnings.length > 0 && (
+                  <section className="panel">
+                    <div className="panel-header panel-header-tight">
                       <div>
-                        <p className="panel-label">Storage leaders</p>
-                        <h2>Largest accounts right now</h2>
+                        <p className="panel-label">Attention</p>
+                        <h2>
+                          {status.warnings.length === 1
+                            ? '1 item needs attention'
+                            : `${status.warnings.length} items need attention`}
+                        </h2>
                       </div>
                     </div>
-                    <div className="signal-list">
-                      {topUsers.map((user) => (
-                        <div key={user.id}>
-                          <strong>{user.username}</strong>
-                          <span>
-                            {formatBytes(user.used_bytes)} across {user.vault_count} vault{user.vault_count === 1 ? '' : 's'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </article>
-
-                  <article className="workspace-card">
-                    <div className="panel-header">
-                      <div>
-                        <p className="panel-label">Recent actions</p>
-                        <h2>Admin timeline</h2>
-                      </div>
-                    </div>
-                    <div className="audit-list">
-                      {overview.audit_events.slice(0, 8).map((event) => (
-                        <article key={event.public_id} className="audit-item">
-                          <div className="audit-row">
-                            <strong>{event.summary}</strong>
-                            <span>{formatDate(event.created_at)}</span>
-                          </div>
-                          <p>{event.detail || `${event.entity_type} · ${event.action_type}`}</p>
+                    <div className="notice-stack">
+                      {status.warnings.map((warning) => (
+                        <article key={warning.code} className="notice-card">
+                          <strong>{warning.title}</strong>
+                          <p className="panel-help">{warning.detail}</p>
+                          {(warning.code === 'open_and_unlimited'
+                            || warning.code === 'registration_open'
+                            || warning.code === 'proxy_header_ignored') && (
+                            <button
+                              type="button"
+                              className="secondary-button action-button"
+                              onClick={() => setActiveView('settings')}
+                            >
+                              Open Settings
+                            </button>
+                          )}
                         </article>
                       ))}
                     </div>
+                  </section>
+                )}
+
+                {status.server.disk && (
+                  <section className="panel">
+                    <div className="panel-header panel-header-tight">
+                      <div>
+                        <p className="panel-label">Disk</p>
+                        <h2>
+                          {formatBytes(status.server.disk.available_bytes)} free of{' '}
+                          {formatBytes(status.server.disk.total_bytes)}
+                        </h2>
+                      </div>
+                      <span className={diskTone(status.server.disk_used_percent ?? 0)}>
+                        {status.server.disk_used_percent}% used
+                      </span>
+                    </div>
+                    <div className="usage-bar" role="img"
+                      aria-label={`Disk ${status.server.disk_used_percent}% used`}>
+                      <span
+                        className={`usage-fill ${diskFill(status.server.disk_used_percent ?? 0)}`}
+                        style={{ width: `${Math.max(2, status.server.disk_used_percent ?? 0)}%` }}
+                      />
+                    </div>
+                    <p className="panel-help">
+                      Measured on <code>{status.server.disk.path}</code> inside the server
+                      container. With a normal Docker setup that is the same disk your database and
+                      file-storage volumes sit on, so it is the number that runs out. If you put
+                      those volumes on a different disk, check that one instead — set{' '}
+                      <code>STATUS_DISK_PATH</code> to a path on it and this will follow.
+                    </p>
+                  </section>
+                )}
+
+                <section className="panel">
+                  <div className="panel-header panel-header-tight">
+                    <div>
+                      <p className="panel-label">Services</p>
+                      <h2>Dependencies</h2>
+                    </div>
+                  </div>
+                  <div className="health-grid">
+                    <article className={status.database.reachable ? 'health-card is-ok' : 'health-card is-down'}>
+                      <span className="health-dot" aria-hidden="true" />
+                      <div>
+                        <strong>Database</strong>
+                        <p className="panel-help">
+                          {status.database.reachable
+                            ? `Answering in ${status.database.latency_ms} ms.`
+                            : status.database.detail ?? 'Not answering.'}
+                        </p>
+                        {status.database.reachable && status.database_stats && (
+                          <dl className="stat-list">
+                            {status.database_stats.version && (
+                              <div>
+                                <dt>Version</dt>
+                                <dd>PostgreSQL {shortVersion(status.database_stats.version)}</dd>
+                              </div>
+                            )}
+                            {typeof status.database_stats.size_bytes === 'number' && (
+                              <div>
+                                <dt>On disk</dt>
+                                <dd>{formatBytes(status.database_stats.size_bytes)}</dd>
+                              </div>
+                            )}
+                          </dl>
+                        )}
+                        {!status.database.reachable && (
+                          <p className="panel-help">
+                            Nothing will work until this is back. Check that the PostgreSQL
+                            container is running and that the server can reach it.
+                          </p>
+                        )}
+                      </div>
+                    </article>
+
+                    <article className={status.object_storage.reachable ? 'health-card is-ok' : 'health-card is-down'}>
+                      <span className="health-dot" aria-hidden="true" />
+                      <div>
+                        <strong>File storage</strong>
+                        <p className="panel-help">
+                          {status.object_storage.reachable
+                            ? `Answering in ${status.object_storage.latency_ms} ms.`
+                            : status.object_storage.detail ?? 'Not answering.'}
+                        </p>
+                        {status.object_storage.reachable && (
+                          <dl className="stat-list">
+                            <div>
+                              <dt>Bucket</dt>
+                              <dd>{status.storage_bucket}</dd>
+                            </div>
+                            {status.bucket_stats && (
+                              <>
+                                <div>
+                                  <dt>Files</dt>
+                                  <dd>
+                                    {status.bucket_stats.object_count.toLocaleString()}
+                                    {status.bucket_stats.truncated ? '+' : ''}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Holding</dt>
+                                  <dd>
+                                    {status.bucket_stats.truncated ? 'at least ' : ''}
+                                    {formatBytes(status.bucket_stats.size_bytes)}
+                                  </dd>
+                                </div>
+                              </>
+                            )}
+                          </dl>
+                        )}
+                        {!status.object_storage.reachable && (
+                          <p className="panel-help">
+                            Maps and attachments live here. People can sign in but not open or save
+                            anything. Check the Garage or MinIO container.
+                          </p>
+                        )}
+                      </div>
+                    </article>
+                  </div>
+
+                  {status.bucket_stats && !status.bucket_stats.truncated
+                    && status.bucket_stats.size_bytes > status.totals.stored_bytes * 1.2
+                    && status.totals.stored_bytes > 0 && (
+                    <p className="panel-help">
+                      The bucket holds {formatBytes(status.bucket_stats.size_bytes)} while the
+                      accounts add up to {formatBytes(status.totals.stored_bytes)}. The difference is
+                      older versions of maps, which are kept so people can roll back — each vault
+                      keeps a set number and prunes the rest by itself. Revoked shares waiting for
+                      the cleanup are in there too.
+                    </p>
+                  )}
+                </section>
+
+                <section className="metric-grid" aria-label="What is on this server">
+                  <article className="metric-card metric-card-primary">
+                    <p className="metric-label">Accounts</p>
+                    <strong className="metric-value">{status.totals.accounts}</strong>
+                    <p className="metric-detail">
+                      {status.totals.locked_accounts > 0
+                        ? `${status.totals.locked_accounts} locked out of signing in.`
+                        : 'None locked.'}
+                    </p>
+                  </article>
+                  <article className="metric-card metric-card-violet">
+                    <p className="metric-label">Vaults</p>
+                    <strong className="metric-value">{status.totals.vaults}</strong>
+                    <p className="metric-detail">Encrypted mind maps and boards across all accounts.</p>
+                  </article>
+                  <article className="metric-card metric-card-sky">
+                    <p className="metric-label">Stored</p>
+                    <strong className="metric-value">{formatBytes(status.totals.stored_bytes)}</strong>
+                    <p className="metric-detail">
+                      Maps and their files. This is what is in the server, not what is free on the
+                      host — check the disk itself for that.
+                    </p>
+                  </article>
+                  <article className="metric-card metric-card-mint">
+                    <p className="metric-label">Running</p>
+                    <strong className="metric-value">{formatUptime(status.uptime_seconds)}</strong>
+                    <p className="metric-detail">
+                      Version {status.version}, started {formatDate(status.started_at)}.
+                      {typeof status.server.memory_bytes === 'number'
+                        && ` Using ${formatBytes(status.server.memory_bytes)} of memory.`}
+                    </p>
                   </article>
                 </section>
-              </>
+
+                <section className="panel">
+                  <div className="panel-header panel-header-tight">
+                    <div>
+                      <p className="panel-label">Cleanup</p>
+                      <h2>Expired shares</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-button action-button"
+                      onClick={() => setActiveView('maintenance')}
+                    >
+                      Maintenance
+                    </button>
+                  </div>
+                  <p className="panel-help">
+                    Share links that expired or were revoked have their encrypted copy deleted. This
+                    runs once a day on its own.{' '}
+                    {status.purge.last_run_at
+                      ? `Last run ${formatAgo(status.purge.last_run_at)}, clearing ${status.purge.last_cleared}.`
+                      : 'It has not run yet since this server started.'}
+                  </p>
+                </section>
+              </section>
             )}
 
-            {activeView === 'users' && overview && (
-              <section className="page-stack">
-                <section className="panel panel-toolbar">
-                  <div className="toolbar-copy">
-                    <p className="panel-label">User management</p>
-                    <h2>Accounts, plans, billing source, and internal notes</h2>
-                    <p className="panel-help">Filter by effective plan, lock state, or plan source, then use the detail panel for support notes and manual paid grants.</p>
+            {/* ── People ──────────────────────────────────────────────────── */}
+            {activeView === 'people' && overview && (
+              <section className="view-stack">
+                <section className="panel">
+                  <div className="panel-header panel-header-tight">
+                    <div>
+                      <p className="panel-label">Invites</p>
+                      <h2>Invite codes</h2>
+                    </div>
                   </div>
-                  <div className="toolbar-actions toolbar-actions-wide">
-                    <input
-                      type="search"
-                      value={userQuery}
-                      onChange={(event) => setUserQuery(event.target.value)}
-                      placeholder="Search by username, name, email, status, or notes"
-                      className="token-input search-input"
-                    />
-                    <div className="filter-group" role="group" aria-label="Plan filters">
-                      {(['all', 'paid', 'free'] as PlanFilter[]).map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={value === planFilter ? 'filter-chip is-active' : 'filter-chip'}
-                          onClick={() => setPlanFilter(value)}
-                        >
-                          {value === 'all' ? 'All plans' : value === 'paid' ? 'Paid only' : 'Free only'}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="filter-group" role="group" aria-label="Access filters">
-                      {(['all', 'open', 'locked'] as AccessFilter[]).map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={value === accessFilter ? 'filter-chip is-active' : 'filter-chip'}
-                          onClick={() => setAccessFilter(value)}
-                        >
-                          {value === 'all' ? 'All access' : value === 'open' ? 'Open' : 'Locked'}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="filter-group" role="group" aria-label="Plan source filters">
-                      {(['all', 'admin_override', 'stripe', 'base'] as PlanSourceFilter[]).map((value) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={value === planSourceFilter ? 'filter-chip is-active' : 'filter-chip'}
-                          onClick={() => setPlanSourceFilter(value)}
-                        >
-                          {value === 'all' ? 'All sources' : value === 'admin_override' ? 'Manual' : value}
-                        </button>
-                      ))}
-                    </div>
-                    <label className="select-wrap">
-                      <span className="panel-label">Sort</span>
-                      <select value={userSort} onChange={(event) => setUserSort(event.target.value as UserSort)} className="select-input">
-                        <option value="created_desc">Newest first</option>
-                        <option value="storage_desc">Highest storage</option>
-                        <option value="vaults_desc">Most vaults</option>
-                        <option value="username_asc">Username A-Z</option>
-                      </select>
+
+                  <p className="panel-help">
+                    {invites?.invites_required
+                      ? 'Sign-ups are closed, so an invite code is the only way for someone to create an account here. Send them the link and the code is filled in for them.'
+                      : 'Sign-ups are open, so anyone who can reach this server can create an account without a code. Codes still work, and become the only way in once you close sign-ups in Settings.'}
+                  </p>
+
+                  {inviteError && <p className="error-banner">{inviteError}</p>}
+
+                  <form className="form-grid invite-form" onSubmit={handleCreateInvite}>
+                    <label>
+                      <span className="detail-label">Who is it for?</span>
+                      <input
+                        type="text"
+                        className="detail-input"
+                        value={inviteLabel}
+                        onChange={(event) => setInviteLabel(event.target.value)}
+                        placeholder="Anna, or the spare laptop"
+                      />
+                      <span className="panel-help field-help">
+                        Just a reminder for you. It is never shown to whoever uses the code.
+                      </span>
                     </label>
-                  </div>
-                </section>
-
-                <section className="status-row compact-row status-row-wide">
-                  <div className="notes-card">
-                    <h2>Filtered users</h2>
-                    <p>{filteredUsers.length}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Filtered storage</h2>
-                    <p>{formatBytes(filteredUsedBytes)}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Multi-surface users</h2>
-                    <p>{multiAccessUsersCount}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Locked users</h2>
-                    <p>{metrics?.locked_users ?? 0}</p>
-                  </div>
-                </section>
-
-                <section className="user-management-grid">
-                  <section className="panel panel-wide">
-                    <div className="panel-header">
-                      <div>
-                        <p className="panel-label">Accounts</p>
-                        <h2>Registered accounts and plan status</h2>
-                      </div>
-                      <div className="pagination-row">
-                        <button type="button" className="secondary-button action-button" onClick={() => setUserPage((page) => Math.max(1, page - 1))} disabled={userPage === 1}>
-                          Previous
-                        </button>
-                        <span className="page-indicator">Page {userPage} of {userPages}</span>
-                        <button type="button" className="secondary-button action-button" onClick={() => setUserPage((page) => Math.min(userPages, page + 1))} disabled={userPage >= userPages}>
-                          Next
-                        </button>
-                      </div>
+                    <label>
+                      <span className="detail-label">Good for (days)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={365}
+                        className="detail-input number-input"
+                        value={inviteExpiryDays}
+                        onChange={(event) => setInviteExpiryDays(event.target.value)}
+                        disabled={inviteNeverExpires}
+                      />
+                      <span className="detail-label switch-label field-help">
+                        <input
+                          type="checkbox"
+                          checked={inviteNeverExpires}
+                          onChange={(event) => setInviteNeverExpires(event.target.checked)}
+                        />{' '}
+                        Never expires
+                      </span>
+                    </label>
+                    <div className="form-grid-span detail-actions">
+                      <button type="submit" className="primary-button" disabled={inviteBusy}>
+                        {inviteBusy ? 'Working…' : 'Create an invite'}
+                      </button>
                     </div>
+                  </form>
 
+                  {invites && invites.invites.length > 0 ? (
                     <div className="table-wrap">
                       <table className="data-table">
                         <thead>
                           <tr>
-                            <th>User</th>
-                            <th>Plan</th>
-                            <th>Access</th>
-                            <th>Vaults</th>
-                            <th>Used capacity</th>
-                            <th>Created</th>
-                            <th>Email</th>
-                            <th>Actions</th>
+                            <th>Code</th>
+                            <th>For</th>
+                            <th>State</th>
+                            <th>Expires</th>
+                            <th aria-label="Actions" />
                           </tr>
                         </thead>
                         <tbody>
-                          {pagedUsers.map((user) => (
-                            <tr key={user.id || user.username} className={selectedUserId === user.id ? 'is-selected-row' : undefined}>
-                              <td>
-                                <div className="table-primary">
-                                  <strong>{user.username}</strong>
-                                  <span>{[user.first_name, user.last_name].filter(Boolean).join(' ') || 'No profile name'}</span>
-                                </div>
+                          {invites.invites.map((invite) => (
+                            <tr key={invite.id}>
+                              <td className="table-primary">
+                                <code className="invite-code">{invite.code}</code>
                               </td>
+                              <td>{invite.label || '—'}</td>
                               <td>
-                                <div className="plan-stack">
-                                  <span className={statusTone(user)}>{planLabel(user)}</span>
-                                  <span>{user.manual_subscription_reason || user.stripe_customer_id || 'No override reason'}</span>
-                                </div>
+                                <span
+                                  className={
+                                    invite.status === 'open'
+                                      ? 'tone-positive'
+                                      : invite.status === 'used'
+                                        ? 'tone-muted'
+                                        : 'tone-danger'
+                                  }
+                                >
+                                  {invite.status === 'open' && 'Ready to use'}
+                                  {invite.status === 'used' && `Used by ${invite.used_by_username ?? 'someone'}`}
+                                  {invite.status === 'expired' && 'Expired'}
+                                </span>
                               </td>
-                              <td>
-                                <div className="plan-stack">
-                                  <span className={accessTone(user)}>{user.is_locked ? 'Locked' : 'Open'}</span>
-                                  <span>{user.locked_reason || 'No lock reason'}</span>
-                                </div>
-                              </td>
-                              <td>{user.vault_count}</td>
-                              <td>
-                                <div className="capacity-stack">
-                                  <strong>{formatBytes(user.used_bytes)}</strong>
-                                  <span>{formatPercent(capacityPercent(user))} of {formatBytes(user.storage_limit_bytes)}</span>
-                                </div>
-                              </td>
-                              <td>{formatDate(user.created_at)}</td>
-                              <td>{user.email || '—'}</td>
+                              <td>{invite.expires_at ? formatDate(invite.expires_at) : 'Never'}</td>
                               <td>
                                 <div className="table-actions">
-                                  <button type="button" className="secondary-button action-button" onClick={() => setSelectedUserId(user.id)}>
-                                    Manage
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="secondary-button action-button"
-                                    onClick={() => handleToggleUserLock(user)}
-                                    disabled={loading || activeUserActionId === user.id}
-                                  >
-                                    {activeUserActionId === user.id ? 'Working…' : user.is_locked ? 'Unlock' : 'Lock'}
-                                  </button>
+                                  {invite.status === 'open' && (
+                                    <button
+                                      type="button"
+                                      className="secondary-button action-button"
+                                      onClick={() => void copyToClipboard(inviteLink(invite), invite.id)}
+                                    >
+                                      {copiedInviteId === invite.id ? 'Copied' : 'Copy link'}
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     className="secondary-button danger-button action-button"
-                                    onClick={() => handleDeleteUser(user)}
-                                    disabled={loading || activeUserActionId === user.id}
+                                    onClick={() => void handleRevokeInvite(invite)}
+                                    disabled={inviteBusy}
                                   >
-                                    Delete data
+                                    {invite.status === 'open' ? 'Revoke' : 'Remove'}
                                   </button>
                                 </div>
                               </td>
@@ -1179,323 +1279,589 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
-
-                    {filteredUsers.length === 0 && (
-                      <div className="empty-inline">
-                        <p className="panel-label">No matches</p>
-                        <p className="panel-help">Adjust the search or filters to show accounts from the current snapshot.</p>
-                      </div>
-                    )}
-                  </section>
-
-                  <aside className="panel detail-panel">
-                    <div className="panel-header">
-                      <div>
-                        <p className="panel-label">User detail</p>
-                        <h2>{selectedUser?.username || 'Select an account'}</h2>
-                      </div>
+                  ) : (
+                    <div className="empty-inline">
+                      <p className="panel-label">No invite codes yet</p>
+                      <p className="panel-help">Create one above when you want to let someone join.</p>
                     </div>
-
-                    {selectedUser ? (
-                      <div className="detail-stack">
-                        <div className="detail-block">
-                          <div className="detail-grid">
-                            <div>
-                              <span className="detail-label">Effective plan</span>
-                              <strong>{selectedUser.effective_subscription_tier}</strong>
-                            </div>
-                            <div>
-                              <span className="detail-label">Plan source</span>
-                              <strong>{selectedUser.plan_source}</strong>
-                            </div>
-                            <div>
-                              <span className="detail-label">Stripe status</span>
-                              <strong>{selectedUser.stripe_subscription_status || '—'}</strong>
-                            </div>
-                            <div>
-                              <span className="detail-label">Period end</span>
-                              <strong>{formatDate(selectedUser.subscription_current_period_end)}</strong>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="detail-block">
-                          <div className="panel-header panel-header-tight">
-                            <div>
-                              <p className="panel-label">Support notes</p>
-                              <h2>Admin details</h2>
-                            </div>
-                          </div>
-                          <div className="form-grid">
-                            <label>
-                              <span className="detail-label">Admin note</span>
-                              <textarea value={adminNoteDraft} onChange={(event) => setAdminNoteDraft(event.target.value)} className="detail-input detail-textarea" placeholder="Internal support context" />
-                            </label>
-                            <label>
-                              <span className="detail-label">Lock reason</span>
-                              <textarea value={lockedReasonDraft} onChange={(event) => setLockedReasonDraft(event.target.value)} className="detail-input detail-textarea" placeholder="Why the account is locked or should be locked" />
-                            </label>
-                          </div>
-                          <div className="detail-actions">
-                            <button type="button" className="primary-button" onClick={handleSaveAdminDetails} disabled={loading || activeUserActionId === selectedUser.id}>
-                              {activeUserActionId === selectedUser.id ? 'Saving…' : 'Save details'}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="detail-block">
-                          <div className="panel-header panel-header-tight">
-                            <div>
-                              <p className="panel-label">Billing control</p>
-                              <h2>Manual plan override</h2>
-                            </div>
-                          </div>
-                          <div className="form-grid">
-                            <label>
-                              <span className="detail-label">Override tier</span>
-                              <select value={planTierDraft} onChange={(event) => setPlanTierDraft(event.target.value)} className="select-input detail-input">
-                                <option value="">No manual override</option>
-                                <option value="free">Free</option>
-                                <option value="paid">Paid</option>
-                              </select>
-                            </label>
-                            <label>
-                              <span className="detail-label">Expires at</span>
-                              <input type="datetime-local" value={planExpiryDraft} onChange={(event) => setPlanExpiryDraft(event.target.value)} className="detail-input" />
-                            </label>
-                            <label className="form-grid-span">
-                              <span className="detail-label">Reason</span>
-                              <textarea value={planReasonDraft} onChange={(event) => setPlanReasonDraft(event.target.value)} className="detail-input detail-textarea" placeholder="Why this override exists" />
-                            </label>
-                          </div>
-                          <div className="detail-actions">
-                            <button type="button" className="primary-button" onClick={handleSavePlanOverride} disabled={loading || activeUserActionId === selectedUser.id}>
-                              {activeUserActionId === selectedUser.id ? 'Saving…' : 'Save override'}
-                            </button>
-                            <button type="button" className="secondary-button" onClick={handleClearPlanOverride} disabled={loading || activeUserActionId === selectedUser.id}>
-                              Clear override
-                            </button>
-                          </div>
-                          <div className="detail-list">
-                            <span>Manual tier: {selectedUser.manual_subscription_tier || '—'}</span>
-                            <span>Expires: {formatDate(selectedUser.manual_subscription_expires_at)}</span>
-                            <span>Granted by: {selectedUser.manual_subscription_granted_by || '—'}</span>
-                          </div>
-                        </div>
-
-                        <div className="detail-block">
-                          <div className="panel-header panel-header-tight">
-                            <div>
-                              <p className="panel-label">Product access</p>
-                              <h2>Interface grants</h2>
-                            </div>
-                            <button type="button" className="secondary-button action-button" onClick={handleAddAccessGrant}>
-                              Add grant
-                            </button>
-                          </div>
-                          <div className="grant-stack">
-                            {accessGrantDrafts.map((grant, index) => (
-                              <div key={`${grant.subscription_mode}-${grant.ui_surface}-${index}`} className="grant-card">
-                                <div className="grant-grid">
-                                  <label>
-                                    <span className="detail-label">Mode</span>
-                                    <select value={grant.subscription_mode} onChange={(event) => handleAccessGrantDraftChange(index, 'subscription_mode', event.target.value)} className="select-input detail-input">
-                                      {SUBSCRIPTION_MODE_OPTIONS.map((value) => (
-                                        <option key={value} value={value}>{labelFromSnakeCase(value)}</option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    <span className="detail-label">UI</span>
-                                    <select value={grant.ui_surface} onChange={(event) => handleAccessGrantDraftChange(index, 'ui_surface', event.target.value)} className="select-input detail-input">
-                                      {UI_SURFACE_OPTIONS.map((value) => (
-                                        <option key={value} value={value}>{labelFromSnakeCase(value)}</option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    <span className="detail-label">Plan</span>
-                                    <select value={grant.plan} onChange={(event) => handleAccessGrantDraftChange(index, 'plan', event.target.value)} className="select-input detail-input">
-                                      {ACCESS_PLAN_OPTIONS.map((value) => (
-                                        <option key={value} value={value}>{labelFromSnakeCase(value)}</option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    <span className="detail-label">Source</span>
-                                    <select value={grant.source} onChange={(event) => handleAccessGrantDraftChange(index, 'source', event.target.value)} className="select-input detail-input">
-                                      {ACCESS_SOURCE_OPTIONS.map((value) => (
-                                        <option key={value} value={value}>{labelFromSnakeCase(value)}</option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    <span className="detail-label">Granted at</span>
-                                    <input type="datetime-local" value={grant.granted_at} onChange={(event) => handleAccessGrantDraftChange(index, 'granted_at', event.target.value)} className="detail-input" />
-                                  </label>
-                                  <label>
-                                    <span className="detail-label">Expires at</span>
-                                    <input type="datetime-local" value={grant.expires_at} onChange={(event) => handleAccessGrantDraftChange(index, 'expires_at', event.target.value)} className="detail-input" />
-                                  </label>
-                                  <label className="form-grid-span">
-                                    <span className="detail-label">Note</span>
-                                    <input type="text" value={grant.note} onChange={(event) => handleAccessGrantDraftChange(index, 'note', event.target.value)} className="detail-input" placeholder="Why this access exists" />
-                                  </label>
-                                </div>
-                                <div className="detail-actions detail-actions-end">
-                                  <button type="button" className="secondary-button danger-button action-button" onClick={() => handleRemoveAccessGrant(index)}>
-                                    Remove grant
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                            {accessGrantDrafts.length === 0 && (
-                              <div className="empty-inline empty-inline-tight">
-                                <p className="panel-help">No explicit grants stored. The encrypted app still resolves through the legacy-compatible access model.</p>
-                              </div>
-                            )}
-                          </div>
-                          <div className="detail-actions">
-                            <button type="button" className="primary-button" onClick={handleSaveAccessGrants} disabled={loading || activeUserActionId === selectedUser.id}>
-                              {activeUserActionId === selectedUser.id ? 'Saving…' : 'Save grants'}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="empty-inline">
-                        <p className="panel-label">No selection</p>
-                        <p className="panel-help">Choose a user from the table to edit notes, lock context, or a manual plan override.</p>
-                      </div>
-                    )}
-                  </aside>
+                  )}
                 </section>
-              </section>
-            )}
 
-            {activeView === 'feedback' && overview && (
-              <section className="page-stack">
                 <section className="panel panel-toolbar">
                   <div className="toolbar-copy">
-                    <p className="panel-label">Feedback inbox</p>
-                    <h2>Public site feedback and support signals</h2>
-                    <p className="panel-help">Search by subject, sender, content, or page URL, then archive or restore submissions without deleting them immediately.</p>
+                    <p className="panel-label">Accounts</p>
+                    <h2>
+                      {overview.metrics.total_users} account{overview.metrics.total_users === 1 ? '' : 's'}
+                    </h2>
                   </div>
                   <div className="toolbar-actions toolbar-actions-wide">
                     <input
                       type="search"
-                      value={feedbackQuery}
-                      onChange={(event) => setFeedbackQuery(event.target.value)}
-                      placeholder="Search subject, email, message, or URL"
-                      className="token-input search-input"
+                      className="search-input"
+                      value={userQuery}
+                      onChange={(event) => setUserQuery(event.target.value)}
+                      placeholder="Search by name, email, or note"
                     />
-                    <div className="filter-group" role="group" aria-label="Feedback filters">
-                      {(['all', 'active', 'archived'] as FeedbackFilter[]).map((value) => (
+                    <div className="filter-group">
+                      {(['all', 'active', 'locked'] as AccountFilter[]).map((value) => (
                         <button
                           key={value}
                           type="button"
-                          className={value === feedbackFilter ? 'filter-chip is-active' : 'filter-chip'}
-                          onClick={() => setFeedbackFilter(value)}
+                          className={value === accountFilter ? 'filter-chip is-active' : 'filter-chip'}
+                          onClick={() => setAccountFilter(value)}
                         >
-                          {value === 'all' ? 'All feedback' : value === 'active' ? 'Active only' : 'Archived only'}
+                          {value === 'all' && 'Everyone'}
+                          {value === 'active' && 'Can sign in'}
+                          {value === 'locked' && 'Locked'}
                         </button>
                       ))}
                     </div>
-                  </div>
-                </section>
-
-                <section className="status-row compact-row status-row-wide">
-                  <div className="notes-card">
-                    <h2>Filtered items</h2>
-                    <p>{filteredFeedback.length}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Active inbox</h2>
-                    <p>{activeFeedbackCount}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Archived</h2>
-                    <p>{metrics?.archived_feedback_count ?? 0}</p>
-                  </div>
-                  <div className="notes-card">
-                    <h2>Total recorded</h2>
-                    <p>{metrics?.feedback_count ?? 0}</p>
+                    <div className="select-wrap">
+                      <select
+                        className="select-input"
+                        value={userSort}
+                        onChange={(event) => setUserSort(event.target.value as UserSort)}
+                      >
+                        <option value="created_desc">Newest first</option>
+                        <option value="storage_desc">Using the most</option>
+                        <option value="vaults_desc">Most vaults</option>
+                        <option value="username_asc">By name</option>
+                      </select>
+                    </div>
                   </div>
                 </section>
 
                 <section className="panel">
-                  <div className="panel-header">
-                    <div>
-                      <p className="panel-label">Feedback</p>
-                      <h2>Latest submissions</h2>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Account</th>
+                          <th>Joined</th>
+                          <th>Vaults</th>
+                          <th>Using</th>
+                          <th>Can sign in</th>
+                          <th aria-label="Actions" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagedUsers.map((user) => {
+                          const percent = usagePercent(user);
+                          return (
+                            <tr
+                              key={user.id}
+                              className={user.id === selectedUserId ? 'is-selected-row' : undefined}
+                              onClick={() => setSelectedUserId(user.id)}
+                            >
+                              <td className="table-primary">
+                                <strong>{user.username}</strong>
+                                {user.email && <span>{user.email}</span>}
+                              </td>
+                              <td>{formatDate(user.created_at)}</td>
+                              <td>{user.vault_count}</td>
+                              <td>
+                                {formatBytes(user.used_bytes)}
+                                {percent !== null && <span> · {percent}% of the limit</span>}
+                              </td>
+                              <td>
+                                <span className={user.is_locked ? 'tone-danger' : 'tone-positive'}>
+                                  {user.is_locked ? 'Locked' : 'Yes'}
+                                </span>
+                              </td>
+                              <td>
+                                <div className="table-actions">
+                                  <button
+                                    type="button"
+                                    className="secondary-button action-button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedUserId(user.id);
+                                    }}
+                                  >
+                                    Manage
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {filteredUsers.length === 0 && (
+                    <div className="empty-inline">
+                      <p className="panel-label">Nothing matches</p>
+                      <p className="panel-help">Clear the search or the filter to see every account.</p>
                     </div>
+                  )}
+
+                  {totalUserPages > 1 && (
                     <div className="pagination-row">
-                      <button type="button" className="secondary-button action-button" onClick={() => setFeedbackPage((page) => Math.max(1, page - 1))} disabled={feedbackPage === 1}>
+                      <button
+                        type="button"
+                        className="secondary-button action-button"
+                        onClick={() => setUserPage((page) => Math.max(1, page - 1))}
+                        disabled={safeUserPage <= 1}
+                      >
                         Previous
                       </button>
-                      <span className="page-indicator">Page {feedbackPage} of {feedbackPages}</span>
-                      <button type="button" className="secondary-button action-button" onClick={() => setFeedbackPage((page) => Math.min(feedbackPages, page + 1))} disabled={feedbackPage >= feedbackPages}>
+                      <span className="page-indicator">
+                        Page {safeUserPage} of {totalUserPages}
+                      </span>
+                      <button
+                        type="button"
+                        className="secondary-button action-button"
+                        onClick={() => setUserPage((page) => Math.min(totalUserPages, page + 1))}
+                        disabled={safeUserPage >= totalUserPages}
+                      >
                         Next
                       </button>
                     </div>
-                  </div>
+                  )}
+                </section>
 
-                  <div className="feedback-list feedback-list-page">
-                    {pagedFeedback.map((item) => (
-                      <article key={item.public_id} className={item.is_archived ? 'feedback-card is-archived' : 'feedback-card'}>
-                        <div className="feedback-meta">
-                          <div className="feedback-heading">
-                            <strong>{item.subject}</strong>
-                            <div className="feedback-status-row">
-                              <span>{formatDate(item.created_at)}</span>
-                              <span className={feedbackTone(item)}>{item.is_archived ? 'Archived' : 'Active'}</span>
-                            </div>
-                          </div>
-                          <div className="table-actions">
-                            <button
-                              type="button"
-                              className="secondary-button action-button"
-                              onClick={() => handleToggleFeedbackArchive(item)}
-                              disabled={loading || activeFeedbackActionId === item.public_id}
-                            >
-                              {activeFeedbackActionId === item.public_id ? 'Working…' : item.is_archived ? 'Restore' : 'Archive'}
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary-button danger-button action-button"
-                              onClick={() => handleDeleteFeedback(item)}
-                              disabled={loading || activeFeedbackActionId === item.public_id}
-                            >
-                              Delete
-                            </button>
-                          </div>
+                {selectedUser && (
+                  <section className="panel detail-panel">
+                    <div className="panel-header panel-header-tight">
+                      <div>
+                        <p className="panel-label">Account</p>
+                        <h2>{selectedUser.username}</h2>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary-button action-button"
+                        onClick={() => setSelectedUserId('')}
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    <div className="detail-list">
+                      <span>Joined {formatDate(selectedUser.created_at)}</span>
+                      <span>{selectedUser.vault_count} vault(s)</span>
+                      <span>Using {formatBytes(selectedUser.used_bytes)}</span>
+                      {selectedUser.storage_limit_bytes ? (
+                        <span>Limit {formatBytes(selectedUser.storage_limit_bytes)}</span>
+                      ) : (
+                        <span>No storage limit set</span>
+                      )}
+                    </div>
+
+                    <div className="detail-block">
+                      <div className="form-grid">
+                        <label className="form-grid-span">
+                          <span className="detail-label">Your note</span>
+                          <textarea
+                            className="detail-input detail-textarea"
+                            value={adminNoteDraft}
+                            onChange={(event) => setAdminNoteDraft(event.target.value)}
+                            placeholder="Anything you want to remember about this account"
+                          />
+                          <span className="panel-help field-help">
+                            Only you see this. It is not shown to the account holder.
+                          </span>
+                        </label>
+                        <label className="form-grid-span">
+                          <span className="detail-label">Reason, if you lock them out</span>
+                          <input
+                            type="text"
+                            className="detail-input"
+                            value={lockedReasonDraft}
+                            onChange={(event) => setLockedReasonDraft(event.target.value)}
+                            placeholder="Left the household, suspected compromise…"
+                          />
+                        </label>
+                      </div>
+                      <div className="detail-actions">
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => handleSaveNote(selectedUser)}
+                          disabled={activeUserActionId === selectedUser.id}
+                        >
+                          {activeUserActionId === selectedUser.id ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="detail-block">
+                      <div className="panel-header panel-header-tight">
+                        <div>
+                          <p className="panel-label">Access</p>
+                          <h2>
+                            {selectedUser.is_locked
+                              ? 'This account is locked'
+                              : 'This account can sign in'}
+                          </h2>
                         </div>
-                        <p className="feedback-author">
-                          {item.name || 'Anonymous'}
-                          {item.email ? ` · ${item.email}` : ''}
-                        </p>
-                        <p className="feedback-message">{item.message}</p>
-                        <p className="feedback-link">{item.page_url || 'No source URL recorded'}</p>
-                        {item.is_archived && <p className="feedback-link">Archived at {formatDate(item.archived_at)}</p>}
-                      </article>
-                    ))}
-                  </div>
+                      </div>
+                      <p className="panel-help">
+                        Locking blocks sign-in and leaves every vault exactly where it is, so it can
+                        always be undone. Deleting cannot be.
+                      </p>
+                      <div className="detail-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleToggleLock(selectedUser)}
+                          disabled={activeUserActionId === selectedUser.id}
+                        >
+                          {selectedUser.is_locked ? 'Let them sign in again' : 'Lock this account'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button danger-button"
+                          onClick={() => handleDeleteUser(selectedUser)}
+                          disabled={activeUserActionId === selectedUser.id}
+                        >
+                          Delete account and all its vaults
+                        </button>
+                      </div>
+                      <p className="panel-help">
+                        Note that you cannot reset anyone's password. Their password is what
+                        decrypts their vaults and it never reaches this server — if they lose it,
+                        the data is gone, and there is nothing this console can do about it.
+                      </p>
+                    </div>
+                  </section>
+                )}
+              </section>
+            )}
 
-                  {filteredFeedback.length === 0 && (
+            {/* ── Settings ────────────────────────────────────────────────── */}
+            {activeView === 'settings' && (
+              <section className="view-stack">
+                {settingsError && (
+                  <section className="panel">
+                    <p className="panel-label">Problem</p>
+                    <p className="panel-help">{settingsError}</p>
+                  </section>
+                )}
+
+                {!settingsDraft && !settingsError && (
+                  <section className="panel">
+                    <p className="panel-label">Loading</p>
+                    <p className="panel-help">Reading the settings.</p>
+                  </section>
+                )}
+
+                {settingsDraft && instance && (
+                  <>
+                    <section className="panel">
+                      <div className="panel-header panel-header-tight">
+                        <div>
+                          <p className="panel-label">Access</p>
+                          <h2>Registration</h2>
+                        </div>
+                      </div>
+                      <div className="form-grid">
+                        <label className="form-grid-span">
+                          <span className="detail-label switch-label">
+                            <input
+                              type="checkbox"
+                              checked={settingsDraft.registration_enabled}
+                              onChange={(event) =>
+                                updateSettingsDraft({ registration_enabled: event.target.checked })
+                              }
+                            />{' '}
+                            Anyone can sign up
+                          </span>
+                          <span className="panel-help field-help">
+                            {settingsDraft.registration_enabled
+                              ? 'Anyone who can reach this server can create an account. Fine on a home network. If it is reachable from the internet, turn this off and hand out invite codes instead.'
+                              : 'The sign-up form is closed. People join with an invite code from the People page. Existing accounts sign in as normal.'}
+                          </span>
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="panel-header panel-header-tight">
+                        <div>
+                          <p className="panel-label">Storage</p>
+                          <h2>Storage limits</h2>
+                        </div>
+                      </div>
+                      <div className="form-grid">
+                        <label>
+                          <span className="detail-label">Per account (MB)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="detail-input number-input"
+                            value={bytesToMegabytesInput(settingsDraft.user_storage_limit_bytes)}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                user_storage_limit_bytes: megabytesInputToBytes(event.target.value),
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            0 means no limit, which is how the server has always behaved. An upload
+                            that would cross the limit is refused before it is sent. Counts
+                            attachments and shared copies — the mind maps themselves are small and
+                            are not measured.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Biggest single file (MB)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="detail-input number-input"
+                            value={bytesToMegabytesInput(settingsDraft.max_attachment_size_bytes)}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                max_attachment_size_bytes: megabytesInputToBytes(event.target.value),
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            0 means no limit beyond what the server will accept in one go, which is{' '}
+                            {formatBytes(instance.max_upload_body_bytes)}. Setting this higher than
+                            that changes nothing.
+                          </span>
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="panel-header panel-header-tight">
+                        <div>
+                          <p className="panel-label">Sign-in</p>
+                          <h2>Sign-in throttling</h2>
+                        </div>
+                      </div>
+                      <div className="form-grid">
+                        <label>
+                          <span className="detail-label">Tries per minute, per address</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="detail-input number-input"
+                            value={settingsDraft.auth_rate_limit_per_minute}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                auth_rate_limit_per_minute: Number(event.target.value) || 0,
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            Covers signing in, signing up and the salt lookup. One normal sign-in
+                            costs two. 0 turns it off.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Wrong passwords before lockout</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="detail-input number-input"
+                            value={settingsDraft.failed_login_threshold}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                failed_login_threshold: Number(event.target.value) || 0,
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            Counted per username. 0 turns it off. Be aware that anyone who knows a
+                            username can lock it deliberately by failing on purpose, which is why
+                            the lockout lifts by itself.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Locked out for (minutes)</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={1440}
+                            step={1}
+                            className="detail-input number-input"
+                            value={settingsDraft.failed_login_lockout_minutes}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                failed_login_lockout_minutes: Number(event.target.value) || 1,
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            Between 1 and 1440. These counters live in memory, so restarting the
+                            server clears them all.
+                          </span>
+                        </label>
+                        <label className="form-grid-span">
+                          <span className="detail-label switch-label">
+                            <input
+                              type="checkbox"
+                              checked={settingsDraft.trust_proxy_headers}
+                              onChange={(event) =>
+                                updateSettingsDraft({ trust_proxy_headers: event.target.checked })
+                              }
+                            />{' '}
+                            There is a reverse proxy in front of this server
+                          </span>
+                          <span className="panel-help field-help">
+                            Turn this on if traffic reaches the server through nginx, Caddy, Traefik
+                            or similar, so it counts each visitor separately instead of treating the
+                            whole internet as one. Leave it off otherwise — a visitor could then
+                            claim any address they liked and walk around the limits.{' '}
+                            <strong>
+                              Right now this server thinks you are at {instance.observed_client_address}
+                            </strong>
+                            {instance.forwarded_header_present
+                              ? ', and your request did come through a proxy.'
+                              : ', and your request did not come through a proxy.'}{' '}
+                            If that is not the machine you are sitting at, this setting is wrong.
+                          </span>
+                        </label>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="detail-actions">
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={handleSaveSettings}
+                          disabled={settingsSaving}
+                        >
+                          {settingsSaving ? 'Saving…' : 'Save'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            setSettingsNotice('');
+                            setSettingsDraft(instance.settings);
+                          }}
+                          disabled={settingsSaving}
+                        >
+                          Undo my changes
+                        </button>
+                      </div>
+                      <div className="detail-list">
+                        <span>Last changed {formatAgo(instance.settings.updated_at)}</span>
+                        {settingsNotice && <span className="tone-positive">{settingsNotice}</span>}
+                      </div>
+                    </section>
+                  </>
+                )}
+              </section>
+            )}
+
+            {/* ── Maintenance ─────────────────────────────────────────────── */}
+            {activeView === 'maintenance' && status && overview && (
+              <section className="view-stack">
+                <section className="panel">
+                  <div className="panel-header panel-header-tight">
+                    <div>
+                      <p className="panel-label">Cleanup</p>
+                      <h2>Expired share cleanup</h2>
+                    </div>
+                  </div>
+                  <p className="panel-help">
+                    When a share link expires or is revoked, the encrypted copy it served is deleted
+                    and the space comes back. This happens once a day by itself; run it now if you
+                    have just revoked something and want the space back immediately.
+                  </p>
+                  <div className="detail-list">
+                    <span>
+                      {status.purge.last_run_at
+                        ? `Last run ${formatAgo(status.purge.last_run_at)}`
+                        : 'Not run yet since this server started'}
+                    </span>
+                    <span>Cleared {status.purge.last_cleared} last time</span>
+                    {status.purge.last_error && <span className="tone-danger">{status.purge.last_error}</span>}
+                    {purgeNotice && <span className="tone-positive">{purgeNotice}</span>}
+                  </div>
+                  <div className="detail-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void handleRunPurge()}
+                      disabled={purgeRunning}
+                    >
+                      {purgeRunning ? 'Running…' : 'Run it now'}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-header panel-header-tight">
+                    <div>
+                      <p className="panel-label">Backups</p>
+                      <h2>Backups</h2>
+                    </div>
+                  </div>
+                  <p className="panel-help">
+                    This console cannot take a backup for you — the data lives in volumes outside
+                    it. Three things matter, and they have to be backed up together, because a
+                    database from one moment and object storage from another will not line up:
+                  </p>
+                  <ul className="checklist">
+                    <li>
+                      <strong>The database volume</strong> — accounts, vault records, shares and
+                      these settings. A <code>pg_dump</code> works too.
+                    </li>
+                    <li>
+                      <strong>The object storage volumes</strong> — the encrypted maps and
+                      attachments themselves. Both the data and the metadata volume.
+                    </li>
+                    <li>
+                      <strong>Your env file</strong> — in particular <code>JWT_SECRET</code>. Restore
+                      the data with a different one and everyone is signed out.
+                    </li>
+                  </ul>
+                  <p className="panel-help">
+                    Worth knowing: nothing here can decrypt anyone's vaults, and neither can a
+                    backup on its own. The data is encrypted with keys derived from each person's
+                    password. That also means a lost password is unrecoverable — there is no reset.
+                  </p>
+                </section>
+
+                <section className="panel">
+                  <div className="panel-header panel-header-tight">
+                    <div>
+                      <p className="panel-label">Log</p>
+                      <h2>Activity log</h2>
+                    </div>
+                  </div>
+                  {overview.audit_events.length > 0 ? (
+                    <div className="audit-list">
+                      {overview.audit_events.map((event) => (
+                        <article key={event.public_id} className="audit-item">
+                          <div className="audit-row">
+                            <strong>{event.summary}</strong>
+                            <span>{formatAgo(event.created_at)}</span>
+                          </div>
+                          {event.detail && <p className="panel-help">{event.detail}</p>}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
                     <div className="empty-inline">
-                      <p className="panel-label">No matches</p>
-                      <p className="panel-help">Adjust the search or archive filter to show feedback entries from the current snapshot.</p>
+                      <p className="panel-label">Nothing yet</p>
+                      <p className="panel-help">
+                        Locking an account, changing a setting or creating an invite will show up
+                        here.
+                      </p>
                     </div>
                   )}
                 </section>
               </section>
             )}
 
-            {hasSession && !overview && !loading && !error && (
+            {hasSession && !status && !loading && !error && (
               <section className="empty-dashboard">
                 <p className="panel-label">Waiting for data</p>
-                <h2>The session is active, but the dashboard has not received an overview yet.</h2>
-                <p className="panel-help">Use Refresh data to load the current admin snapshot.</p>
+                <h2>Signed in, but nothing has come back from the server yet.</h2>
+                <p className="panel-help">Use “Check again” to try once more.</p>
               </section>
             )}
           </section>

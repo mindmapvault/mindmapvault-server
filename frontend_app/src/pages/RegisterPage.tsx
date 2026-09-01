@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { authApi } from '../api/auth';
 import { LogoBlock } from '../components/Logo';
@@ -53,7 +53,40 @@ export function RegisterPage() {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // `null` while unknown. The form stays available until the server actually
+  // says sign-ups are closed, so an unreachable or older backend behaves the
+  // way it always did rather than locking people out of registering.
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
+  // An invite link carries its code in the URL, so the person following one
+  // lands on a filled-in form rather than retyping what they were sent.
+  const [inviteCode, setInviteCode] = useState(() => searchParams.get('invite')?.trim() ?? '');
+  // Opens the form on a closed server for someone who was sent a code.
+  const [redeemingInvite, setRedeemingInvite] = useState(() => Boolean(searchParams.get('invite')));
   const postAuthRedirect = useMemo(() => getSafeRedirectPath(searchParams), [searchParams]);
+
+  useEffect(() => {
+    if (isDesktop) {
+      return;
+    }
+
+    let cancelled = false;
+    authApi
+      .getInstanceInfo()
+      .then((info) => {
+        if (!cancelled) {
+          setRegistrationEnabled(info.registration_enabled);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRegistrationEnabled(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,6 +109,10 @@ export function RegisterPage() {
     }
     if (password.length < 12) {
       setError('Password must be at least 12 characters');
+      return;
+    }
+    if (registrationEnabled === false && !inviteCode.trim()) {
+      setError('An invite code is required on this server');
       return;
     }
 
@@ -109,6 +146,9 @@ export function RegisterPage() {
         pq_public_key: toBase64(pq.publicKey),
         classical_priv_encrypted: toBase64(classPrivEnc),
         pq_priv_encrypted: toBase64(pqPrivEnc),
+        // Sent only when the server needs one, so an open server never spends
+        // an invite on a sign-up that did not require it.
+        ...(registrationEnabled === false ? { invite_code: inviteCode.trim() } : {}),
       });
 
       const loginResp = await authApi.login(normalizedUsername, authToken);
@@ -139,12 +179,49 @@ export function RegisterPage() {
 
         {/* Card */}
         <div className="rounded-2xl border border-slate-700 bg-surface-1 p-8 shadow-xl">
-          <h2 className="mb-1 text-lg font-semibold text-white">Create account</h2>
+          <h2 className="mb-1 text-lg font-semibold text-white">
+            {registrationEnabled === false ? 'Sign-ups are closed' : 'Create account'}
+          </h2>
           <p className="mb-6 text-xs text-slate-500">
-            Your password derives the encryption key — it never leaves your device.
+            {registrationEnabled === false
+              ? 'The person running this server has turned off new accounts.'
+              : 'Your password derives the encryption key — it never leaves your device.'}
           </p>
 
+          {registrationEnabled === false && !redeemingInvite ? (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-300">
+                You need an invite code from whoever runs it. If you already have an account, sign
+                in below.
+              </p>
+              <button
+                type="button"
+                onClick={() => setRedeemingInvite(true)}
+                className="w-full rounded-lg border border-slate-600 py-2.5 text-sm font-medium text-slate-200 transition hover:border-accent hover:text-white"
+              >
+                I have an invite code
+              </button>
+            </div>
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
+            {registrationEnabled === false && (
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-300">
+                  Invite code
+                </label>
+                <input
+                  type="text"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  placeholder="MMV-XXXX-XXXX-XXXX"
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  required
+                  className="w-full rounded-lg border border-slate-600 bg-surface px-4 py-2.5 font-mono text-white placeholder-slate-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              </div>
+            )}
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-300">Username</label>
               <input
@@ -218,6 +295,7 @@ export function RegisterPage() {
               )}
             </button>
           </form>
+          )}
         </div>
 
         <p className="mt-4 text-center text-sm text-slate-500">

@@ -3,5 +3,8 @@ pub mod mindmap;
 pub mod attachment;
 pub mod admin_audit;
 pub mod access;
+pub mod instance_settings;
+pub mod invite;
 pub mod settings;
+pub mod status;
 pub mod share;

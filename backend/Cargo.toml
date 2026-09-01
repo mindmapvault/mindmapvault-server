@@ -49,6 +49,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # Base64
 base64 = "0.22"
+subtle = "2"
+libc = "0.2.189"
 
 [target.'cfg(not(windows))'.dependencies]
 # Profiling (optional at runtime via env)

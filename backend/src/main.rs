@@ -38,6 +38,9 @@ use error::AppError;
 use middleware::auth::JwtService;
 use middleware::request_cleanup::release_request_caches;
 use middleware::request_id::request_id_layer;
+use middleware::throttle::AuthThrottle;
+use models::instance_settings::{InstanceSettings, InstanceSettingsHandle};
+use models::status::PurgeStatusHandle;
 use models::user::MAX_UPLOAD_BODY_BYTES;
 use routes::{
     admin::{router as admin_router, AdminState},
@@ -51,20 +54,38 @@ use routes::{
 /// stall on a large backlog.
 const SHARE_PURGE_BATCH: i64 = 200;
 
+/// How often the cached instance settings are re-read from the database.
+///
+/// Writes from the admin console update the cache directly, so this only
+/// matters when more than one replica shares a database: the other replicas
+/// pick the change up within this interval instead of at the next restart.
+const SETTINGS_REFRESH_SECS: u64 = 60;
+
+/// How often the throttle drops entries nobody is waiting on.
+const THROTTLE_PRUNE_SECS: u64 = 5 * 60;
+
 /// Deletes the stored ciphertext of shares that are revoked or past expiry.
 ///
 /// A share blob is a second, independently-keyed copy of a map. Once the share
 /// is over, that copy has no reason to exist — and it counts against the
 /// owner's storage until it is gone.
-async fn purge_expired_shares(store: &DynSqlStore, minio: &MinioClient) {
+pub(crate) async fn purge_expired_shares(
+    store: &DynSqlStore,
+    minio: &MinioClient,
+    status: &PurgeStatusHandle,
+) {
     let shares = match store
         .list_purgeable_mind_map_shares(Utc::now(), SHARE_PURGE_BATCH)
         .await
     {
-        Ok(shares) if shares.is_empty() => return,
+        Ok(shares) if shares.is_empty() => {
+            status.record(0, None);
+            return;
+        }
         Ok(shares) => shares,
         Err(error) => {
             tracing::warn!(?error, "share purge query failed");
+            status.record(0, Some("could not read the list of expired shares".to_string()));
             return;
         }
     };
@@ -110,6 +131,7 @@ async fn purge_expired_shares(store: &DynSqlStore, minio: &MinioClient) {
     if cleared > 0 {
         tracing::info!(cleared, "purged expired share blobs");
     }
+    status.record(cleared, None);
 }
 
 async fn health() -> (StatusCode, &'static str) {
@@ -118,6 +140,20 @@ async fn health() -> (StatusCode, &'static str) {
 
 fn app_dist_dir() -> String {
     std::env::var("SERVER_APP_DIST_DIR").unwrap_or_else(|_| "/app/frontend_app_dist".to_string())
+}
+
+/// Filesystem the status page reports free space for.
+///
+/// Defaults to the container root, which under Docker's usual storage driver
+/// sits on the same filesystem as the volumes holding Postgres and the object
+/// store — so it is the number an operator wants. `STATUS_DISK_PATH` overrides
+/// it for a deployment that puts its data somewhere else.
+fn status_disk_path() -> String {
+    std::env::var("STATUS_DISK_PATH")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "/".to_string())
 }
 
 fn admin_dist_dir() -> String {
@@ -190,6 +226,23 @@ async fn main() -> anyhow::Result<()> {
 
     let sql_store: Option<DynSqlStore> = Some(Arc::new(PostgresDb::connect(&cfg).await?));
     let sql_store_for_purge = sql_store.clone();
+    let sql_store_for_settings = sql_store.clone();
+
+    // ── Instance settings ─────────────────────────────────────────────────────
+    // Seeded from the environment the first time this database is used and read
+    // from the row on every start after that, so the admin console stays the
+    // one place these are changed.
+    let settings = {
+        let store = sql_store.as_ref().expect("sql_store must be initialized");
+        let stored = store
+            .seed_instance_settings(&InstanceSettings::from_env_seed())
+            .await?;
+        log_effective_settings(&stored);
+        InstanceSettingsHandle::new(stored)
+    };
+    let throttle = Arc::new(AuthThrottle::new());
+    let purge_status = PurgeStatusHandle::new();
+    let started_at = Utc::now();
 
     // ── CORS ──────────────────────────────────────────────────────────────────
     let allowed_origins: Vec<_> = cfg
@@ -230,7 +283,9 @@ async fn main() -> anyhow::Result<()> {
         let admin_static_service = ServeDir::new(&admin_dir)
             .fallback(ServeFile::new(format!("{admin_dir}/index.html")));
 
-        let public_state = PublicState {};
+        let public_state = PublicState {
+            settings: settings.clone(),
+        };
 
         let share_public_state = SharePublicState {
             db: sql_store.clone(),
@@ -241,12 +296,18 @@ async fn main() -> anyhow::Result<()> {
             db: sql_store.clone(),
             minio: minio.clone(),
             admin_api_token: cfg.admin_api_token.clone(),
+            settings: settings.clone(),
+            purge_status: purge_status.clone(),
+            started_at,
+            disk_path: status_disk_path(),
         };
 
         let auth_state = AuthSqlState {
             db: sql_store.clone(),
             minio: minio.clone(),
             jwt: jwt.clone(),
+            settings: settings.clone(),
+            throttle: throttle.clone(),
         };
 
         let mindmaps_state = MindMapsSqlState {
@@ -254,6 +315,7 @@ async fn main() -> anyhow::Result<()> {
             minio: minio.clone(),
             jwt: jwt.clone(),
             diagnostics_enabled: cfg.enable_diagnostics_routes,
+            settings: settings.clone(),
         };
 
         Router::new()
@@ -288,11 +350,45 @@ async fn main() -> anyhow::Result<()> {
     // failed to remove.
     if let Some(store) = sql_store_for_purge {
         let purge_minio = minio.clone();
+        let purge_status = purge_status.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
             loop {
                 ticker.tick().await;
-                purge_expired_shares(&store, &purge_minio).await;
+                purge_expired_shares(&store, &purge_minio, &purge_status).await;
+            }
+        });
+    }
+
+    // ── Settings refresh ──────────────────────────────────────────────────────
+    if let Some(store) = sql_store_for_settings {
+        let settings = settings.clone();
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(SETTINGS_REFRESH_SECS));
+            loop {
+                ticker.tick().await;
+                match store.load_instance_settings().await {
+                    Ok(Some(stored)) => settings.set(stored),
+                    // A missing row or a failed read leaves the cached copy in
+                    // place: the last known-good settings are a better answer
+                    // than reverting an instance to defaults.
+                    Ok(None) => tracing::warn!("instance settings row is missing"),
+                    Err(error) => tracing::warn!(?error, "could not refresh instance settings"),
+                }
+            }
+        });
+    }
+
+    // ── Throttle housekeeping ─────────────────────────────────────────────────
+    {
+        let throttle = throttle.clone();
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(THROTTLE_PRUNE_SECS));
+            loop {
+                ticker.tick().await;
+                throttle.prune();
             }
         });
     }
@@ -300,7 +396,47 @@ async fn main() -> anyhow::Result<()> {
     // ── Listen ────────────────────────────────────────────────────────────────
     let listener = tokio::net::TcpListener::bind(cfg.listen_addr()).await?;
     tracing::info!("Listening on http://{}", cfg.listen_addr());
-    axum::serve(listener, app).await?;
+    // Connection info is needed so the auth throttles can tell callers apart by
+    // address; without it every request would land in one shared bucket.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
+}
+
+/// Says out loud, once, what the abuse controls are actually set to.
+///
+/// These are the settings whose effect is invisible until someone hits them, so
+/// an operator reading the startup log should not have to open the admin
+/// console to find out whether their instance is open to the world.
+fn log_effective_settings(settings: &InstanceSettings) {
+    let describe = |bytes: Option<i64>| {
+        bytes.map_or_else(|| "unlimited".to_string(), |value| format!("{value} bytes"))
+    };
+
+    tracing::info!(
+        registration_enabled = settings.registration_enabled,
+        user_storage_limit = %describe(settings.storage_limit()),
+        max_attachment_size = %describe(settings.attachment_limit()),
+        auth_rate_limit_per_minute = settings.auth_rate_limit_per_minute,
+        failed_login_threshold = settings.failed_login_threshold,
+        "instance settings loaded (change these in the admin console)"
+    );
+
+    if settings.registration_enabled && settings.user_storage_limit_bytes == 0 {
+        tracing::warn!(
+            "registration is open and no per-account storage limit is set; \
+             anyone who can reach this server can sign up and store without bound"
+        );
+    }
+
+    if !settings.trust_proxy_headers && settings.auth_rate_limit_per_minute > 0 {
+        tracing::info!(
+            "auth throttling keys on the connecting address; if this instance sits behind a \
+             reverse proxy, turn on trust_proxy_headers or every client will share one allowance"
+        );
+    }
 }

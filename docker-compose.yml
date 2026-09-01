@@ -80,6 +80,26 @@ services:
 
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:1420,http://tauri.localhost,https://tauri.localhost}
       RUST_LOG: ${RUST_LOG:-backend=info,tower_http=info}
+
+      # Seeds for the instance settings, read only when this database has no
+      # settings row yet — the first start of a new deployment. After that the
+      # admin console at /admin/ is the one place these change, so editing them
+      # here later has no effect. See docs/DEPLOYMENT.md.
+      #
+      # REGISTRATION_ENABLED     true (default) or false
+      # USER_STORAGE_LIMIT_BYTES per-account cap; 0 (default) is unlimited
+      # MAX_ATTACHMENT_SIZE_BYTES largest single file; 0 (default) is unlimited
+      # TRUST_PROXY_HEADERS      true when a proxy you control sets
+      #                          X-Forwarded-For; false (default) otherwise
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+      USER_STORAGE_LIMIT_BYTES: ${USER_STORAGE_LIMIT_BYTES:-0}
+      MAX_ATTACHMENT_SIZE_BYTES: ${MAX_ATTACHMENT_SIZE_BYTES:-0}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+
+      # Filesystem whose free space the Status page reports. The container root
+      # normally sits on the same disk as the volumes below, which is the disk
+      # that runs out; point this elsewhere if you bind them to another one.
+      STATUS_DISK_PATH: ${STATUS_DISK_PATH:-/}
     ports:
       - "8090:8090"
 

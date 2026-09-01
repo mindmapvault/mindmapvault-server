@@ -9,7 +9,7 @@ use tokio_postgres::{types::Json, Client, NoTls, Row};
 use crate::{
     config::AppConfig,
     db::sql_store::{
-        AdminUserAdminUpdate, AdminUserRecord, ManualSubscriptionUpdate,
+        AdminUserAdminUpdate, AdminUserRecord,
         MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate,
         MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate,
         NewMindMap,
@@ -25,9 +25,12 @@ use crate::{
         access::UserAccessGrant,
         admin_audit::AdminAuditEvent,
         attachment::AttachmentStatus,
+        instance_settings::InstanceSettings,
+        invite::RegistrationInvite,
         mindmap::VersionSnapshot,
         settings::UserAccountSettings,
         share::{ShareScope, ShareStatus},
+        status::DatabaseStats,
         user::{Argon2Params, SubscriptionTier},
     },
 };
@@ -134,6 +137,33 @@ impl PostgresDb {
                     updated_at TIMESTAMPTZ NOT NULL
                 );
 
+                -- One row, id pinned to 1. Instance-wide operator settings;
+                -- see models/instance_settings.rs.
+                CREATE TABLE IF NOT EXISTS instance_settings (
+                    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                    registration_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    user_storage_limit_bytes BIGINT NOT NULL DEFAULT 0,
+                    max_attachment_size_bytes BIGINT NOT NULL DEFAULT 0,
+                    auth_rate_limit_per_minute INTEGER NOT NULL DEFAULT 30,
+                    failed_login_threshold INTEGER NOT NULL DEFAULT 10,
+                    failed_login_lockout_minutes INTEGER NOT NULL DEFAULT 15,
+                    trust_proxy_headers BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                -- One-time codes that allow a sign-up while registration is
+                -- closed. See models/invite.rs for why the code is stored as
+                -- written rather than hashed.
+                CREATE TABLE IF NOT EXISTS registration_invites (
+                    id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL UNIQUE,
+                    label TEXT,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    expires_at TIMESTAMPTZ,
+                    used_at TIMESTAMPTZ,
+                    used_by_username TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS mind_maps (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -224,6 +254,7 @@ impl PostgresDb {
                     created_at TIMESTAMPTZ NOT NULL
                 );
 
+                CREATE INDEX IF NOT EXISTS idx_registration_invites_created_at ON registration_invites (created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_mind_maps_user_id ON mind_maps (user_id);
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_map_id ON mind_map_attachments (map_id, uploaded_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_mind_map_attachments_uploaded_by ON mind_map_attachments (uploaded_by);
@@ -606,50 +637,6 @@ impl SqlStore for PostgresDb {
         Ok(())
     }
 
-    async fn update_user_manual_subscription(
-        &self,
-        user_id: &str,
-        update: ManualSubscriptionUpdate,
-    ) -> Result<(), AppError> {
-        let manual_subscription_tier = update.manual_subscription_tier.map(|value| value.as_str().to_string());
-        self.client
-            .execute(
-                "UPDATE users
-                 SET manual_subscription_tier = $1,
-                     manual_subscription_expires_at = $2,
-                     manual_subscription_reason = $3,
-                     manual_subscription_granted_by = $4
-                 WHERE id = $5",
-                &[
-                    &manual_subscription_tier,
-                    &update.manual_subscription_expires_at,
-                    &update.manual_subscription_reason,
-                    &update.manual_subscription_granted_by,
-                    &user_id,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn update_user_access_grants(
-        &self,
-        user_id: &str,
-        access_grants: Vec<UserAccessGrant>,
-    ) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "UPDATE users
-                 SET access_grants_json = $1
-                 WHERE id = $2",
-                &[&Json(&access_grants), &user_id],
-            )
-            .await?;
-
-        Ok(())
-    }
-
     async fn load_user_account_settings(
         &self,
         user_id: &str,
@@ -714,6 +701,240 @@ impl SqlStore for PostgresDb {
                     &settings.user_labels_json,
                     &settings.updated_at,
                 ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn load_instance_settings(&self) -> Result<Option<InstanceSettings>, AppError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
+                        auth_rate_limit_per_minute, failed_login_threshold,
+                        failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                 FROM instance_settings
+                 WHERE id = 1",
+                &[],
+            )
+            .await?;
+
+        Ok(row.map(|row| InstanceSettings {
+            registration_enabled: row.get(0),
+            user_storage_limit_bytes: row.get(1),
+            max_attachment_size_bytes: row.get(2),
+            auth_rate_limit_per_minute: row.get(3),
+            failed_login_threshold: row.get(4),
+            failed_login_lockout_minutes: row.get(5),
+            trust_proxy_headers: row.get(6),
+            updated_at: row.get(7),
+        }))
+    }
+
+    async fn seed_instance_settings(
+        &self,
+        seed: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError> {
+        self.client
+            .execute(
+                "INSERT INTO instance_settings (
+                    id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
+                    auth_rate_limit_per_minute, failed_login_threshold,
+                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO NOTHING",
+                &[
+                    &seed.registration_enabled,
+                    &seed.user_storage_limit_bytes,
+                    &seed.max_attachment_size_bytes,
+                    &seed.auth_rate_limit_per_minute,
+                    &seed.failed_login_threshold,
+                    &seed.failed_login_lockout_minutes,
+                    &seed.trust_proxy_headers,
+                    &seed.updated_at,
+                ],
+            )
+            .await?;
+
+        self.load_instance_settings()
+            .await?
+            .ok_or_else(|| AppError::Internal("instance settings row missing after seed".to_string()))
+    }
+
+    async fn save_instance_settings(
+        &self,
+        settings: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError> {
+        self.client
+            .execute(
+                "INSERT INTO instance_settings (
+                    id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
+                    auth_rate_limit_per_minute, failed_login_threshold,
+                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO UPDATE SET
+                    registration_enabled = EXCLUDED.registration_enabled,
+                    user_storage_limit_bytes = EXCLUDED.user_storage_limit_bytes,
+                    max_attachment_size_bytes = EXCLUDED.max_attachment_size_bytes,
+                    auth_rate_limit_per_minute = EXCLUDED.auth_rate_limit_per_minute,
+                    failed_login_threshold = EXCLUDED.failed_login_threshold,
+                    failed_login_lockout_minutes = EXCLUDED.failed_login_lockout_minutes,
+                    trust_proxy_headers = EXCLUDED.trust_proxy_headers,
+                    updated_at = EXCLUDED.updated_at",
+                &[
+                    &settings.registration_enabled,
+                    &settings.user_storage_limit_bytes,
+                    &settings.max_attachment_size_bytes,
+                    &settings.auth_rate_limit_per_minute,
+                    &settings.failed_login_threshold,
+                    &settings.failed_login_lockout_minutes,
+                    &settings.trust_proxy_headers,
+                    &settings.updated_at,
+                ],
+            )
+            .await?;
+
+        self.load_instance_settings()
+            .await?
+            .ok_or_else(|| AppError::Internal("instance settings row missing after save".to_string()))
+    }
+
+    async fn sum_user_stored_bytes(&self, user_id: &str) -> Result<i64, AppError> {
+        // Everything a user can grow without bound and whose size the database
+        // knows. Map blobs live only in object storage and their sizes are not
+        // recorded here, so they are outside this total — noted in the admin
+        // console next to the limit rather than silently glossed over.
+        let row = self
+            .client
+            .query_one(
+                // SUM over BIGINT yields NUMERIC in PostgreSQL, so the total is
+                // cast back before it crosses into Rust as an i64.
+                "SELECT (
+                        COALESCE((
+                            SELECT SUM(a.size_bytes)
+                            FROM mind_map_attachments a
+                            JOIN mind_maps m ON m.id = a.map_id
+                            WHERE m.user_id = $1 AND a.status = 'available'
+                        ), 0)
+                        + COALESCE((
+                            SELECT SUM(s.size_bytes)
+                            FROM mind_map_shares s
+                            JOIN mind_maps m ON m.id = s.map_id
+                            WHERE m.user_id = $1 AND s.status = 'available' AND s.revoked = FALSE
+                        ), 0)
+                        + COALESCE((
+                            SELECT SUM(sa.size_bytes)
+                            FROM mind_map_share_attachments sa
+                            JOIN mind_map_shares s ON s.id = sa.share_id
+                            JOIN mind_maps m ON m.id = s.map_id
+                            WHERE m.user_id = $1 AND sa.status = 'available' AND s.revoked = FALSE
+                        ), 0)
+                     )::BIGINT AS total",
+                &[&user_id],
+            )
+            .await?;
+
+        Ok(row.get::<_, i64>(0))
+    }
+
+    async fn health_check(&self) -> Result<(), AppError> {
+        self.client.query_one("SELECT 1", &[]).await?;
+        Ok(())
+    }
+
+    async fn database_stats(&self) -> Result<DatabaseStats, AppError> {
+        // `server_version` is the short form ("16.4"); `version()` would return
+        // a sentence naming the build and platform, which is more than the
+        // status page needs and more than is worth showing.
+        let row = self
+            .client
+            .query_one(
+                "SELECT current_setting('server_version'), pg_database_size(current_database())",
+                &[],
+            )
+            .await?;
+
+        Ok(DatabaseStats {
+            version: row.get::<_, Option<String>>(0),
+            size_bytes: row.get::<_, Option<i64>>(1),
+        })
+    }
+
+    async fn list_registration_invites(&self) -> Result<Vec<RegistrationInvite>, AppError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT id, code, label, created_at, expires_at, used_at, used_by_username
+                 FROM registration_invites
+                 ORDER BY created_at DESC",
+                &[],
+            )
+            .await?;
+
+        Ok(rows.iter().map(map_registration_invite).collect())
+    }
+
+    async fn create_registration_invite(
+        &self,
+        invite: &RegistrationInvite,
+    ) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "INSERT INTO registration_invites (
+                    id, code, label, created_at, expires_at, used_at, used_by_username
+                 ) VALUES ($1, $2, $3, $4, $5, NULL, NULL)",
+                &[
+                    &invite.id,
+                    &invite.code,
+                    &invite.label,
+                    &invite.created_at,
+                    &invite.expires_at,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete_registration_invite(&self, id: &str) -> Result<bool, AppError> {
+        let affected = self
+            .client
+            .execute("DELETE FROM registration_invites WHERE id = $1", &[&id])
+            .await?;
+
+        Ok(affected > 0)
+    }
+
+    async fn claim_registration_invite(
+        &self,
+        code: &str,
+        username: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<RegistrationInvite>, AppError> {
+        let row = self
+            .client
+            .query_opt(
+                "UPDATE registration_invites
+                 SET used_at = $3, used_by_username = $2
+                 WHERE code = $1
+                   AND used_at IS NULL
+                   AND (expires_at IS NULL OR expires_at > $3)
+                 RETURNING id, code, label, created_at, expires_at, used_at, used_by_username",
+                &[&code, &username, &now],
+            )
+            .await?;
+
+        Ok(row.as_ref().map(map_registration_invite))
+    }
+
+    async fn release_registration_invite(&self, id: &str) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "UPDATE registration_invites
+                 SET used_at = NULL, used_by_username = NULL
+                 WHERE id = $1",
+                &[&id],
             )
             .await?;
 
@@ -1459,6 +1680,18 @@ fn stored_mind_map_from_row(row: Row) -> Result<StoredMindMap, AppError> {
 
 fn parse_subscription_tier(value: &str) -> SubscriptionTier {
     SubscriptionTier::from_str(value)
+}
+
+fn map_registration_invite(row: &Row) -> RegistrationInvite {
+    RegistrationInvite {
+        id: row.get("id"),
+        code: row.get("code"),
+        label: row.get("label"),
+        created_at: row.get("created_at"),
+        expires_at: row.get("expires_at"),
+        used_at: row.get("used_at"),
+        used_by_username: row.get("used_by_username"),
+    }
 }
 
 fn stored_mind_map_attachment_from_row(row: Row) -> Result<StoredMindMapAttachment, AppError> {

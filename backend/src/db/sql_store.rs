@@ -10,9 +10,12 @@ use crate::{
         access::UserAccessGrant,
         admin_audit::AdminAuditEvent,
         attachment::AttachmentStatus,
+        instance_settings::InstanceSettings,
+        invite::RegistrationInvite,
         mindmap::VersionSnapshot,
         settings::UserAccountSettings,
         share::{ShareScope, ShareStatus},
+        status::DatabaseStats,
         user::{Argon2Params, SubscriptionTier},
     },
 };
@@ -136,14 +139,6 @@ pub struct AdminUserRecord {
 pub struct AdminUserAdminUpdate {
     pub admin_note: Option<String>,
     pub locked_reason: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ManualSubscriptionUpdate {
-    pub manual_subscription_tier: Option<SubscriptionTier>,
-    pub manual_subscription_expires_at: Option<DateTime<Utc>>,
-    pub manual_subscription_reason: Option<String>,
-    pub manual_subscription_granted_by: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -437,6 +432,11 @@ impl AdminUserRecord {
 
 #[async_trait]
 pub trait SqlStore: Send + Sync {
+    /// Cheapest round trip that proves the database is answering.
+    async fn health_check(&self) -> Result<(), AppError>;
+    /// Server version and on-disk size, for the status page.
+    async fn database_stats(&self) -> Result<DatabaseStats, AppError>;
+
     async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError>;
     async fn create_admin_audit_event(&self, event: AdminAuditEvent) -> Result<(), AppError>;
     async fn list_admin_users(&self) -> Result<Vec<AdminUserRecord>, AppError>;
@@ -465,17 +465,7 @@ pub trait SqlStore: Send + Sync {
     async fn set_user_locked(&self, user_id: &str, is_locked: bool) -> Result<(), AppError>;
     async fn update_user_admin_fields(&self, user_id: &str, update: AdminUserAdminUpdate)
         -> Result<(), AppError>;
-    async fn update_user_manual_subscription(
-        &self,
-        user_id: &str,
-        update: ManualSubscriptionUpdate,
-    ) -> Result<(), AppError>;
     async fn delete_user(&self, user_id: &str) -> Result<(), AppError>;
-    async fn update_user_access_grants(
-        &self,
-        user_id: &str,
-        access_grants: Vec<UserAccessGrant>,
-    ) -> Result<(), AppError>;
     async fn load_user_account_settings(
         &self,
         user_id: &str,
@@ -485,6 +475,46 @@ pub trait SqlStore: Send + Sync {
         user_id: &str,
         settings: UserAccountSettings,
     ) -> Result<(), AppError>;
+
+    /// Reads the instance settings row, or `None` before it has been seeded.
+    async fn load_instance_settings(&self) -> Result<Option<InstanceSettings>, AppError>;
+    /// Writes the row only if it is missing, and returns whatever is stored
+    /// afterwards. Seeding is a no-op on every start after the first, which is
+    /// what keeps the admin console the authority over the environment.
+    async fn seed_instance_settings(
+        &self,
+        seed: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError>;
+    async fn save_instance_settings(
+        &self,
+        settings: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError>;
+
+    /// Bytes this user holds in attachments, share blobs and share
+    /// attachments — everything whose size the database records.
+    async fn sum_user_stored_bytes(&self, user_id: &str) -> Result<i64, AppError>;
+
+    async fn list_registration_invites(&self) -> Result<Vec<RegistrationInvite>, AppError>;
+    async fn create_registration_invite(
+        &self,
+        invite: &RegistrationInvite,
+    ) -> Result<(), AppError>;
+    async fn delete_registration_invite(&self, id: &str) -> Result<bool, AppError>;
+    /// Marks an invite used, but only if it is still open and unexpired.
+    ///
+    /// The check and the write are one statement so two people racing the same
+    /// code cannot both get through: the second `UPDATE` matches no rows.
+    /// Returns the invite that was claimed, or `None` if there was nothing to
+    /// claim.
+    async fn claim_registration_invite(
+        &self,
+        code: &str,
+        username: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<RegistrationInvite>, AppError>;
+    /// Puts a claimed invite back, used when the sign-up it was claimed for
+    /// then failed. Without it a taken username would burn someone's invite.
+    async fn release_registration_invite(&self, id: &str) -> Result<(), AppError>;
 
     async fn list_mind_maps(&self, user_id: &str) -> Result<Vec<StoredMindMap>, AppError>;
     async fn create_mind_map(&self, map: NewMindMap) -> Result<(), AppError>;

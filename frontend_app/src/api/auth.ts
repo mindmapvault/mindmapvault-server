@@ -26,7 +26,18 @@ export interface RotateCredentialsBody {
   }>;
 }
 
+// What an unauthenticated client is told about the server it is talking to.
+export interface InstanceInfo {
+  registration_enabled: boolean;
+  invite_required: boolean;
+}
+
 export const authApi = {
+  // Read before showing the sign-up form, so a closed server says so instead
+  // of letting someone fill in the form, wait through key derivation, and only
+  // then be refused.
+  getInstanceInfo: () => api.get<InstanceInfo>('/public/instance'),
+
   getSalt: (username: string) =>
     api.get<SaltResponse>(`/auth/salt?username=${encodeURIComponent(username)}`),
 
@@ -39,6 +50,8 @@ export const authApi = {
     pq_public_key: string;
     classical_priv_encrypted: string;
     pq_priv_encrypted: string;
+    // Only needed while the server has sign-ups closed.
+    invite_code?: string;
   }) => api.post<{ message: string }>('/auth/register', body),
 
   login: (username: string, auth_token: string) =>

@@ -142,6 +142,10 @@ pub struct RegisterRequest {
     pub pq_public_key: String,
     pub classical_priv_encrypted: String,
     pub pq_priv_encrypted: String,
+    /// Required only while the instance has sign-ups closed. Ignored when they
+    /// are open, so an invite is not spent on a sign-up that needed no invite.
+    #[serde(default)]
+    pub invite_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

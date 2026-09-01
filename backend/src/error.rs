@@ -1,5 +1,5 @@
 use axum::{
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -46,11 +46,19 @@ pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     #[error("conflict: {0}")]
     Conflict(String),
 
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+
+    /// Throttled. The `u64` is the seconds to wait, sent back as `Retry-After`
+    /// so a client knows when to try again instead of hammering.
+    #[error("too many requests: {0}")]
+    TooManyRequests(String, u64),
 
     #[error("plan restricted: {0}")]
     PlanRestricted(String, PlanErrorMetadata),
@@ -116,6 +124,21 @@ impl IntoResponse for AppError {
                     },
                 )
             }
+            AppError::Forbidden(msg) => {
+                tracing::debug!(error_kind = "forbidden", "{msg}");
+                (
+                    StatusCode::FORBIDDEN,
+                    ErrorResponseBody {
+                        error: msg.clone(),
+                        code: None,
+                        capability: None,
+                        current_tier: None,
+                        required_tier: None,
+                        current_value: None,
+                        limit_value: None,
+                    },
+                )
+            }
             AppError::Conflict(msg) => {
                 tracing::debug!(error_kind = "conflict", "{msg}");
                 (
@@ -145,6 +168,26 @@ impl IntoResponse for AppError {
                         limit_value: None,
                     },
                 )
+            }
+            AppError::TooManyRequests(msg, retry_after_secs) => {
+                tracing::warn!(error_kind = "too_many_requests", retry_after_secs, "{msg}");
+                let body = ErrorResponseBody {
+                    error: msg.clone(),
+                    code: Some("rate_limited".to_string()),
+                    capability: None,
+                    current_tier: None,
+                    required_tier: None,
+                    current_value: None,
+                    limit_value: None,
+                };
+                // Returned early: this is the one arm that carries a header, so
+                // it cannot go through the shared tuple below.
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, retry_after_secs.to_string())],
+                    Json(json!(body)),
+                )
+                    .into_response();
             }
             AppError::PlanRestricted(msg, metadata) => {
                 tracing::debug!(

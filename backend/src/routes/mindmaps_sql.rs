@@ -14,10 +14,11 @@ use uuid::Uuid;
 
 use crate::{
     db::{minio::MinioClient, sql_store::{DynSqlStore, MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate, MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate, NewMindMap, NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment}},
-    error::AppError,
+    error::{AppError, PlanErrorMetadata},
     middleware::auth::{AuthenticatedUser, JwtService},
     models::{
         attachment::{AttachmentDownloadResponse, AttachmentMetadata, AttachmentStatus, CompleteAttachmentUploadRequest, InitAttachmentRequest, InitAttachmentResponse, UpdateAttachmentRequest},
+        instance_settings::InstanceSettingsHandle,
         mindmap::{
             ConfirmUploadRequest, ConfirmUploadResponse, MindMapCreatedResponse, MindMapDetail,
             MindMapListItem, PresignedUrlResponse, StorageSummary, UpdateVaultMetaRequest,
@@ -39,12 +40,74 @@ pub struct MindMapsSqlState {
     pub minio: MinioClient,
     pub jwt: Arc<JwtService>,
     pub diagnostics_enabled: bool,
+    pub settings: InstanceSettingsHandle,
 }
 
 impl FromRef<MindMapsSqlState> for Arc<JwtService> {
     fn from_ref(state: &MindMapsSqlState) -> Self {
         state.jwt.clone()
     }
+}
+
+impl FromRef<MindMapsSqlState> for InstanceSettingsHandle {
+    fn from_ref(state: &MindMapsSqlState) -> Self {
+        state.settings.clone()
+    }
+}
+
+/// Refuses an upload that would put the account past the instance storage cap,
+/// or a single file past the per-attachment cap.
+///
+/// Checked at `init` time against the size the client declares, so the caller
+/// is told before it spends time encrypting and sending the bytes. The declared
+/// size is what gets stored and billed against the cap, so a client that lies
+/// about it gains nothing but a wrong number in its own storage view.
+async fn enforce_storage_limits(
+    state: &MindMapsSqlState,
+    user_id: &str,
+    incoming_bytes: i64,
+) -> Result<(), AppError> {
+    let settings = state.settings.get();
+
+    if let Some(limit) = settings.attachment_limit() {
+        if incoming_bytes > limit {
+            return Err(AppError::PlanRestricted(
+                format!("this file is larger than the {limit} byte limit set on this server"),
+                PlanErrorMetadata {
+                    message: "attachment too large".to_string(),
+                    code: "attachment_too_large",
+                    capability: "attachment_size",
+                    current_tier: "community".to_string(),
+                    required_tier: None,
+                    current_value: Some(incoming_bytes),
+                    limit_value: Some(limit),
+                },
+            ));
+        }
+    }
+
+    let Some(limit) = settings.storage_limit() else {
+        return Ok(());
+    };
+
+    let used = state.db.sum_user_stored_bytes(user_id).await?;
+    if used + incoming_bytes > limit {
+        return Err(AppError::PlanRestricted(
+            "this upload would put the account over the storage limit set on this server"
+                .to_string(),
+            PlanErrorMetadata {
+                message: "storage limit reached".to_string(),
+                code: "storage_limit_reached",
+                capability: "storage",
+                current_tier: "community".to_string(),
+                required_tier: None,
+                current_value: Some(used + incoming_bytes),
+                limit_value: Some(limit),
+            },
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn router(state: MindMapsSqlState) -> Router {
@@ -454,6 +517,7 @@ async fn init_attachment(
 ) -> Result<Json<InitAttachmentResponse>, AppError> {
     find_owned(&state.db, &id, &user.0).await?;
     validate_attachment_init(&body)?;
+    enforce_storage_limits(&state, &user.0, body.size).await?;
 
     let attachment_id = Uuid::new_v4().to_string();
     let sanitized_name = sanitize_attachment_name(&body.name);
@@ -909,14 +973,18 @@ async fn get_storage(
         });
     }
 
+    // No configured cap is reported as "effectively boundless" rather than as a
+    // number, which is what the app's storage bar already understands.
+    let limit_bytes = state.settings.get().storage_limit().unwrap_or(i64::MAX);
+
     Ok(Json(StorageSummary {
         vaults,
         total_bytes: grand_total,
         attachment_count: grand_attachment_count,
         attachment_bytes: grand_attachment_bytes,
-        free_tier_bytes: i64::MAX,
+        free_tier_bytes: limit_bytes,
         plan_tier: "community".to_string(),
-        plan_limit_bytes: i64::MAX,
+        plan_limit_bytes: limit_bytes,
     }))
 }
 
@@ -974,6 +1042,9 @@ async fn create_share(
     let user_id = user.0.clone();
     find_owned(&state.db, &id, &user_id).await?;
     validate_share_create(&body)?;
+    // A share is a second encrypted copy of the vault, so it occupies storage
+    // in its own right and counts against the same cap.
+    enforce_storage_limits(&state, &user_id, body.size_bytes).await?;
 
     let share_id = Uuid::new_v4().to_string();
     let share_name = body.name.trim().to_string();
@@ -1122,6 +1193,8 @@ async fn init_share_attachment(
     if let Some(source_attachment_id) = body.source_attachment_id.as_deref() {
         find_attachment(&state.db, &id, source_attachment_id).await?;
     }
+
+    enforce_storage_limits(&state, &user.0, body.size).await?;
 
     let attachment_id = Uuid::new_v4().to_string();
     let sanitized_name = sanitize_attachment_name(&body.name);

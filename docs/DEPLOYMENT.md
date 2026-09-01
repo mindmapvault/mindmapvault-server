@@ -196,6 +196,119 @@ The default `CORS_ALLOWED_ORIGINS` value is tuned for local browser and Tauri de
 
 If you deploy behind a custom domain or reverse proxy, update this value so it matches the actual browser origin that will call the API.
 
+### Instance Settings
+
+Four controls decide how much a stranger who finds your server can do with it.
+They live in the database, not in the environment, and you change them in the
+admin console at `/admin/` under **Settings**. Changes apply immediately; there
+is nothing to restart.
+
+The console has four screens: **Status**, **People** (accounts and invite
+codes), **Settings** (the table below), and **Maintenance** (the cleanup job,
+what to back up, and a log of every change made from the console).
+
+**Status** answers "is it working and is anything about to go wrong":
+
+- **Disk** — free space on the filesystem the server container sits on. Under a
+  normal Docker setup that is the host filesystem the Postgres and object
+  storage volumes live on, so it is the space that actually runs out. If you
+  bind those volumes to a different disk, set `STATUS_DISK_PATH` to a path on
+  that one. The page warns at 80% full and again at 92%.
+- **Dependencies** — whether Postgres and the object store answer, how long
+  they take, the PostgreSQL version, the size of the database on disk, and how
+  many objects the bucket holds and their total size.
+- **Totals** — accounts, vaults, bytes stored, uptime, and the server's memory
+  use where the platform reports it.
+- **Warnings** about the current configuration: sign-ups open with no storage
+  limit, a reverse proxy whose client addresses are being ignored, a short
+  admin token, a failed cleanup run.
+
+The bucket total is normally larger than the accounts add up to, and the page
+says so: every vault keeps a number of older versions so people can roll back,
+and revoked shares sit there until the daily cleanup removes them.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Allow new sign-ups | on | Off refuses `POST /api/auth/register` and hides the sign-up form. Existing accounts are unaffected. |
+| Storage per account | unlimited | Refuses an upload that would take the account past the cap. |
+| Largest single file | unlimited | Refuses one file above the size, before it is uploaded. |
+| Auth requests per address per minute | 30 | Applies to sign-in, sign-up and the salt lookup. 0 turns it off. |
+| Failed sign-ins before lockout | 10 | Per username, then locked for the lockout length. 0 turns it off. |
+| Lockout length | 15 minutes | How long that lasts. |
+
+The environment variables `REGISTRATION_ENABLED`, `USER_STORAGE_LIMIT_BYTES`,
+`MAX_ATTACHMENT_SIZE_BYTES` and `TRUST_PROXY_HEADERS` **seed** these values the
+first time the server starts against an empty database, so a new deployment can
+come up already closed. Once the settings row exists they are ignored — the
+admin console is the authority, and there is no second place to look when the
+two disagree. The effective values are printed at startup.
+
+Two things worth knowing:
+
+- **The storage cap counts what the database records**: attachments, share
+  copies and their files. Map blobs live in object storage and their sizes are
+  not recorded, so they fall outside the total. The version history of a map is
+  bounded separately by that map's version limit.
+- **The failed-sign-in lockout can be aimed at a user.** Anyone who knows a
+  username can keep it locked by failing sign-ins on purpose. That is why the
+  lockout expires on its own and why it is a separate switch from the
+  per-address limit — leave the address limit on and set the lockout to 0 if
+  that trade is not one you want.
+
+### Client Addresses Behind A Proxy
+
+Both throttles count per client address. Behind a reverse proxy, every request
+arrives from the proxy, so without help the whole instance shares one
+allowance and one busy user can throttle everyone.
+
+`X-Forwarded-For` carries the real address, but it is a request header — anyone
+can write anything in it, and trusting it on a directly-exposed server hands an
+attacker an unlimited supply of identities. So it is off by default, and you
+turn it on once your proxy is in front:
+
+1. Make sure the proxy **sets** `X-Forwarded-For` rather than passing through
+   whatever the client sent. (`proxy_set_header X-Forwarded-For $remote_addr;`
+   in nginx — note `$remote_addr`, not `$proxy_add_x_forwarded_for`, which
+   appends to a client-supplied value.)
+2. Turn on **Read the client address from X-Forwarded-For** in the admin
+   console.
+
+The Settings screen shows the address your own request was attributed to. If
+that reads as your proxy's address rather than your own, the setting is wrong
+for this deployment.
+
+### Inviting People When Sign-Ups Are Closed
+
+Turning sign-ups off does not lock you out of adding people. Go to **People** in
+the admin console, create an invite code, and send the person the link — the
+code is filled in for them.
+
+There is no "create a user" button, and there cannot be one. Registration is
+zero-knowledge: the browser derives the account's keys from the password and
+sends only public material, so the password never reaches the server. Nobody
+but the new user can make their account. An invite is the server's way of
+saying "this one person may".
+
+A code is single-use, optionally expires, and can be revoked before it is used.
+A sign-up that fails for another reason — a username already taken — hands the
+code back rather than burning it. While sign-ups are open, codes are neither
+required nor spent.
+
+For the same reason, **you cannot reset anyone's password.** Their password is
+what decrypts their vaults. If they lose it, that data is gone; the only path
+forward is deleting the account and starting again.
+
+### Protecting `/admin/`
+
+The admin console authenticates with a single static bearer token
+(`ADMIN_API_TOKEN`), which the browser keeps in `sessionStorage`. The token is
+compared in constant time, so guessing it gains nothing from response timing,
+but it does not rotate and there is no second factor.
+
+Treat `/admin/` as an internal surface: restrict it at the proxy layer by
+source address, or behind your own authentication, rather than leaving it
+reachable from the public internet with only the token in front of it.
+
 ## Persistence And Backups
 
 The compose stack stores durable data in named volumes:
