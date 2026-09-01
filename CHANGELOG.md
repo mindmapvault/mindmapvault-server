@@ -4,6 +4,14 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+- **Notes are now an Obsidian-style live-Markdown editor** (ported from the FOSS app, 0.3.32). Markdown renders as you type and the syntax reappears only on the line the caret is in, so there is no second preview pane and nothing to toggle to see what you wrote. Headings, emphasis, quotes, code, links, task checkboxes you can click, and images rendered inline — attachments included, resolved from `attachment://` to the decrypted blob. Enter continues a list, Tab indents, Ctrl+B/I/K do the obvious. Write/Read still exist for reading a long note, on the button or Ctrl+E. The stored note is plain Markdown, byte for byte what was typed. CodeMirror loads as its own chunk the first time a note is opened, so the editor bundle is unchanged for everyone else.
+- Notes autosave. The Save button is gone, along with the way it lost work: closing the dialog or pressing Escape now writes what is on screen. The header says Saving…/Saved.
+- The note dialog is one screen instead of a stack. Labels and attachments moved behind a **Details** disclosure, collapsed by default, which is also where Delete note lives; the writing surface gets the window.
+- `tests/ui/note-editor.mjs` — the editor driven in a real browser: markers hidden and revealed by the caret, a task checkbox ticked, list continuation, an uploaded image resolved to a blob URL, the Read↔Write round trip, autosave surviving Escape, and the note round-tripping through the encrypted vault.
+
 ## [0.4.0] - 2026-09-01
 
 The jump from 0.3.x marks the first release where the whole account

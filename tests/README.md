@@ -9,6 +9,7 @@ Current layout:
 - `tests/endpoints/share-flow.mjs` - end-to-end encrypted share flow, owner and recipient sides
 - `tests/endpoints/password-rotation.mjs` - the rotation contract: manifest, coverage, atomicity, stale sessions
 - `tests/ui/settings-hub.mjs` - the in-app settings hub, driven in a real browser
+- `tests/ui/note-editor.mjs` - the live-Markdown note editor: hidden and revealed syntax, task checkboxes, autosave, attachments resolved to decrypted blobs
 - `tests/ui/password-rotation.mjs` - password rotation with the real client crypto (needs the vite DEV server, which serves the source modules the test drives in-page)
 - `tests/ui/rotation-multi-account.mjs` - rotation across three accounts at once: isolation, a cross-account forgery, parallel rotations, and a decrypt-everything sweep (same vite dev server requirement)
 
@@ -21,12 +22,14 @@ node tests/endpoints/release-smoke.mjs --base-url http://127.0.0.1:8090
 node tests/endpoints/share-flow.mjs --base-url http://127.0.0.1:8090
 ```
 
-`tests/ui/settings-hub.mjs` drives the app in Chromium, so it needs both a running backend and the
-app being served, plus Playwright, which is not a dependency of this repository:
+`tests/ui/settings-hub.mjs` and `tests/ui/note-editor.mjs` drive the app in Chromium, so they need
+both a running backend and the app being served, plus Playwright, which is not a dependency of this
+repository:
 
 ```bash
 npm i -D playwright && npx playwright install chromium
 node tests/ui/settings-hub.mjs --app-url http://127.0.0.1:5173 --api-url http://127.0.0.1:8090
+node tests/ui/note-editor.mjs  --app-url http://127.0.0.1:5173 --api-url http://127.0.0.1:8090
 ```
 
 It signs up a throwaway account and creates a vault, so point it at a disposable instance. Pass
