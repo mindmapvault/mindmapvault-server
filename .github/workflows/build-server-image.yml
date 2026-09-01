@@ -269,7 +269,26 @@ jobs:
             exit 1
           fi
 
-          printf '%s' "$token" | docker login docker.io --username "$username" --password-stdin
+          # Docker Hub answers a credential it cannot parse with "malformed
+          # HTTP Authorization header", which reads like a server fault and is
+          # not — it means one of these values is not what it should be. Report
+          # the shape, never the value, so the cause is identifiable from the
+          # log without disclosing a secret.
+          describe() {
+            local label="$1" value="$2" problems=""
+            case "$value" in *:*) problems="$problems contains-colon";; esac
+            case "$value" in *[![:print:]]*) problems="$problems non-printable";; esac
+            case "$value" in *[!\ -~]*) problems="$problems non-ascii";; esac
+            case "$value" in \"*|\'*) problems="$problems wrapped-in-quotes";; esac
+            echo "$label: ${#value} characters;${problems:- looks well formed}"
+          }
+          describe "DOCKERHUB_USERNAME" "$username"
+          describe "DOCKERHUB_TOKEN" "$token"
+
+          if ! printf '%s' "$token" | docker login docker.io --username "$username" --password-stdin; then
+            echo "::error::Docker Hub rejected these credentials. DOCKERHUB_USERNAME must be the account name (not an email), and DOCKERHUB_TOKEN a Read/Write access token from hub.docker.com/settings/security — not the account password. Re-set both, or unset DOCKERHUB_NAMESPACE to publish to GHCR only."
+            exit 1
+          fi
 
       # imagetools copies the blobs across from GHCR; the architectures are not
       # rebuilt or re-uploaded from the runners.
