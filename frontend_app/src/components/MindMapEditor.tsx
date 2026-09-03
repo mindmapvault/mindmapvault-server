@@ -72,6 +72,7 @@ import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
 import { handleDelegatedLinkClick } from '../utils/openExternal';
 import * as ops from './mindmap/treeOps';
+import { dragDelta, findDropTarget, nodesInMarquee, passedDragThreshold } from './mindmap/dragSelection';
 import { useMindMapHistory } from './mindmap/useMindMapHistory';
 import { useViewport } from './mindmap/useViewport';
 import { readViewState } from './mindmap/viewport';
@@ -1498,9 +1499,12 @@ export function DesktopMindMapEditor({
     }
     if (dragRef.current) {
       const d = dragRef.current;
-      const dx = (e.clientX - d.startClientX) / zoom;
-      const dy = (e.clientY - d.startClientY) / zoom;
-      if (!d.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) { d.moved = true; setIsDragging(true); }
+      const { x: dx, y: dy } = dragDelta(
+        { x: d.startClientX, y: d.startClientY },
+        { x: e.clientX, y: e.clientY },
+        zoom,
+      );
+      if (!d.moved && passedDragThreshold({ x: dx, y: dy })) { d.moved = true; setIsDragging(true); }
       if (d.moved) {
         d.currentX = d.origX + dx;
         d.currentY = d.origY + dy;
@@ -1517,14 +1521,7 @@ export function DesktopMindMapEditor({
         }
         // Drop target detection (only when dragging a single node)
         if (multiSelect.size <= 1) {
-          let newTarget: string | null = null;
-          for (const [nid, entry] of Object.entries(layout)) {
-            if (nid === d.nodeId) continue;
-            const cx = entry.x + entry.w / 2;
-            const cy = entry.y + entry.h / 2;
-            if (Math.sqrt((d.currentX - cx) ** 2 + (d.currentY - cy) ** 2) < 40) { newTarget = nid; break; }
-          }
-          setDropTargetId(newTarget);
+          setDropTargetId(findDropTarget(layout, d.nodeId, { x: d.currentX, y: d.currentY }));
         }
       }
       return;
@@ -1812,16 +1809,7 @@ export function DesktopMindMapEditor({
   const onMouseUpSvg = useCallback(() => {
     // Finish rectangle selection
     if (rectSel) {
-      const x1 = Math.min(rectSel.startX, rectSel.curX);
-      const x2 = Math.max(rectSel.startX, rectSel.curX);
-      const y1 = Math.min(rectSel.startY, rectSel.curY);
-      const y2 = Math.max(rectSel.startY, rectSel.curY);
-      const ids = new Set<string>();
-      for (const [id, entry] of Object.entries(layout)) {
-        const cx = entry.x + entry.w / 2;
-        const cy = entry.y + entry.h / 2;
-        if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) ids.add(id);
-      }
+      const ids = nodesInMarquee(layout, rectSel);
       setMultiSelect(ids);
       if (ids.size > 0) {
         const first = [...ids][0];
