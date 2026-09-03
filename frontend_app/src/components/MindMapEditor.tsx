@@ -1197,7 +1197,7 @@ export function DesktopMindMapEditor({
     try {
       await onDeleteNodeAttachment(attachment);
       const newRoot = cloneTree(root);
-      const found = findNode(newRoot, selectedId);
+      const found = findNode(newRoot, notesNodeId);
       if (found) {
         const filtered = (found.node.attachments ?? []).filter((item) => item.attachment_id !== attachment.attachment_id);
         found.node.attachments = filtered;
@@ -1219,7 +1219,7 @@ export function DesktopMindMapEditor({
     } catch {
       showToast('Attachment delete failed');
     }
-  }, [mutate, onDeleteNodeAttachment, root, selectedId, showToast]);
+  }, [mutate, onDeleteNodeAttachment, root, notesNodeId, showToast]);
 
   // ── Search ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1402,8 +1402,8 @@ export function DesktopMindMapEditor({
       showToast('Alt+K — Add image');
     }
     else if (e.key === 'F2') { e.preventDefault(); const f = findNode(root, selectedId); if (f) startEditing(f.node); showToast('F2 — Rename'); }
-    else if (e.key === 'F3') { e.preventDefault(); openNotes(selectedId); showToast('F3 — Notes'); }
-    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') { e.preventDefault(); openNotes(selectedId); showToast('Ctrl+E — Edit notes'); }
+    else if (e.key === 'F3') { e.preventDefault(); openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); showToast('F3 — Notes'); }
+    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') { e.preventDefault(); openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); showToast('Ctrl+E — Edit notes'); }
     else if (e.key === 'F4') { e.preventDefault(); setShowColorPicker((v) => !v); showToast('F4 — Colour'); }
     else if (e.key === 'F5') { e.preventDefault(); setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); showToast(focusMode ? 'F5 — Focus off' : 'F5 — Focus on'); }
     else if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); showToast(focusMode ? 'F — Focus off' : 'F — Focus on'); }
@@ -2028,12 +2028,11 @@ export function DesktopMindMapEditor({
     );
   };
 
-  const renderConnections = useCallback((node: MindMapTreeNode, inheritedColor?: string): JSX.Element[] => {
+  const renderConnections = useCallback((node: MindMapTreeNode): JSX.Element[] => {
     const paths: JSX.Element[] = [];
     if (node.collapsed) return paths;
     const pBox = layout[node.id];
     if (!pBox) return paths;
-    const nodeColor = node.color ?? inheritedColor;
     for (const ch of node.children) {
       if (node.id === 'root') {
         const isLeftSide = ch.side === 'left';
@@ -2049,7 +2048,10 @@ export function DesktopMindMapEditor({
       const y1 = pBox.y + pBox.h / 2;
       const x2 = childOnLeft ? cBox.x + cBox.w : cBox.x;
       const y2 = cBox.y + cBox.h / 2;
-      const branchColor = ch.color ?? nodeColor;
+      // A node's colour paints only the line coming *into* it. The lines
+      // going out to its children stay on the default until a child sets a
+      // colour of its own — colour no longer cascades down the subtree.
+      const branchColor = ch.color;
       const faded = focusMode && focusedIds.size > 0 && !focusedIds.has(node.id) && !focusedIds.has(ch.id);
       paths.push(
         <path
@@ -2064,7 +2066,7 @@ export function DesktopMindMapEditor({
           opacity={faded ? 0.2 : 1}
         />,
       );
-      paths.push(...renderConnections(ch, branchColor));
+      paths.push(...renderConnections(ch));
     }
     return paths;
   }, [layout, focusMode, focusedIds, rootLeftCollapsed, rootRightCollapsed]);
@@ -2114,7 +2116,7 @@ export function DesktopMindMapEditor({
     }, 140);
   }, [cancelHoverPopupClose, hoveringNotePopup]);
 
-  const renderNodes = useCallback((node: MindMapTreeNode, depth = 0, inheritedColor?: string): JSX.Element[] => {
+  const renderNodes = useCallback((node: MindMapTreeNode, depth = 0): JSX.Element[] => {
     const box = layout[node.id];
     if (!box) return [];
     const isRoot = depth === 0;
@@ -2122,12 +2124,19 @@ export function DesktopMindMapEditor({
     const isEditing = node.id === editingId;
     const isDrop = node.id === dropTargetId;
     const ownColor = node.color ?? null;
-    // Only the node's own explicit color fills the bubble.
-    // Inherited color is passed down solely for connection lines.
+    // Only the node's own explicit color fills the bubble — and, in
+    // renderConnections, the one line coming into it. Nothing is inherited.
     const rx = isRoot ? 18 : 8;
 
     const fillColor = ownColor ?? (isRoot ? 'var(--mm-root-fill)' : 'var(--mm-node-fill)');
-    const strokeColor = isDrop ? '#22c55e' : (ownColor ?? (isRoot ? 'var(--mm-root-stroke)' : isSelected ? 'var(--accent)' : 'var(--mm-node-stroke)'));
+    // Selection has to win over the node's own colour and over the root's
+    // stroke: both used to be checked first, so a coloured node drew its
+    // border in the same colour as its fill and selecting it showed nothing.
+    const strokeColor = isDrop
+      ? '#22c55e'
+      : isSelected
+        ? 'var(--accent)'
+        : (ownColor ?? (isRoot ? 'var(--mm-root-stroke)' : 'var(--mm-node-stroke)'));
     const textColor = ownColor ? '#ffffff' : (isRoot ? 'var(--mm-root-text)' : 'var(--mm-node-text)');
 
     const lines = getVisibleNodeTextLines(node.text);
@@ -2406,8 +2415,6 @@ export function DesktopMindMapEditor({
       </g>,
     ];
 
-    // Pass inherited color for connections: own color takes priority, otherwise keep propagating
-    const colorForChildren = ownColor ?? inheritedColor;
     if (!node.collapsed) {
       for (const ch of node.children) {
         if (node.id === 'root') {
@@ -2415,7 +2422,7 @@ export function DesktopMindMapEditor({
           if (isLeftSide && rootLeftCollapsed) continue;
           if (!isLeftSide && rootRightCollapsed) continue;
         }
-        elems.push(...renderNodes(ch, depth + 1, colorForChildren));
+        elems.push(...renderNodes(ch, depth + 1));
       }
     }
     return elems;
@@ -3418,11 +3425,11 @@ export function DesktopMindMapEditor({
             <button className="mm-btn-icon" onClick={() => setShowShortcuts(false)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
           <div className="mm-shortcuts-grid">{[
-            ['Tab', 'Add child'], ['⇧Tab', 'Add left child (root)'], ['Enter', 'Add sibling'], ['Del / ⌫', 'Delete node'], ['F2', 'Rename'], ['F3', 'Notes'],
+            ['Tab / Ins', 'Add child'], ['⇧Tab', 'Add left child (root)'], ['Enter', 'Add sibling'], ['Del / ⌫', 'Delete node'], ['F2', 'Rename'], ['F3', 'Notes'], ['Ctrl+E', 'Edit notes'],
             ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['Alt+K', 'Add image to node'], ['F7', 'Vault files'], ['F8', 'Share exports'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
             ['↑ ↓ ← →', 'Navigate (spatial)'], ['⇧+Arrow', 'Multi-select'], ['Ctrl+Click', 'Toggle select'], ['⇧+Drag', 'Rectangle select'],
             ['Home', 'Root'], ['+ −', 'Zoom'], ['Ctrl+S', 'Save'],
-            ['C', 'Checkbox'], ['P', 'Progress'], ['I', 'Icons'], ['D', 'Dates'], ['U', 'URL'], ['R', 'Reset pos'],
+            ['C', 'Checkbox'], ['P', 'Progress'], ['I', 'Icons'], ['D', 'Dates'], ['U', 'URL'], ['T', 'Labels'], ['R', 'Reset pos'], ['A', 'Auto-align'],
             ['Ctrl+⇧R', 'Reset all'], ['Ctrl+F', 'Search'], ['Esc', 'Cancel / Clear'],
           ].map(([k, v]) => (<div key={k} className="mm-shortcut-row"><kbd className="mm-kbd">{k}</kbd><span>{v}</span></div>))}</div>
         </div>
