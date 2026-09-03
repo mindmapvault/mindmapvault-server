@@ -103,6 +103,10 @@ await page.locator('input[autocomplete="username"]').first().fill(username);
 const pw = page.locator('input[type="password"]');
 await pw.nth(0).fill(password);
 if (await pw.count() > 1) await pw.nth(1).fill(password);
+// The hosted sign-up gates the button behind a terms checkbox; the self-hosted
+// one has none. Tick whatever is there so one file serves both.
+const consent = page.locator('form input[type="checkbox"]');
+for (let i = 0; i < await consent.count(); i++) await consent.nth(i).check();
 await page.getByRole('button', { name: /create|sign up|register/i }).first().click();
 await page.waitForTimeout(9000);
 
