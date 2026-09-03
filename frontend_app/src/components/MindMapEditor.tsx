@@ -58,10 +58,8 @@ import {
   PROGRESS_PRESETS,
 } from './MindMapConstants';
 import {
-  uid,
   cloneTree,
   findNode,
-  isDescendant,
   countChecked,
   flattenTree,
   flattenAll,
@@ -73,6 +71,7 @@ import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
 import { handleDelegatedLinkClick } from '../utils/openExternal';
+import * as ops from './mindmap/treeOps';
 import { createNodeImageGlyph, type NodeImageGlyph } from '../utils/filePreview';
 import './MindMapEditor.css';
 
@@ -692,197 +691,114 @@ export function DesktopMindMapEditor({
   //  TREE MUTATIONS
   // ══════════════════════════════════════════════════════════════════════════
 
-  const clearBranchCustomPositions = (node: MindMapTreeNode) => {
-    node.customX = undefined;
-    node.customY = undefined;
-    node.children.forEach(clearBranchCustomPositions);
-  };
+  /** Both insertions end the same way: commit, then open the new node for typing. */
+  const commitInsertion = useCallback((result: ops.Insertion | null) => {
+    if (!result) return;
+    // A new node on a collapsed side would be committed but invisible.
+    if (result.side === 'left') setRootLeftCollapsed(false);
+    if (result.side === 'right') setRootRightCollapsed(false);
+    mutate(result.root);
+    setTimeout(() => { setSelectedId(result.node.id); startEditing(result.node); }, 30);
+  }, [mutate]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const addChild = useCallback((parentId: string, side?: 'left' | 'right') => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, parentId);
-    if (!found) return;
-    const newNode: MindMapTreeNode = {
-      id: uid(), text: '', children: [], collapsed: false, notes: '',
-      color: null, icons: [], checked: null, progress: null,
-      startDate: null, endDate: null, urls: [], tags: [],
-      ...(parentId === 'root' && side ? { side } : {}),
-    };
-    found.node.children.push(newNode);
-    found.node.collapsed = false;
-
-    // Keep freshly inserted nodes in clean branch spacing instead of inheriting dragged offsets.
-    clearBranchCustomPositions(found.node);
-    if (parentId === 'root') {
-      if (side === 'left') setRootLeftCollapsed(false);
-      if (side !== 'left') setRootRightCollapsed(false);
-    }
-
-    mutate(newRoot);
-    setTimeout(() => { setSelectedId(newNode.id); startEditing(newNode); }, 30);
-  }, [root, mutate]);  // eslint-disable-line react-hooks/exhaustive-deps
+    commitInsertion(ops.addChild(root, parentId, side));
+  }, [root, commitInsertion]);
 
   const addSibling = useCallback((nodeId: string) => {
-    if (nodeId === 'root') return;
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || !found.parent) return;
-    const newNode: MindMapTreeNode = {
-      id: uid(), text: '', children: [], collapsed: false, notes: '',
-      color: null, icons: [], checked: null, progress: null,
-      startDate: null, endDate: null, urls: [], tags: [],
-    };
-    found.parent.children.splice(found.index + 1, 0, newNode);
-
-    // Realign the whole sibling branch after insertion for predictable spacing.
-    clearBranchCustomPositions(found.parent);
-    if (found.parent.id === 'root') {
-      if (found.node.side === 'left') setRootLeftCollapsed(false);
-      else setRootRightCollapsed(false);
-    }
-
-    mutate(newRoot);
-    setTimeout(() => { setSelectedId(newNode.id); startEditing(newNode); }, 30);
-  }, [root, mutate]);  // eslint-disable-line react-hooks/exhaustive-deps
+    commitInsertion(ops.addSibling(root, nodeId));
+  }, [root, commitInsertion]);
 
   const deleteNode = useCallback((nodeId: string) => {
-    if (nodeId === 'root') return;
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || !found.parent) return;
-    found.parent.children.splice(found.index, 1);
-    setSelectedId(found.parent.id);
-    mutate(newRoot);
+    const result = ops.removeNode(root, nodeId);
+    if (!result) return;
+    setSelectedId(result.parentId);
+    mutate(result.root);
   }, [root, mutate]);
 
   const toggleCollapse = useCallback((nodeId: string) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || found.node.children.length === 0) return;
-    found.node.collapsed = !found.node.collapsed;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => {
+      if (node.children.length === 0) return false;
+      node.collapsed = !node.collapsed;
+    });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Node color ────────────────────────────────────────────────────────────
   const setNodeColor = useCallback((nodeId: string, color: string | null) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.color = color;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.color = color; });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   const cycleColor = useCallback((nodeId: string) => {
     const found = findNode(root, nodeId);
     if (!found) return;
     const all: (string | null)[] = [...NODE_COLORS, ...COLOR_PALETTE];
-    const cur = all.indexOf(found.node.color ?? null);
-    const next = all[(cur + 1) % all.length];
-    setNodeColor(nodeId, next);
+    setNodeColor(nodeId, ops.nextInCycle(all, found.node.color ?? null));
   }, [root, setNodeColor]);
 
   // ── Checkbox ──────────────────────────────────────────────────────────────
   const toggleCheckbox = useCallback((nodeId: string) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    const cur = found.node.checked;
-    if (cur == null) found.node.checked = false;
-    else if (cur === false) found.node.checked = true;
-    else found.node.checked = false;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.checked = ops.toggleChecked(node.checked); });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   const addCheckbox = useCallback((nodeId: string) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.checked = false;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.checked = false; });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   const removeCheckbox = useCallback((nodeId: string) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.checked = null;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.checked = null; });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Progress ──────────────────────────────────────────────────────────────
   const setNodeProgress = useCallback((nodeId: string, value: number | null) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.progress = value;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.progress = value; });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   const cycleProgress = useCallback((nodeId: string) => {
     const found = findNode(root, nodeId);
     if (!found) return;
     const cycle: (number | null)[] = [...PROGRESS_PRESETS, null];
-    const cur = cycle.indexOf(found.node.progress ?? null);
-    const next = cycle[(cur + 1) % cycle.length];
-    setNodeProgress(nodeId, next);
+    setNodeProgress(nodeId, ops.nextInCycle(cycle, found.node.progress ?? null));
   }, [root, setNodeProgress]);
 
   // ── Icons ─────────────────────────────────────────────────────────────────
   const setNodeIcon = useCallback((nodeId: string, iconName: string | null) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    if (!found.node.icons) found.node.icons = [];
-    if (iconName === null) {
-      found.node.icons = [];
-    } else {
-      const idx = found.node.icons.indexOf(iconName);
-      if (idx >= 0) found.node.icons.splice(idx, 1);
-      else found.node.icons.push(iconName);
-    }
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.icons = ops.toggleIcon(node.icons, iconName); });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Dates ─────────────────────────────────────────────────────────────────
   const setNodeDates = useCallback((nodeId: string, startDate: string | null, endDate: string | null) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.startDate = startDate;
-    found.node.endDate = endDate;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => {
+      node.startDate = startDate;
+      node.endDate = endDate;
+    });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── URLs ──────────────────────────────────────────────────────────────────
   const addNodeUrl = useCallback((nodeId: string, entry: UrlEntry) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    if (!found.node.urls) found.node.urls = [];
-    found.node.urls.push(entry);
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.urls = ops.addUrl(node.urls, entry); });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   const removeNodeUrl = useCallback((nodeId: string, urlIndex: number) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || !found.node.urls) return;
-    found.node.urls.splice(urlIndex, 1);
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => {
+      if (!node.urls) return false;
+      node.urls = ops.removeUrl(node.urls, urlIndex);
+    });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Move siblings ─────────────────────────────────────────────────────────
   const moveNode = useCallback((nodeId: string, direction: 'up' | 'down') => {
-    if (nodeId === 'root') return;
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || !found.parent) return;
-    const siblings = found.parent.children;
-    const idx = found.index;
-    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (targetIdx < 0 || targetIdx >= siblings.length) return;
-    [siblings[idx], siblings[targetIdx]] = [siblings[targetIdx], siblings[idx]];
-    mutate(newRoot);
+    const next = ops.moveSibling(root, nodeId, direction);
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Duplicate ─────────────────────────────────────────────────────────────
@@ -901,21 +817,11 @@ export function DesktopMindMapEditor({
    * one quietly corrupts both.
    */
   const duplicateNode = useCallback(async (nodeId: string) => {
-    if (nodeId === 'root') return;
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || !found.parent) return;
-    const clone = cloneTree(found.node);
-    const reassignIds = (n: MindMapTreeNode) => { n.id = uid(); n.children.forEach(reassignIds); };
-    reassignIds(clone);
+    const source = nodeId === 'root' ? null : findNode(root, nodeId);
+    if (!source || !source.parent) return;
+    const clone = ops.cloneSubtreeWithNewIds(source.node);
 
-    const withAttachments: MindMapTreeNode[] = [];
-    const collect = (n: MindMapTreeNode) => {
-      if ((n.attachments ?? []).length > 0) withAttachments.push(n);
-      n.children.forEach(collect);
-    };
-    collect(clone);
-
+    const withAttachments = ops.nodesWithAttachments(clone);
     if (withAttachments.length > 0) {
       setNodeImageBusy(true);
       let failures = 0;
@@ -958,72 +864,47 @@ export function DesktopMindMapEditor({
       }
     }
 
-    const latest = cloneTree(root);
-    const target = findNode(latest, nodeId);
-    if (!target || !target.parent) return;
-    target.parent.children.splice(target.index + 1, 0, clone);
-    mutate(latest);
+    // Built from the tree as it stands, not from a clone taken before the
+    // awaits — copying the files can take a while.
+    const next = ops.insertAfter(root, nodeId, clone);
+    if (!next) return;
+    mutate(next);
     setSelectedId(clone.id);
   }, [root, mutate, onCopyNodeAttachment, showToast]);
 
   // ── Reparent (drag-drop) ──────────────────────────────────────────────────
   const reparentNode = useCallback((nodeId: string, newParentId: string) => {
-    if (nodeId === 'root' || nodeId === newParentId) return;
-    if (isDescendant(root, nodeId, newParentId)) return;
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found || !found.parent) return;
-    const [removed] = found.parent.children.splice(found.index, 1);
-    removed.customX = undefined;
-    removed.customY = undefined;
-    const target = findNode(newRoot, newParentId);
-    if (!target) return;
-    target.node.children.push(removed);
-    target.node.collapsed = false;
-    mutate(newRoot);
+    const next = ops.reparentNode(root, nodeId, newParentId);
+    if (!next) return;
+    mutate(next);
     setSelectedId(nodeId);
   }, [root, mutate]);
 
   // ── Reset position ────────────────────────────────────────────────────────
   const resetNodePosition = useCallback((nodeId: string) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.customX = undefined;
-    found.node.customY = undefined;
-    mutate(newRoot);
+    // Just this node — its children keep wherever they were dragged to.
+    const next = ops.editNode(root, nodeId, (node) => {
+      node.customX = undefined;
+      node.customY = undefined;
+    });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   const resetAllPositions = useCallback(() => {
-    const newRoot = cloneTree(root);
-    const walk = (n: MindMapTreeNode) => { n.customX = undefined; n.customY = undefined; n.children.forEach(walk); };
-    walk(newRoot);
-    mutate(newRoot);
+    const next = ops.resetPositions(root, null);
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Auto-align subtree ────────────────────────────────────────────────────
   const autoAlignSubtree = useCallback((nodeId: string) => {
-    const newRoot = cloneTree(root);
-    const clearPositions = (n: MindMapTreeNode) => {
-      n.customX = undefined; n.customY = undefined;
-      n.children.forEach(clearPositions);
-    };
-    if (nodeId === 'root') {
-      clearPositions(newRoot);
-    } else {
-      const found = findNode(newRoot, nodeId);
-      if (found) clearPositions(found.node);
-    }
-    mutate(newRoot);
+    const next = ops.resetPositions(root, nodeId);
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Tags ──────────────────────────────────────────────────────────────────
   const setNodeTags = useCallback((nodeId: string, tags: string[]) => {
-    const newRoot = cloneTree(root);
-    const found = findNode(newRoot, nodeId);
-    if (!found) return;
-    found.node.tags = tags;
-    mutate(newRoot);
+    const next = ops.editNode(root, nodeId, (node) => { node.tags = tags; });
+    if (next) mutate(next);
   }, [root, mutate]);
 
   // ── Bulk helpers: apply an action to all selected nodes in one clone ─────
@@ -1034,84 +915,46 @@ export function DesktopMindMapEditor({
   }, [selectedId, multiSelect]);
 
   const bulkToggleCheckbox = useCallback(() => {
-    const newRoot = cloneTree(root);
-    for (const id of getTargetIds()) {
-      const f = findNode(newRoot, id); if (!f) continue;
-      const cur = f.node.checked;
-      if (cur == null) f.node.checked = false;
-      else if (cur === false) f.node.checked = true;
-      else f.node.checked = false;
-    }
-    mutate(newRoot);
+    mutate(ops.editNodes(root, getTargetIds(), (node) => { node.checked = ops.toggleChecked(node.checked); }));
   }, [root, mutate, getTargetIds]);
 
   const bulkCycleProgress = useCallback(() => {
-    const newRoot = cloneTree(root);
-    for (const id of getTargetIds()) {
-      const f = findNode(newRoot, id); if (!f) continue;
-      const cycle: (number | null)[] = [...PROGRESS_PRESETS, null];
-      const cur = cycle.indexOf(f.node.progress ?? null);
-      f.node.progress = cycle[(cur + 1) % cycle.length];
-    }
-    mutate(newRoot);
+    const cycle: (number | null)[] = [...PROGRESS_PRESETS, null];
+    // Each node advances from its own value, so a mixed selection stays mixed
+    // rather than snapping to one number.
+    mutate(ops.editNodes(root, getTargetIds(), (node) => {
+      node.progress = ops.nextInCycle(cycle, node.progress ?? null);
+    }));
   }, [root, mutate, getTargetIds]);
 
   const bulkSetColor = useCallback((color: string | null) => {
-    const newRoot = cloneTree(root);
-    for (const id of getTargetIds()) {
-      const f = findNode(newRoot, id); if (!f) continue;
-      f.node.color = color;
-    }
-    mutate(newRoot);
+    mutate(ops.editNodes(root, getTargetIds(), (node) => { node.color = color; }));
   }, [root, mutate, getTargetIds]);
 
   const bulkDelete = useCallback(() => {
-    const ids = getTargetIds();
-    ids.delete('root');
-    if (ids.size === 0) return;
-    const newRoot = cloneTree(root);
-    let fallback = 'root';
-    for (const id of ids) {
-      const f = findNode(newRoot, id);
-      if (f?.parent) { fallback = f.parent.id; f.parent.children.splice(f.index, 1); }
-    }
-    setSelectedId(fallback);
+    const result = ops.removeNodes(root, getTargetIds());
+    if (!result) return;
+    setSelectedId(result.parentId);
     setMultiSelect(new Set());
-    mutate(newRoot);
+    mutate(result.root);
   }, [root, mutate, getTargetIds]);
 
   const bulkToggleCollapse = useCallback(() => {
-    const newRoot = cloneTree(root);
-    for (const id of getTargetIds()) {
-      const f = findNode(newRoot, id); if (!f || f.node.children.length === 0) continue;
-      f.node.collapsed = !f.node.collapsed;
-    }
-    mutate(newRoot);
+    mutate(ops.editNodes(root, getTargetIds(), (node) => {
+      if (node.children.length === 0) return;
+      node.collapsed = !node.collapsed;
+    }));
   }, [root, mutate, getTargetIds]);
 
   const bulkResetPosition = useCallback(() => {
-    const newRoot = cloneTree(root);
-    for (const id of getTargetIds()) {
-      const f = findNode(newRoot, id); if (!f) continue;
-      f.node.customX = undefined; f.node.customY = undefined;
-    }
-    mutate(newRoot);
+    mutate(ops.editNodes(root, getTargetIds(), (node) => {
+      node.customX = undefined;
+      node.customY = undefined;
+    }));
   }, [root, mutate, getTargetIds]);
 
   const bulkSetIcon = useCallback((iconName: string | null) => {
-    const newRoot = cloneTree(root);
-    for (const id of getTargetIds()) {
-      const f = findNode(newRoot, id); if (!f) continue;
-      if (!f.node.icons) f.node.icons = [];
-      if (iconName === null) {
-        f.node.icons = [];
-      } else {
-        const idx = f.node.icons.indexOf(iconName);
-        if (idx >= 0) f.node.icons.splice(idx, 1);
-        else f.node.icons.push(iconName);
-      }
-    }
-    mutate(newRoot);
+    mutate(ops.editNodes(root, getTargetIds(), (node) => { node.icons = ops.toggleIcon(node.icons, iconName); }));
   }, [root, mutate, getTargetIds]);
 
   const hasBulk = multiSelect.size > 0;
