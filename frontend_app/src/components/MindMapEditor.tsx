@@ -16,6 +16,7 @@
  * • All existing features preserved
  */
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -27,6 +28,11 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { MindMapTree, MindMapTreeNode, NodeAttachmentRef, UrlEntry } from '../types';
 import { useThemeStore } from '../store/theme';
+import { useResolvedDensity, useUiStore, useEffectiveKeyboardLayout, type TrayPosition } from '../store/ui';
+import { matchShortcut, formatShortcut, formatButtonShortcut, SHORTCUTS } from '../shortcuts/registry';
+import { isMac } from '../platform/isMac';
+import { ColorTray } from './ColorTray';
+import { IconTray } from './IconTray';
 import { SettingsButton } from './SettingsButton';
 import { MindMapIconPicker } from './MindMapIconPicker.tsx';
 import { MindMapColorPicker } from './MindMapColorPicker';
@@ -95,6 +101,17 @@ export function DesktopMindMapEditor({
   const autosaveMode = useThemeStore((s) => s.autosaveMode);
   const themeMode = useThemeStore((s) => s.mode);
   const toggleThemeMode = useThemeStore((s) => s.toggleMode);
+  const densityPreset = useUiStore((s) => s.densityPreset);
+  const colourTrayEnabled = useUiStore((s) => s.colourTrayEnabled);
+  const colourTrayPosition = useUiStore((s) => s.colourTrayPosition);
+  const setColourTray = useUiStore((s) => s.setColourTray);
+  const iconTrayEnabled = useUiStore((s) => s.iconTrayEnabled);
+  const iconTrayPosition = useUiStore((s) => s.iconTrayPosition);
+  const setIconTray = useUiStore((s) => s.setIconTray);
+  const keyboardLayout = useEffectiveKeyboardLayout();
+  const { statusBarVisible, toolbarLabels, buttonShortcuts: buttonShortcutsVisible, toolbarMode } = useResolvedDensity();
+  const [activeRibbonTab, setActiveRibbonTab] = useState<'home' | 'insert' | 'view' | 'export'>('home');
+  const [showToolbarOverflow, setShowToolbarOverflow] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
   );
@@ -1442,67 +1459,67 @@ export function DesktopMindMapEditor({
       return;
     }
     if (!selectedId) return;
-    if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); addChild(selectedId); showToast('Tab — Add child'); }
-    else if (e.key === 'Tab' && e.shiftKey && selectedId === 'root') { e.preventDefault(); addChild('root', 'left'); showToast('⇧Tab — Add left child'); }
-    else if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); addChild(selectedId); showToast('Tab — Add child'); }
-    else if (e.key === 'Insert') { e.preventDefault(); addChild(selectedId); showToast('Ins — Add child'); }
-    else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); addSibling(selectedId); showToast('Enter — Add sibling'); }
-    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); hasBulk ? bulkDelete() : deleteNode(selectedId); showToast('Del — Delete node'); }
-    // Alt+K is FreeMind's "Insert image (choose)". Matched on `code`, not
-    // `key`: on macOS Option+K produces "˚", so comparing the character would
-    // work everywhere except a Mac.
-    else if (e.altKey && e.code === 'KeyK') {
-      e.preventDefault();
-      nodeImageTargetRef.current = selectedId;
-      nodeImageInputRef.current?.click();
-      showToast('Alt+K — Add image');
+    // Dispatch through the registry so the active layout is the single source
+    // of truth: what a button caption, tooltip or the F1 panel advertises is
+    // exactly what fires here.
+    const actionHandlers: Record<string, () => void> = {
+      'node.addChild': () => { addChild(selectedId); },
+      'node.addLeftChild': () => { if (selectedId === 'root') addChild('root', 'left'); else addChild(selectedId); },
+      'node.addSibling': () => { addSibling(selectedId); },
+      'node.delete': () => { hasBulk ? bulkDelete() : deleteNode(selectedId); },
+      'node.rename': () => { const f = findNode(root, selectedId); if (f) startEditing(f.node); },
+      'node.notesToggle': () => { openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); },
+      'node.notesOpen': () => { openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); },
+      'node.addImage': () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); },
+      'node.attachFile': () => { nodeAttachmentInputRef.current?.click(); },
+      'node.fold': () => { hasBulk ? bulkToggleCollapse() : toggleCollapse(selectedId); },
+      'node.resetPosition': () => { hasBulk ? bulkResetPosition() : resetNodePosition(selectedId); },
+      'node.resetAllPositions': () => { resetAllPositions(); },
+      'node.autoAlign': () => { autoAlignSubtree(selectedId); },
+      'node.colour': () => setShowColorPicker((v) => !v),
+      'node.icons': () => setShowIconPicker((v) => !v),
+      'node.checkbox': () => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); },
+      'node.progress': () => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); },
+      'node.dates': () => setShowDateDialog((v) => !v),
+      'node.url': () => setShowUrlDialog((v) => !v),
+      'node.labels': () => setShowTagDialog((v) => !v),
+      'view.root': () => setSelectedId('root'),
+      'view.focusMode': () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); },
+      'view.zoomIn': () => setZoom((z) => Math.min(3, z + 0.15)),
+      'view.zoomOut': () => setZoom((z) => Math.max(0.3, z - 0.15)),
+      'view.zoomFit': () => { fitView(); },
+      'view.colourTray': () => setColourTray(!colourTrayEnabled),
+      'view.iconTray': () => setIconTray(!iconTrayEnabled),
+      'edit.undo': () => { undo(); },
+      'edit.redo': () => { redo(); },
+      'find.search': () => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); },
+      'find.shortcuts': () => setShowShortcuts((v) => !v),
+      'vault.files': () => { onOpenSecurePanel?.('attachments'); },
+      'vault.shares': () => { onOpenSecurePanel?.('shares'); },
+      'nav.back': () => { onBack?.(); },
+    };
+
+    if (e.key === 'Escape') {
+      setShowShortcuts(false); setShowColorPicker(false); setShowIconPicker(false); setShowExportMenu(false);
+      setContextMenu(null); setSearchOpen(false); setMultiSelect(new Set()); setShowTagDialog(false);
+      setMobileFileUploadOpen(false); setShowToolbarOverflow(false);
+      return;
     }
-    else if (e.key === 'F2') { e.preventDefault(); const f = findNode(root, selectedId); if (f) startEditing(f.node); showToast('F2 — Rename'); }
-    else if (e.key === 'F3') { e.preventDefault(); openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); showToast('F3 — Notes'); }
-    else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') { e.preventDefault(); openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); showToast('Ctrl+E — Edit notes'); }
-    else if (e.key === 'F4') { e.preventDefault(); setShowColorPicker((v) => !v); showToast('F4 — Colour'); }
-    else if (e.key === 'F5') { e.preventDefault(); setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); showToast(focusMode ? 'F5 — Focus off' : 'F5 — Focus on'); }
-    else if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); showToast(focusMode ? 'F — Focus off' : 'F — Focus on'); }
-    else if (e.key === 'F1') { e.preventDefault(); setShowShortcuts((v) => !v); showToast('F1 — Shortcuts'); }
-    else if (e.key === 'F6') {
+
+    const actionId = matchShortcut(e, keyboardLayout);
+    if (actionId && actionHandlers[actionId]) {
+      // Shift+Tab on a non-root node is "add child", not "add left child" —
+      // only the root has a left side to add to.
+      if (actionId === 'vault.files' && !onOpenSecurePanel) return;
+      if (actionId === 'vault.shares' && !onOpenSecurePanel) return;
       e.preventDefault();
-      nodeAttachmentInputRef.current?.click();
-      showToast('F6 — Attach encrypted file');
+      actionHandlers[actionId]();
+      const def = SHORTCUTS.find((sc) => sc.id === actionId);
+      if (def) showToast(`${formatShortcut(actionId, keyboardLayout)} — ${def.label}`);
+      return;
     }
-    else if (e.key === 'F7' && onOpenSecurePanel) {
-      e.preventDefault();
-      onOpenSecurePanel('attachments');
-      showToast('F7 — Vault files');
-    }
-    else if (e.key === 'F8' && onOpenSecurePanel) {
-      e.preventDefault();
-      onOpenSecurePanel('shares');
-      showToast('F8 — Share exports');
-    }
-    else if (e.key === 'Escape') { setShowShortcuts(false); setShowColorPicker(false); setShowIconPicker(false); setShowExportMenu(false); setContextMenu(null); setSearchOpen(false); setMultiSelect(new Set()); setShowTagDialog(false); setMobileFileUploadOpen(false); }
-    else if (e.key === 'F9' || (e.ctrlKey && e.key === 'z' && !e.shiftKey)) { e.preventDefault(); undo(); showToast('Undo'); }
-    else if (e.key === 'F10' || (e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) { e.preventDefault(); redo(); showToast('Redo'); }
-    else if (e.key === ' ') { e.preventDefault(); hasBulk ? bulkToggleCollapse() : toggleCollapse(selectedId); showToast('Space — Fold / Unfold'); }
-    else if (e.key === 'Home') { e.preventDefault(); setSelectedId('root'); showToast('Home — Root'); }
-    else if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId);
-      showToast('C — Checkbox');
-    }
-    else if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      hasBulk ? bulkCycleProgress() : cycleProgress(selectedId);
-      showToast('P — Progress');
-    }
-    else if (e.key.toLowerCase() === 'i' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowIconPicker((v) => !v); showToast('I — Icons'); }
-    else if (e.key.toLowerCase() === 'd' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowDateDialog((v) => !v); showToast('D — Dates'); }
-    else if (e.key.toLowerCase() === 'u' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowUrlDialog((v) => !v); showToast('U — URL'); }
-    else if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); hasBulk ? bulkResetPosition() : resetNodePosition(selectedId); showToast('R — Reset pos'); }
-    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'r') { e.preventDefault(); resetAllPositions(); showToast('Reset all positions'); }
-    else if (e.key.toLowerCase() === 't' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setShowTagDialog((v) => !v); showToast('T — Labels'); }
-    else if (e.key.toLowerCase() === 'a' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); autoAlignSubtree(selectedId); showToast(selectedId === 'root' ? 'A — Auto-align all' : 'A — Auto-align subtree'); }
-    else if (e.ctrlKey && e.key === 'f') { e.preventDefault(); setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }
-    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+
+    if (!e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       e.preventDefault();
       const box = layout[selectedId];
       if (!box) return;
@@ -1542,11 +1559,13 @@ export function DesktopMindMapEditor({
         setSelectedId(bestId);
       }
     }
-    else if (e.key === '+') { e.preventDefault(); setZoom((z) => Math.min(3, z + 0.15)); }
-    else if (e.key === '-') { e.preventDefault(); setZoom((z) => Math.max(0.3, z - 0.15)); }
     }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
       toggleCheckbox, undo, redo, toggleCollapse, openNotes, showToast, resetNodePosition, resetAllPositions, autoAlignSubtree, showIconPicker, showColorPicker, focusMode, focusedIds,
-      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel]);
+      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel,
+      // fitView is declared below this hook, so it cannot be listed here; it is
+      // only ever called lazily from inside the handler.
+      keyboardLayout, onBack, setColourTray, colourTrayEnabled, setIconTray, iconTrayEnabled,
+      startEditing, addChild, setShowUrlDialog, setShowTagDialog, setShowDateDialog, setSearchOpen, setShowShortcuts]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2523,8 +2542,36 @@ export function DesktopMindMapEditor({
   //  RENDER
   // ══════════════════════════════════════════════════════════════════════════
 
+  // Both trays dock to any of the four edges, so each edge asks for whatever
+  // belongs there. Top/bottom lay their strips out in a row, left/right in a
+  // column — the wrapper class decides which.
+  const trayFor = (edge: TrayPosition) => {
+    const colour = colourTrayEnabled && colourTrayPosition === edge;
+    const icons = iconTrayEnabled && iconTrayPosition === edge;
+    if (!colour && !icons) return null;
+    const horizontal = edge === 'top' || edge === 'bottom';
+    return (
+      <div className={horizontal ? 'mm-tray-row' : 'mm-tray-col'}>
+        {colour && (
+          <ColorTray
+            orientation={horizontal ? 'horizontal' : 'vertical'}
+            currentColor={selNode?.color ?? null}
+            onSelect={(c) => { hasBulk ? bulkSetColor(c) : setNodeColor(selectedId, c); }}
+          />
+        )}
+        {icons && (
+          <IconTray
+            orientation={horizontal ? 'horizontal' : 'vertical'}
+            currentIcons={selNode?.icons ?? []}
+            onSelect={(name) => { hasBulk ? bulkSetIcon(name) : setNodeIcon(selectedId, name); }}
+          />
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="mm-root" ref={containerRef}>
+    <div className="mm-root" data-density={densityPreset} data-toolbar-labels={toolbarLabels} data-shortcuts={buttonShortcutsVisible} ref={containerRef}>
       {/* ── Mobile top bar ──────────────────────────────────────────────── */}
       {isMobile && (
         <div className="mm-mobile-topbar">
@@ -2621,27 +2668,68 @@ export function DesktopMindMapEditor({
           <input ref={mobileFileInputCameraRef} type="file" accept="image/*,video/*" capture="environment" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
           <input ref={mobileFileInputGalleryRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
           <input ref={mobileFileInputAnyRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => { void attachFilesToSelectedNode(e.currentTarget.files); e.currentTarget.value = ''; setMobileFileUploadOpen(false); }} />
-          <button className="mm-btn" onClick={undo} title="Undo (F9)" disabled={historyIdx <= 0}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
-          <button className="mm-btn" onClick={redo} title="Redo (F10)" disabled={historyIdx >= history.length - 1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
-          <div className="mm-toolbar-sep" />
-          <button className="mm-btn" onClick={() => addChild(selectedId)} title="Add child (Tab)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg></button>
-          <button className="mm-btn" onClick={() => addSibling(selectedId)} title="Add sibling (Enter)" disabled={selectedId === 'root'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5H7m0 0v12m0-12l-3 3m3-3l3 3"/></svg></button>
-          <button className="mm-btn mm-btn--danger" onClick={() => hasBulk ? bulkDelete() : deleteNode(selectedId)} title="Delete (Del)" disabled={selectedId === 'root' && !hasBulk}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
-          <div className="mm-toolbar-sep" />
-          <button className="mm-btn" onClick={() => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }} title="Checkbox (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></button>
-          <button className="mm-btn" onClick={() => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); }} title="Progress (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 017.07 17.07" strokeLinecap="round"/></svg></button>
+          {densityPreset === 'large' && (
+            <div className="mm-ribbon-tabs" role="tablist">
+              {(['home', 'insert', 'view', 'export'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeRibbonTab === t}
+                  className={`mm-ribbon-tab${activeRibbonTab === t ? ' mm-ribbon-tab--active' : ''}`}
+                  onClick={() => setActiveRibbonTab(t)}
+                >
+                  {t === 'home' ? 'Home' : t === 'insert' ? 'Insert' : t === 'view' ? 'View' : 'Export'}
+                </button>
+              ))}
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'home') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="home">
+              <span className="mm-toolbar-group-label">Edit</span>
+              <div className="mm-toolbar-group-btns">
+          <button className="mm-btn" onClick={undo} data-label="Undo" data-shortcut={formatButtonShortcut('edit.undo', keyboardLayout)} title="Undo (F9)" disabled={historyIdx <= 0}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
+          <button className="mm-btn" onClick={redo} data-label="Redo" data-shortcut={formatButtonShortcut('edit.redo', keyboardLayout)} title="Redo (F10)" disabled={historyIdx >= history.length - 1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'home') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="home">
+              <span className="mm-toolbar-group-label">Node</span>
+              <div className="mm-toolbar-group-btns">
+          <button className="mm-btn" onClick={() => addChild(selectedId)} data-label="Child" data-shortcut={formatButtonShortcut('node.addChild', keyboardLayout)} title="Add child (Tab)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg></button>
+          <button className="mm-btn" onClick={() => addSibling(selectedId)} data-label="Sibling" data-shortcut={formatButtonShortcut('node.addSibling', keyboardLayout)} title="Add sibling (Enter)" disabled={selectedId === 'root'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5H7m0 0v12m0-12l-3 3m3-3l3 3"/></svg></button>
+          <button className="mm-btn mm-btn--danger" onClick={() => hasBulk ? bulkDelete() : deleteNode(selectedId)} data-label="Delete" data-shortcut={formatButtonShortcut('node.delete', keyboardLayout)} title="Delete (Del)" disabled={selectedId === 'root' && !hasBulk}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'home') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="home">
+              <span className="mm-toolbar-group-label">Format</span>
+              <div className="mm-toolbar-group-btns">
+          <button className="mm-btn" onClick={() => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }} data-label="Checkbox" data-shortcut={formatButtonShortcut('node.checkbox', keyboardLayout)} title="Checkbox (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></button>
+          <button className="mm-btn" onClick={() => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); }} data-label="Progress" data-shortcut={formatButtonShortcut('node.progress', keyboardLayout)} title="Progress (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 017.07 17.07" strokeLinecap="round"/></svg></button>
           <div style={{ position: 'relative' }}>
-            <button className="mm-btn mm-btn--color" onClick={() => setShowColorPicker((v) => !v)} title="Color (F4)" style={{ background: selNode?.color ?? 'transparent' }}>
+            <button className="mm-btn mm-btn--color" onClick={() => setShowColorPicker((v) => !v)} data-label="Colour" data-shortcut={formatButtonShortcut('node.colour', keyboardLayout)} title="Color (F4)" style={{ background: selNode?.color ?? 'transparent' }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
             </button>
             <MindMapColorPicker open={showColorPicker} currentColor={selNode?.color ?? null} onSelect={(c) => { hasBulk ? bulkSetColor(c) : setNodeColor(selectedId, c); setShowColorPicker(false); }} onClose={() => setShowColorPicker(false)} showToast={showToast} />
           </div>
           <div style={{ position: 'relative' }}>
-            <button className="mm-btn" onClick={() => setShowIconPicker((v) => !v)} title="Icons (I)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
+            <button className="mm-btn" onClick={() => setShowIconPicker((v) => !v)} data-label="Icons" data-shortcut={formatButtonShortcut('node.icons', keyboardLayout)} title="Icons (I)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
             <MindMapIconPicker open={showIconPicker} currentIcons={selNode?.icons ?? []} onSelect={(name: string | null) => hasBulk ? bulkSetIcon(name) : setNodeIcon(selectedId, name)} onClose={() => setShowIconPicker(false)} showToast={showToast} />
           </div>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'insert') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="insert">
+              <span className="mm-toolbar-group-label">Content</span>
+              <div className="mm-toolbar-group-btns">
           <button
             className={`mm-btn mm-btn--notes${selNodeAttachmentCount > 0 ? ' mm-btn--notes-has-files' : ''}`}
+            data-label="Notes"
+            data-shortcut={formatButtonShortcut('node.notesToggle', keyboardLayout)}
             onClick={() => openNotes(selectedId)}
             title={selNodeAttachmentCount > 0 ? `Notes (F3) · ${selNodeAttachmentLabel}${selNodeAttachmentNames ? `: ${selNodeAttachmentNames}` : ''}` : 'Notes (F3)'}
           >
@@ -2653,19 +2741,28 @@ export function DesktopMindMapEditor({
               </span>
             )}
           </button>
-          <button className="mm-btn" onClick={() => setShowDateDialog(true)} title="Dates (D)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></button>
-          <button className={`mm-btn${showTagDialog ? ' mm-btn--active' : ''}`} onClick={() => setShowTagDialog((v) => !v)} title="Tags (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg></button>
-          <div className="mm-toolbar-sep" />
-          <button className="mm-btn" onClick={() => setZoom((z) => Math.min(3, z + 0.15))} title="Zoom in (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 8v6m-3-3h6"/></svg></button>
-          <button className="mm-btn" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))} title="Zoom out (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M8 11h6"/></svg></button>
-          <button className="mm-btn" onClick={fitView} title="Fit view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg></button>
-          <button className="mm-btn" onClick={() => autoAlignSubtree(selectedId)} title={selectedId === 'root' ? 'Auto-align all nodes (A)' : 'Auto-align subtree (A)'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M3 12h12M3 18h8"/></svg></button>
-          <button className={`mm-btn${focusMode ? ' mm-btn--active' : ''}`} onClick={() => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }} title="Focus mode (F5)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2m8.66-17.66l-1.41 1.41M4.75 19.25l-1.41 1.41M23 12h-2M3 12H1m17.66 7.66l-1.41-1.41M4.75 4.75L3.34 3.34"/></svg></button>
-          <button className="mm-btn" onClick={() => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }} title="Search (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
-          <div className="mm-toolbar-sep" />
-          <button className="mm-btn" onClick={() => setShowShortcuts((v) => !v)} title="Shortcuts (F1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg></button>
+          <button className="mm-btn" onClick={() => setShowDateDialog(true)} data-label="Dates" data-shortcut={formatButtonShortcut('node.dates', keyboardLayout)} title="Dates (D)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></button>
+          <button className={`mm-btn${showTagDialog ? ' mm-btn--active' : ''}`} onClick={() => setShowTagDialog((v) => !v)} data-label="Tags" data-shortcut={formatButtonShortcut('node.labels', keyboardLayout)} title="Tags (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg></button>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'insert') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="insert">
+              <span className="mm-toolbar-group-label">Files</span>
+              <div className="mm-toolbar-group-btns">
+                <button
+                  className="mm-btn"
+                  data-label="Image"
+                  data-shortcut={formatButtonShortcut('node.addImage', keyboardLayout)}
+                  onClick={() => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }}
+                  title={`Add a picture to the selected node (${formatShortcut('node.addImage', keyboardLayout)})`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 15l-5-5L5 21"/></svg>
+                </button>
           <button
             className="mm-btn"
+            data-label="Attach"
+            data-shortcut={formatButtonShortcut('node.attachFile', keyboardLayout)}
             onClick={() => nodeAttachmentInputRef.current?.click()}
             title="Attach encrypted files to selected node (F6)"
             disabled={!onNodeFileDrop || selectedId === 'root'}
@@ -2677,23 +2774,57 @@ export function DesktopMindMapEditor({
               <button
                 className="mm-btn"
                 onClick={() => onOpenSecurePanel('attachments')}
-                title="Vault files (F7)"
+                data-label="Vault files" data-shortcut={formatButtonShortcut('vault.files', keyboardLayout)} title="Vault files (F7)"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4h5l2 2h9a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
               </button>
               <button
                 className="mm-btn"
                 onClick={() => onOpenSecurePanel('shares')}
-                title="Share exports (F8)"
+                data-label="Shares" data-shortcut={formatButtonShortcut('vault.shares', keyboardLayout)} title="Share exports (F8)"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               </button>
             </>
           )}
-          {onExportMarkdown && <div className="mm-toolbar-sep" />}
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'view') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="view">
+              <span className="mm-toolbar-group-label">Zoom</span>
+              <div className="mm-toolbar-group-btns">
+          <button className="mm-btn" onClick={() => setZoom((z) => Math.min(3, z + 0.15))} data-label="Zoom in" data-shortcut={formatButtonShortcut('view.zoomIn', keyboardLayout)} title="Zoom in (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 8v6m-3-3h6"/></svg></button>
+          <button className="mm-btn" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))} data-label="Zoom out" data-shortcut={formatButtonShortcut('view.zoomOut', keyboardLayout)} title="Zoom out (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M8 11h6"/></svg></button>
+          <button className="mm-btn" onClick={fitView} data-label="Fit" data-shortcut={formatButtonShortcut('view.zoomFit', keyboardLayout)} title="Fit view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg></button>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'view') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="view">
+              <span className="mm-toolbar-group-label">Arrange</span>
+              <div className="mm-toolbar-group-btns">
+          <button className="mm-btn" data-label="Align" data-shortcut={formatButtonShortcut('node.autoAlign', keyboardLayout)} onClick={() => autoAlignSubtree(selectedId)} title={selectedId === 'root' ? 'Auto-align all nodes (A)' : 'Auto-align subtree (A)'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M3 12h12M3 18h8"/></svg></button>
+          <button className={`mm-btn${focusMode ? ' mm-btn--active' : ''}`} onClick={() => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }} data-label="Focus" data-shortcut={formatButtonShortcut('view.focusMode', keyboardLayout)} title="Focus mode (F5)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2m8.66-17.66l-1.41 1.41M4.75 19.25l-1.41 1.41M23 12h-2M3 12H1m17.66 7.66l-1.41-1.41M4.75 4.75L3.34 3.34"/></svg></button>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'view') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="view">
+              <span className="mm-toolbar-group-label">Find</span>
+              <div className="mm-toolbar-group-btns">
+          <button className="mm-btn" onClick={() => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }} data-label="Search" data-shortcut={formatButtonShortcut('find.search', keyboardLayout)} title="Search (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+          <button className="mm-btn" onClick={() => setShowShortcuts((v) => !v)} data-label="Shortcuts" data-shortcut={formatButtonShortcut('find.shortcuts', keyboardLayout)} title="Shortcuts (F1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg></button>
+              </div>
+            </div>
+          )}
+          {(densityPreset !== 'large' || activeRibbonTab === 'export') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="export">
+              <span className="mm-toolbar-group-label">Output</span>
+              <div className="mm-toolbar-group-btns">
           {onExportMarkdown && (
             <div style={{ position: 'relative' }}>
-              <button className="mm-btn" onClick={() => setShowExportMenu((v) => !v)} title="Export">
+              <button className="mm-btn" onClick={() => setShowExportMenu((v) => !v)} data-label="Export" title="Export">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
               </button>
               {showExportMenu && (
@@ -2737,6 +2868,45 @@ export function DesktopMindMapEditor({
               )}
             </div>
           )}
+              </div>
+            </div>
+          )}
+          {toolbarMode === 'essentials' && (
+            <div style={{ position: 'relative' }}>
+              <button className="mm-btn mm-essential" data-label="More" onClick={() => setShowToolbarOverflow((v) => !v)} title="More actions">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/></svg>
+              </button>
+              {showToolbarOverflow && (
+                <div className="mm-overflow-menu" onMouseDown={(e) => e.stopPropagation()}>
+                  {([
+                    ['node.checkbox', 'Checkbox', () => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }],
+                    ['node.progress', 'Progress', () => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); }],
+                    ['node.colour', 'Colour', () => setShowColorPicker((v) => !v)],
+                    ['node.icons', 'Icons', () => setShowIconPicker((v) => !v)],
+                    ['node.notesToggle', 'Notes', () => openNotes(selectedId)],
+                    ['node.dates', 'Dates', () => setShowDateDialog(true)],
+                    ['node.labels', 'Tags', () => setShowTagDialog((v) => !v)],
+                    ['node.addImage', 'Image', () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }],
+                    ['node.attachFile', 'Attach file', () => nodeAttachmentInputRef.current?.click()],
+                    ['view.zoomIn', 'Zoom in', () => setZoom((z) => Math.min(3, z + 0.15))],
+                    ['view.zoomOut', 'Zoom out', () => setZoom((z) => Math.max(0.3, z - 0.15))],
+                    ['view.zoomFit', 'Fit view', fitView],
+                    ['node.autoAlign', 'Auto-align', () => autoAlignSubtree(selectedId)],
+                    ['view.focusMode', 'Focus mode', () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }],
+                    ['find.shortcuts', 'Shortcuts', () => setShowShortcuts((v) => !v)],
+                  ] as const).map(([id, label, onClick]) => (
+                    <button key={label} className="mm-context-item" onClick={() => { onClick(); setShowToolbarOverflow(false); }}>
+                      {label}{id && <kbd>{formatShortcut(id, keyboardLayout)}</kbd>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {densityPreset !== 'large' && (
+            <div className="mm-toolbar-group">
+              <span className="mm-toolbar-group-label">Settings</span>
+              <div className="mm-toolbar-group-btns">
           <button
             className="mm-btn"
             onClick={toggleThemeMode}
@@ -2749,6 +2919,9 @@ export function DesktopMindMapEditor({
             )}
           </button>
           <SettingsButton className="mm-btn" iconClassName="" />
+              </div>
+            </div>
+          )}
         </div>
       </div>}
 
@@ -2764,7 +2937,11 @@ export function DesktopMindMapEditor({
         </div>
       )}
 
-      {/* ── Canvas ──────────────────────────────────────────────────── */}
+      {/* ── Canvas + docked trays ───────────────────────────────────── */}
+      <div className="mm-canvas-area">
+        {trayFor('top')}
+        <div className="mm-canvas-middle">
+        {trayFor('left')}
       <div className="mm-canvas-wrap">
         <svg ref={svgRef} className="mm-canvas" onMouseDown={onMouseDownSvg} onMouseMove={onMouseMoveSvg} onMouseUp={onMouseUpSvg} onMouseLeave={onMouseUpSvg}
           onTouchStart={onTouchStartSvg} onTouchMove={onTouchMoveSvg} onTouchEnd={onTouchEndSvg} onTouchCancel={onTouchEndSvg}
@@ -2818,9 +2995,13 @@ export function DesktopMindMapEditor({
         )}
         {shortcutToast && (<div className="mm-shortcut-toast"><span className="mm-shortcut-toast-key">{shortcutToast.split('—')[0].trim()}</span>{shortcutToast.includes('—') && <span className="mm-shortcut-toast-desc">{shortcutToast.split('—')[1]?.trim()}</span>}</div>)}
       </div>
+        {trayFor('right')}
+        </div>
+        {trayFor('bottom')}
+      </div>
 
       {/* ── Status bar ──────────────────────────────────────────────── */}
-      {!isMobile && (
+      {!isMobile && statusBarVisible && (
         <div className="mm-statusbar">
           <span>{flattenTree(root).length} node{flattenTree(root).length !== 1 ? 's' : ''}{multiSelect.size > 0 ? ` · ${multiSelect.size} selected` : ''}</span>
           <span>{selNode ? `Selected: ${selNode.text.split('\n')[0]}` : ''}</span>
@@ -3503,14 +3684,29 @@ export function DesktopMindMapEditor({
           ><span>Keyboard Shortcuts</span>
             <button className="mm-btn-icon" onClick={() => setShowShortcuts(false)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
-          <div className="mm-shortcuts-grid">{[
-            ['Tab / Ins', 'Add child'], ['⇧Tab', 'Add left child (root)'], ['Enter', 'Add sibling'], ['Del / ⌫', 'Delete node'], ['F2', 'Rename'], ['F3', 'Notes'], ['Ctrl+E', 'Edit notes'],
-            ['F4', 'Colour picker'], ['F5 / F', 'Focus mode'], ['F6', 'Attach encrypted file'], ['Alt+K', 'Add image to node'], ['F7', 'Vault files'], ['F8', 'Share exports'], ['F1', 'Shortcuts'], ['F9 / Ctrl+Z', 'Undo'], ['F10 / Ctrl+Y', 'Redo'], ['Space', 'Fold / Unfold'],
-            ['↑ ↓ ← →', 'Navigate (spatial)'], ['⇧+Arrow', 'Multi-select'], ['Ctrl+Click', 'Toggle select'], ['⇧+Drag', 'Rectangle select'],
-            ['Home', 'Root'], ['+ −', 'Zoom'], ['Ctrl+S', 'Save'],
-            ['C', 'Checkbox'], ['P', 'Progress'], ['I', 'Icons'], ['D', 'Dates'], ['U', 'URL'], ['T', 'Labels'], ['R', 'Reset pos'], ['A', 'Auto-align'],
-            ['Ctrl+⇧R', 'Reset all'], ['Ctrl+F', 'Search'], ['Esc', 'Cancel / Clear'],
-          ].map(([k, v]) => (<div key={k} className="mm-shortcut-row"><kbd className="mm-kbd">{k}</kbd><span>{v}</span></div>))}</div>
+          <div className="mm-shortcuts-grid">
+            {(['Nodes', 'Format', 'View', 'Edit', 'Find', 'File'] as const).map((group) => (
+              <Fragment key={group}>
+                <div className="mm-shortcuts-group-label">{group}</div>
+                {SHORTCUTS.filter((sc) => sc.group === group).map((sc) => (
+                  <div key={sc.id} className="mm-shortcut-row">
+                    <kbd className="mm-kbd">{formatShortcut(sc.id, keyboardLayout)}</kbd>
+                    <span>{sc.label}</span>
+                  </div>
+                ))}
+              </Fragment>
+            ))}
+            <Fragment>
+              <div className="mm-shortcuts-group-label">Selection</div>
+              {[
+                ['↑ ↓ ← →', 'Navigate (spatial)'],
+                ['⇧+Arrow', 'Multi-select'],
+                [isMac ? '⌘+Click' : 'Ctrl+Click', 'Toggle select'],
+                ['⇧+Drag', 'Rectangle select'],
+                ['Esc', 'Cancel / Clear'],
+              ].map(([k, v]) => (<div key={k} className="mm-shortcut-row"><kbd className="mm-kbd">{k}</kbd><span>{v}</span></div>))}
+            </Fragment>
+          </div>
         </div>
       )}
 
