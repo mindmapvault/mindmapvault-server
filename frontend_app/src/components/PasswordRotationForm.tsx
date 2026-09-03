@@ -3,6 +3,7 @@ import { authApi } from '../api/auth';
 import { buildPasswordRotationBundle } from '../crypto/keyRotation';
 import type { LocalProfileForRotation } from '../crypto/keyRotation';
 import { useAuthStore } from '../store/auth';
+import { PasswordInput } from './PasswordInput';
 
 const inputStyle = {
   background: 'var(--surface-2)',
@@ -201,8 +202,7 @@ export function PasswordRotationForm() {
       )}
 
       <div className="mt-3 space-y-3">
-        <input
-          type="password"
+        <PasswordInput
           value={currentPassword}
           onChange={(e) => setCurrentPassword(e.target.value)}
           placeholder="Current password"
@@ -211,8 +211,7 @@ export function PasswordRotationForm() {
           className="w-full rounded-lg px-3 py-2 text-sm"
           style={inputStyle}
         />
-        <input
-          type="password"
+        <PasswordInput
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
           placeholder="New password (min. 12 characters)"
@@ -221,8 +220,7 @@ export function PasswordRotationForm() {
           className="w-full rounded-lg px-3 py-2 text-sm"
           style={inputStyle}
         />
-        <input
-          type="password"
+        <PasswordInput
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
           placeholder="Confirm new password"

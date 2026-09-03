@@ -19,6 +19,7 @@ import type { PublicMapShareAttachmentMetadata, PublicMapShareResponse } from '.
 import { toBase64 } from '../crypto/utils';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { IMPORTED_SHARE_LABEL } from '../utils/vaultLabels';
+import { PasswordInput } from '../components/PasswordInput';
 
 type UnlockedShareState = {
   payload: Awaited<ReturnType<typeof decryptShareBundle>>;
@@ -347,8 +348,7 @@ export function SharedVaultPage() {
 
               <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/55 p-4">
                 <label className="text-xs uppercase tracking-[0.18em] text-slate-500">Share passphrase</label>
-                <input
-                  type="password"
+                <PasswordInput
                   value={passphrase}
                   onChange={(event) => setPassphrase(event.target.value)}
                   placeholder={share.passphrase_hint ? `Hint: ${share.passphrase_hint}` : 'Enter the share passphrase'}

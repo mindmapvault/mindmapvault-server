@@ -27,7 +27,9 @@ export function PasswordInput({ className, ...props }: PasswordInputProps) {
         {...props}
         id={props.id ?? id}
         type={visible ? 'text' : 'password'}
-        className={className ?? DEFAULT_CLASS}
+        // The toggle sits inside the field, so every caller needs room for it
+        // on the right — guaranteed here rather than left to each call site.
+        className={`${className ?? DEFAULT_CLASS} pr-11`}
       />
       <button
         type="button"

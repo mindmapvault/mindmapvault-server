@@ -8,6 +8,7 @@ import { fromBase64, randomBytes, toBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 import type { SessionKeys } from '../types';
+import { PasswordInput } from '../components/PasswordInput';
 
 interface LocalProfile {
   username: string;
@@ -267,8 +268,7 @@ export function LocalUnlockPage() {
                            text-[var(--fg)] opacity-70 cursor-default outline-none"
               />
             )}
-            <input
-              type="password"
+            <PasswordInput
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -334,8 +334,7 @@ export function LocalUnlockPage() {
                          text-[var(--fg)] focus:border-[var(--accent)] outline-none"
               disabled={working}
             />
-            <input
-              type="password"
+            <PasswordInput
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -344,8 +343,7 @@ export function LocalUnlockPage() {
                          text-[var(--fg)] focus:border-[var(--accent)] outline-none"
               disabled={working}
             />
-            <input
-              type="password"
+            <PasswordInput
               placeholder="Confirm password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
