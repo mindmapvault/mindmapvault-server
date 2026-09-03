@@ -1,7 +1,8 @@
 # Refactoring plan: MindMapEditor
 
 Written 2026-09-04, after the same split was done in `mindmapvault-live` and
-proved out there. Not started — this file is the proposal.
+proved out there. **Steps 1-5 are done, and step 6 in part.** Step 7 is
+deliberately not being done; both remainders are explained at the bottom.
 
 ## The blocker, first
 
@@ -61,10 +62,45 @@ Each step is a commit that leaves the app working.
 | 3 | Move `geometry.ts` + `MindMapLayout.ts` into `packages/mindmap-core` | Stops `-server` and `-saas` drifting further apart |
 | 4 | Split the node renderer by **band** — date badge, meta strip, tags, body, footer, controls | The node has a vertical structure the geometry already knows; splitting by field instead produces twenty tiny components that all recompute offsets |
 | 5 | Extract the pure tree operations (`addChild`, `deleteNode`, `moveNode`, `reparentNode`, `duplicateNode`, the bulk ones) into a tested module | They are the operations that can lose a subtree; they need tests more than anything else here |
-| 6 | Extract hooks: viewport (pan/zoom/pinch), selection, drag, history | Removes most of the remaining state from the component |
-| 7 | Split the CSS by area, keeping every `mm-*` name | Lowest risk, do it whenever |
+| 6 | Extract hooks: ~~viewport (pan/zoom/pinch)~~, selection, drag, ~~history~~ | Viewport and history are out; **selection and drag are not — see below** |
+| 7 | ~~Split the CSS by area, keeping every `mm-*` name~~ | **Not doing it — see below** |
 
 Steps 1 and 2 are worth doing even if nothing else happens.
+
+## Why half of step 6 is not being done
+
+Viewport and history came out as `viewport.ts` + `useViewport.ts` and
+`history.ts` + `useMindMapHistory.ts`, each split pure-logic-plus-hook so the
+awkward parts are testable without rendering. Selection and drag did not, and
+listing all four on one row was the plan guessing that they were the same
+shape of job. They are not.
+
+Viewport and history each own their state and are asked questions by the rest
+of the editor. Selection and drag are the opposite: `selectedId`,
+`multiSelect`, `rectSel` and `dragRef` are read and written across the pointer
+handlers, the marquee, the keyboard shortcuts, the context menus, the toolbar
+and the layout, and dragging commits through the same `mutate` as every tree
+edit. Pulling them out is not the same move again — it is a bigger job than
+the other two together, and it changes the editor's control flow rather than
+relocating a slice of it.
+
+Worth doing, with its own tests and its own commit. Not worth doing as the
+tail of another step.
+
+## Why step 7 is not being done
+
+`MindMapEditor.css` is 3,409 lines here, and `-saas`'s copy of it has diverged:
+roughly fifty ported rule blocks plus several fixes live there and not here.
+Whoever reconciles the two is already facing a cross-repo diff of rule bodies.
+Splitting this side into separate files first would put a file-boundary diff on
+top of that, to buy structure that nothing is currently blocked on.
+
+That is this plan's own warning about the CSS, applied to the end of the
+sequence rather than the start: it is the safest change and therefore the one
+that feels like progress. Doing six steps and explaining the seventh is better
+than doing seven and taxing the port.
+
+Do it *after* the two stylesheets are reconciled, not before.
 
 ## What not to do
 
@@ -81,12 +117,42 @@ Steps 1 and 2 are worth doing even if nothing else happens.
 
 ## Done when
 
-- `npm test` runs in `frontend_app` and covers layout, geometry and the tree
-  operations
-- The band arithmetic exists once
-- No component over ~300 lines
-- `-server` and `-saas` import the same `packages/mindmap-core`, so the next
-  fix lands in both
+- ~~`npm test` runs in `frontend_app` and covers layout, geometry and the tree
+  operations~~ — done: 74 tests over the geometry, layout, tree operations,
+  history and viewport. Selection and drag have none, because they are still
+  in the component.
+- ~~The band arithmetic exists once~~ — done. It was in three places and one of
+  them, the vault preview, was measurably wrong.
+- **No component over ~300 lines** — not met, and the bar was drawn in the
+  wrong place. See below.
+- `-server` and `-saas` import the same `packages/mindmap-core` — half done.
+  The package exists here and `-saas` is unchanged, because `packages/` is
+  per-repo rather than a workspace. Copying it across is a separate job in
+  that repo.
+
+### On the 300-line bar
+
+`MindMapEditor.tsx` went 3,794 → 3,349, which is not the number this bar was
+imagining. The bar was wrong in two ways.
+
+It counted the wrong thing. What made the file hard to work on was not its
+length, it was that the same arithmetic was written down three times and drifted
+between the copies. That is fixed, and it would have been fixed by these changes
+whether or not the line count moved.
+
+And it assumed the leftovers would divide. What is left in `MindMapEditor.tsx`
+is attachments, images, audio recording, notes, publishing, boards, exports,
+Tauri paths, the command palette, the context menus and the toolbar — a dozen
+features that share a selection and a tree and not much else. Splitting *those*
+apart is a different project with a different justification, and doing it to hit
+a line count would produce components that pass state through each other to no
+one's benefit.
+
+The parts that had a reason to come out have come out: geometry, layout, the
+node's bands, the tree operations, history, viewport. `NodeBands.tsx` at 534
+lines and `treeOps.ts` at 304 are over the bar and should stay as they are —
+they are one coherent thing each, and cutting them to hit a number would be the
+twenty-tiny-components mistake this plan already warns about in step 4.
 
 ## Reference
 

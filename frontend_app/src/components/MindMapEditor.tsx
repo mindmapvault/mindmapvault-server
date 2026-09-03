@@ -72,6 +72,9 @@ import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
 import { handleDelegatedLinkClick } from '../utils/openExternal';
 import * as ops from './mindmap/treeOps';
+import { useMindMapHistory } from './mindmap/useMindMapHistory';
+import { useViewport } from './mindmap/useViewport';
+import { readViewState } from './mindmap/viewport';
 import { createNodeImageGlyph, type NodeImageGlyph } from '../utils/filePreview';
 import './MindMapEditor.css';
 
@@ -152,22 +155,10 @@ export function DesktopMindMapEditor({
   const [attachmentPreviewBusy, setAttachmentPreviewBusy] = useState(false);
 
   // ── View ───────────────────────────────────────────────────────────────────
-  const [zoom, setZoom] = useState(() => {
-    const raw = initialTree?.view_state?.zoom;
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) return 1;
-    return Math.min(3, Math.max(0.3, raw));
-  });
-  const [pan, setPan] = useState(() => {
-    const panX = initialTree?.view_state?.pan_x;
-    const panY = initialTree?.view_state?.pan_y;
-    return {
-      x: typeof panX === 'number' && Number.isFinite(panX) ? panX : 160,
-      y: typeof panY === 'number' && Number.isFinite(panY) ? panY : 300,
-    };
-  });
-  const isPanning = useRef(false);
-  const lastPan = useRef({ x: 0, y: 0 });
-  const pinchRef = useRef<{ dist: number; zoom: number } | null>(null);
+  // Private to this user on this device: pan, zoom and what is on screen are
+  // never part of the document.
+  const viewport = useViewport(initialTree?.view_state);
+  const { pan, zoom } = viewport;
   const skipNextAutoPan = useRef(false);
 
   // ── UI toggles ─────────────────────────────────────────────────────────────
@@ -409,10 +400,14 @@ export function DesktopMindMapEditor({
   }, []);
 
   // ── History (undo/redo) ────────────────────────────────────────────────────
-  const historyRef = useRef<MindMapTreeNode[]>([migrateNode(initialTree?.root ?? defaultRoot())]);
-  const historyIdxRef = useRef(0);
-  const [history, setHistoryState] = useState<MindMapTreeNode[]>(() => historyRef.current);
-  const [historyIdx, setHistoryIdx] = useState(0);
+  const restoreFromHistory = useCallback((restored: MindMapTreeNode) => {
+    setRoot(restored);
+    setIsDirty(true);
+  }, []);
+  const history = useMindMapHistory(
+    migrateNode(initialTree?.root ?? defaultRoot()),
+    restoreFromHistory,
+  );
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const svgRef = useRef<SVGSVGElement>(null);
@@ -466,18 +461,9 @@ export function DesktopMindMapEditor({
     setRoot(r);
     setRootLeftCollapsed(false);
     setRootRightCollapsed(false);
-    historyRef.current = [cloneTree(r)];
-    historyIdxRef.current = 0;
-    setHistoryState([cloneTree(r)]);
-    setHistoryIdx(0);
+    history.reset(r);
     setSelectedId(nextSelectedId);
-    const nextPanX = typeof savedView?.pan_x === 'number' && Number.isFinite(savedView.pan_x) ? savedView.pan_x : 160;
-    const nextPanY = typeof savedView?.pan_y === 'number' && Number.isFinite(savedView.pan_y) ? savedView.pan_y : 300;
-    const nextZoom = typeof savedView?.zoom === 'number' && Number.isFinite(savedView.zoom)
-      ? Math.min(3, Math.max(0.3, savedView.zoom))
-      : 1;
-    setPan({ x: nextPanX, y: nextPanY });
-    setZoom(nextZoom);
+    viewport.applyView(readViewState(savedView));
     setFocusMode(Boolean(savedView?.focus_mode));
     setFocusAnchorId(nextFocusAnchor);
     skipNextAutoPan.current = true;
@@ -654,38 +640,14 @@ export function DesktopMindMapEditor({
   }, [attachmentById, loadAttachmentPreview, onLoadNodeAttachmentPreview]);
 
   // ── History helpers ───────────────────────────────────────────────────────
-  const pushHistory = useCallback((newRoot: MindMapTreeNode) => {
-    const idx = historyIdxRef.current;
-    const next = [...historyRef.current.slice(0, idx + 1), cloneTree(newRoot)].slice(-50);
-    historyRef.current = next;
-    historyIdxRef.current = next.length - 1;
-    setHistoryState(next);
-    setHistoryIdx(next.length - 1);
-  }, []);
-
   const mutate = useCallback((newRoot: MindMapTreeNode) => {
     setRoot(newRoot);
-    pushHistory(newRoot);
+    history.push(newRoot);
     setIsDirty(true);
-  }, [pushHistory]);
+  }, [history]);
 
-  const undo = useCallback(() => {
-    if (historyIdxRef.current <= 0) return;
-    const idx = historyIdxRef.current - 1;
-    historyIdxRef.current = idx;
-    setHistoryIdx(idx);
-    setRoot(cloneTree(historyRef.current[idx]));
-    setIsDirty(true);
-  }, []);
-
-  const redo = useCallback(() => {
-    if (historyIdxRef.current >= historyRef.current.length - 1) return;
-    const idx = historyIdxRef.current + 1;
-    historyIdxRef.current = idx;
-    setHistoryIdx(idx);
-    setRoot(cloneTree(historyRef.current[idx]));
-    setIsDirty(true);
-  }, []);
+  const undo = history.undo;
+  const redo = history.redo;
 
   // ══════════════════════════════════════════════════════════════════════════
   //  TREE MUTATIONS
@@ -1223,7 +1185,7 @@ export function DesktopMindMapEditor({
     else if (right > width - margin) dx = (width - margin) - right;
     if (top < 60 + margin) dy = (60 + margin) - top;
     else if (bottom > height - margin) dy = (height - margin) - bottom;
-    if (dx !== 0 || dy !== 0) setPan({ x: pan.x + dx, y: pan.y + dy });
+    viewport.nudgePan(dx, dy);
   }, [disableAutoPanToSelection, selectedId, layout]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Save handler ──────────────────────────────────────────────────────────
@@ -1369,8 +1331,8 @@ export function DesktopMindMapEditor({
       'node.labels': () => setShowTagDialog((v) => !v),
       'view.root': () => setSelectedId('root'),
       'view.focusMode': () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); },
-      'view.zoomIn': () => setZoom((z) => Math.min(3, z + 0.15)),
-      'view.zoomOut': () => setZoom((z) => Math.max(0.3, z - 0.15)),
+      'view.zoomIn': () => viewport.zoomBy(0.15),
+      'view.zoomOut': () => viewport.zoomBy(-0.15),
       'view.zoomFit': () => { fitView(); },
       'view.colourTray': () => setColourTray(!colourTrayEnabled),
       'view.iconTray': () => setIconTray(!iconTrayEnabled),
@@ -1495,8 +1457,8 @@ export function DesktopMindMapEditor({
   // ══════════════════════════════════════════════════════════════════════════
 
   const onWheelNative = useCallback((e: WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom((z) => Math.min(3, Math.max(0.3, z - e.deltaY * 0.001))); }
-    else setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); viewport.zoomBy(-e.deltaY * 0.001); }
+    else viewport.nudgePan(-e.deltaX, -e.deltaY);
   }, []);
 
   useEffect(() => {
@@ -1512,15 +1474,13 @@ export function DesktopMindMapEditor({
     if (e.shiftKey) {
       const rect = svgRef.current?.getBoundingClientRect();
       if (rect) {
-        const sx = (e.clientX - rect.left - pan.x) / zoom;
-        const sy = (e.clientY - rect.top - pan.y) / zoom;
-        setRectSel({ startX: sx, startY: sy, curX: sx, curY: sy });
+        const start = viewport.toCanvas(e.clientX, e.clientY, rect);
+        setRectSel({ startX: start.x, startY: start.y, curX: start.x, curY: start.y });
       }
       e.preventDefault();
       return;
     }
-    isPanning.current = true;
-    lastPan.current = { x: e.clientX, y: e.clientY };
+    viewport.beginPan(e.clientX, e.clientY);
     e.currentTarget.style.cursor = 'grabbing';
     setContextMenu(null);
     setMultiSelect(new Set());
@@ -1531,9 +1491,8 @@ export function DesktopMindMapEditor({
     if (rectSel) {
       const rect = svgRef.current?.getBoundingClientRect();
       if (rect) {
-        const cx = (e.clientX - rect.left - pan.x) / zoom;
-        const cy = (e.clientY - rect.top - pan.y) / zoom;
-        setRectSel((r) => r ? { ...r, curX: cx, curY: cy } : null);
+        const at = viewport.toCanvas(e.clientX, e.clientY, rect);
+        setRectSel((r) => r ? { ...r, curX: at.x, curY: at.y } : null);
       }
       return;
     }
@@ -1570,52 +1529,37 @@ export function DesktopMindMapEditor({
       }
       return;
     }
-    if (!isPanning.current) return;
-    const dx = e.clientX - lastPan.current.x;
-    const dy = e.clientY - lastPan.current.y;
-    lastPan.current = { x: e.clientX, y: e.clientY };
-    setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
-  }, [zoom, layout, rectSel, pan, multiSelect]);
+    viewport.continuePan(e.clientX, e.clientY);
+  }, [zoom, layout, rectSel, viewport, multiSelect]);
+
+  /** The browser's TouchList, as the two points a pinch is measured between. */
+  const touchPair = (touches: React.TouchList) => ({
+    a: { x: touches[0].clientX, y: touches[0].clientY },
+    b: { x: touches[1].clientX, y: touches[1].clientY },
+  });
 
   const onTouchStartSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
     if (e.touches.length === 2) {
-      isPanning.current = false;
-      const dx = e.touches[1].clientX - e.touches[0].clientX;
-      const dy = e.touches[1].clientY - e.touches[0].clientY;
-      pinchRef.current = { dist: Math.sqrt(dx * dx + dy * dy), zoom };
+      viewport.beginPinch(touchPair(e.touches));
       return;
     }
     if (e.touches.length !== 1) return;
     if ((e.target as SVGElement).closest('[data-node]')) return;
-    const touch = e.touches[0];
-    isPanning.current = true;
-    lastPan.current = { x: touch.clientX, y: touch.clientY };
+    viewport.beginPan(e.touches[0].clientX, e.touches[0].clientY);
     setContextMenu(null);
     setMultiSelect(new Set());
-  }, [zoom]);
+  }, [viewport]);
 
   const onTouchMoveSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
-    if (e.touches.length === 2 && pinchRef.current) {
-      const dx = e.touches[1].clientX - e.touches[0].clientX;
-      const dy = e.touches[1].clientY - e.touches[0].clientY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const next = Math.max(0.2, Math.min(4, pinchRef.current.zoom * (dist / pinchRef.current.dist)));
-      setZoom(next);
-      return;
-    }
-    if (!isPanning.current || e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    const dx = touch.clientX - lastPan.current.x;
-    const dy = touch.clientY - lastPan.current.y;
-    lastPan.current = { x: touch.clientX, y: touch.clientY };
-    setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
-  }, []);
+    if (e.touches.length === 2 && viewport.continuePinch(touchPair(e.touches))) return;
+    if (e.touches.length !== 1) return;
+    viewport.continuePan(e.touches[0].clientX, e.touches[0].clientY);
+  }, [viewport]);
 
   const onTouchEndSvg = useCallback(() => {
-    isPanning.current = false;
-    pinchRef.current = null;
+    viewport.endGesture();
     if (svgRef.current) svgRef.current.style.cursor = '';
-  }, []);
+  }, [viewport]);
 
   const getNodeIdAtClientPoint = useCallback((clientX: number, clientY: number): string | null => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1886,7 +1830,7 @@ export function DesktopMindMapEditor({
       setRectSel(null);
       return;
     }
-    isPanning.current = false;
+    viewport.endPan();
     if (svgRef.current) svgRef.current.style.cursor = '';
     if (dragRef.current && dragRef.current.moved) {
       const d = dragRef.current;
@@ -1936,9 +1880,8 @@ export function DesktopMindMapEditor({
     const scaleX = (width - pad * 2) / (maxX - minX || 1);
     const scaleY = (height - pad * 2) / (maxY - minY || 1);
     const z = Math.min(Math.min(scaleX, scaleY), 2);
-    setZoom(z);
-    setPan({ x: pad - minX * z, y: pad - minY * z });
-  }, [layout]);
+    viewport.applyView({ zoom: z, pan: { x: pad - minX * z, y: pad - minY * z } });
+  }, [layout, viewport]);
 
   // ══════════════════════════════════════════════════════════════════════════
   //  SVG RENDERING
@@ -2315,8 +2258,8 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="home">
               <span className="mm-toolbar-group-label">Edit</span>
               <div className="mm-toolbar-group-btns">
-          <button className="mm-btn" onClick={undo} data-label="Undo" data-shortcut={formatButtonShortcut('edit.undo', keyboardLayout)} title="Undo (F9)" disabled={historyIdx <= 0}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
-          <button className="mm-btn" onClick={redo} data-label="Redo" data-shortcut={formatButtonShortcut('edit.redo', keyboardLayout)} title="Redo (F10)" disabled={historyIdx >= history.length - 1}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
+          <button className="mm-btn" onClick={undo} data-label="Undo" data-shortcut={formatButtonShortcut('edit.undo', keyboardLayout)} title="Undo (F9)" disabled={!history.canUndo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
+          <button className="mm-btn" onClick={redo} data-label="Redo" data-shortcut={formatButtonShortcut('edit.redo', keyboardLayout)} title="Redo (F10)" disabled={!history.canRedo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
               </div>
             </div>
           )}
@@ -2406,8 +2349,8 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="view">
               <span className="mm-toolbar-group-label">Zoom</span>
               <div className="mm-toolbar-group-btns">
-          <button className="mm-btn" onClick={() => setZoom((z) => Math.min(3, z + 0.15))} data-label="Zoom in" data-shortcut={formatButtonShortcut('view.zoomIn', keyboardLayout)} title="Zoom in (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 8v6m-3-3h6"/></svg></button>
-          <button className="mm-btn" onClick={() => setZoom((z) => Math.max(0.3, z - 0.15))} data-label="Zoom out" data-shortcut={formatButtonShortcut('view.zoomOut', keyboardLayout)} title="Zoom out (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M8 11h6"/></svg></button>
+          <button className="mm-btn" onClick={() => viewport.zoomBy(0.15)} data-label="Zoom in" data-shortcut={formatButtonShortcut('view.zoomIn', keyboardLayout)} title="Zoom in (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 8v6m-3-3h6"/></svg></button>
+          <button className="mm-btn" onClick={() => viewport.zoomBy(-0.15)} data-label="Zoom out" data-shortcut={formatButtonShortcut('view.zoomOut', keyboardLayout)} title="Zoom out (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M8 11h6"/></svg></button>
           <button className="mm-btn" onClick={fitView} data-label="Fit" data-shortcut={formatButtonShortcut('view.zoomFit', keyboardLayout)} title="Fit view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg></button>
               </div>
             </div>
@@ -2536,8 +2479,8 @@ export function DesktopMindMapEditor({
                     ['node.labels', 'Tags', () => setShowTagDialog((v) => !v)],
                     ['node.addImage', 'Image', () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }],
                     ['node.attachFile', 'Attach file', () => openAttachFiles()],
-                    ['view.zoomIn', 'Zoom in', () => setZoom((z) => Math.min(3, z + 0.15))],
-                    ['view.zoomOut', 'Zoom out', () => setZoom((z) => Math.max(0.3, z - 0.15))],
+                    ['view.zoomIn', 'Zoom in', () => viewport.zoomBy(0.15)],
+                    ['view.zoomOut', 'Zoom out', () => viewport.zoomBy(-0.15)],
                     ['view.zoomFit', 'Fit view', fitView],
                     ['node.autoAlign', 'Auto-align', () => autoAlignSubtree(selectedId)],
                     ['view.focusMode', 'Focus mode', () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }],
