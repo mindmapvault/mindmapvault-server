@@ -156,6 +156,8 @@ export function EditorPage() {
   const [shareBusy, setShareBusy] = useState(false);
   // Increment to force editor remount when a historical version is loaded
   const [editorKey, setEditorKey] = useState(0);
+  /** Version currently shown in the editor; null means "the latest". */
+  const [shownVersionId, setShownVersionId] = useState<string | null>(null);
   const [versionLabel, setVersionLabel] = useState('');
   const [versionTooltip, setVersionTooltip] = useState('');
   const previewBlobUrlCacheRef = useRef<Record<string, string>>({});
@@ -164,6 +166,19 @@ export function EditorPage() {
     const fromSequence = versions.reduce((max, version) => Math.max(max, version.version_number ?? 0), 0);
     return Math.max(fallback, fromSequence, versions.length);
   }, []);
+
+  /**
+   * Label for whichever version is on screen. Deleting a version renumbers the
+   * rest, so this always recomputes from a freshly fetched list rather than
+   * trusting a number captured earlier.
+   */
+  const applyVersionLabel = useCallback((versions: VersionDetail[], viewing: string | null, fallbackTotal = 0) => {
+    const total = getVersionCountFromList(versions, fallbackTotal);
+    if (!viewing) { setVersionLabel(`v${total}`); return; }
+    const shown = versions.find((version) => version.version_id === viewing);
+    // A version that no longer exists (just deleted) falls back to the latest.
+    setVersionLabel(`v${shown?.version_number ?? total}`);
+  }, [getVersionCountFromList]);
 
   const nodeOptions = useMemo(
     () => (currentTree ? flattenAll(currentTree.root).filter((node) => node.id !== 'root').map((node) => ({ id: node.id, label: node.text.trim() || 'Untitled node' })) : []),
@@ -382,14 +397,12 @@ export function EditorPage() {
       setVersionTooltip(vdt.toLocaleString());
       // Fetch version list to show vN numbering in toolbar
       if (!isLocalMode) {
+        const viewing = (!specificVersionId || specificVersionId === detail.minio_version_id)
+          ? null
+          : specificVersionId;
+        setShownVersionId(viewing);
         void mindmapsApi.listVersions(id).then((versions) => {
-          const total = getVersionCountFromList(versions, detail.total_version_count ?? 0);
-          if (!specificVersionId || specificVersionId === detail.minio_version_id) {
-            setVersionLabel(`v${total}`);
-          } else {
-            const selectedVersion = versions.find((version) => version.version_id === specificVersionId);
-            setVersionLabel(`v${selectedVersion?.version_number ?? total}`);
-          }
+          applyVersionLabel(versions, viewing, detail.total_version_count ?? 0);
         }).catch(() => {
           setVersionLabel(`v ${vdt.toLocaleDateString()}`);
         });
@@ -401,7 +414,7 @@ export function EditorPage() {
     } finally {
       setLoading(false);
     }
-  }, [getVersionCountFromList, id, sessionKeys, isLocalMode, storage]);
+  }, [applyVersionLabel, id, sessionKeys, isLocalMode, storage]);
 
   useEffect(() => {
     if (sessionKeys) load(searchParams.get('version_id') ?? undefined);
@@ -439,35 +452,25 @@ export function EditorPage() {
   }, [offlineAdapter]);
 
   // ── Load a historical version in-place ─────────────────────────────────────────
+  /**
+   * Open a specific version. Delegates to `load`, which is also what the vault
+   * lobby's own version list uses — the editor used to carry a second, subtly
+   * different implementation that decrypted with the version's own envelope
+   * and failed on anything but the latest.
+   */
   const loadVersion = useCallback(async (v: VersionDetail) => {
-    if (!id || !sessionKeys || !v.eph_classical_public) return;
     setLoadingVersionId(v.version_id);
-    setError('');
     try {
-      const dek = await hybridDecap(
-        sessionKeys.classicalPrivKey,
-        sessionKeys.pqPrivKey,
-        fromBase64(v.eph_classical_public),
-        fromBase64(v.eph_pq_ciphertext!),
-        fromBase64(v.wrapped_dek!),
-      );
-      const blob = await mindmapsApi.downloadBlob(id, v.version_id);
-      const tree = await decryptTree(blob, dek);
-      setInitialTree(tree);
-      setCurrentTree(tree);
-      setSelectedNodeId(tree.view_state?.selected_node_id ?? 'root');
+      await load(v.version_id);
+      // The lobby's Load arrives via a fresh navigation, so the editor mounts
+      // with the new tree. Here it is already mounted and holds its own state,
+      // so it has to be remounted to pick the loaded version up.
       setEditorKey((k) => k + 1);
       setShowHistory(false);
-      if (!v.is_latest) {
-        setSaveMsg(`Loaded version from ${new Date(v.saved_at ?? v.last_modified).toLocaleString()}`);
-        setTimeout(() => setSaveMsg(''), 5000);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load version');
     } finally {
       setLoadingVersionId(null);
     }
-  }, [id, sessionKeys]);
+  }, [load]);
 
   // ── Save ────────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async (tree: MindMapTree, currentTitle: string) => {
@@ -498,8 +501,9 @@ export function EditorPage() {
       setVersionTooltip(sdt.toLocaleString());
       // Re-fetch version list to get updated vN count
       if (!isLocalMode) {
+        setShownVersionId(null);
         void mindmapsApi.listVersions(id).then((versions) => {
-          setVersionLabel(`v${getVersionCountFromList(versions)}`);
+          applyVersionLabel(versions, null);
         }).catch(() => {
           setVersionLabel(`v ${sdt.toLocaleDateString()}`);
         });
@@ -517,7 +521,7 @@ export function EditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [getVersionCountFromList, id, sessionKeys, storage, syncVaultPreviewAttachments, title]);
+  }, [applyVersionLabel, id, sessionKeys, storage, syncVaultPreviewAttachments, title]);
   // ── Rename (title only, no new blob version) ─────────────────────────────────────────
   const handleRenameTitle = useCallback(async () => {
     if (!id || !sessionKeys || !title.trim()) return;
@@ -540,7 +544,16 @@ export function EditorPage() {
   const handleDeleteVersion = useCallback(async (versionId: string) => {
     if (!id) return;
     await mindmapsApi.deleteVersion(id, versionId);
-  }, [id]);
+    // Deleting shifts the numbering of everything after it, so re-label from a
+    // fresh list rather than leaving a stale count next to the title.
+    const viewing = versionId === shownVersionId ? null : shownVersionId;
+    if (viewing !== shownVersionId) setShownVersionId(viewing);
+    try {
+      applyVersionLabel(await mindmapsApi.listVersions(id), viewing);
+    } catch {
+      // Leave the previous label rather than replacing it with a wrong one.
+    }
+  }, [id, shownVersionId, applyVersionLabel]);
 
   const buildExportFileBaseName = useCallback((baseTitle?: string) => {
     const normalizedTitle = (baseTitle || title || 'vault').trim();
