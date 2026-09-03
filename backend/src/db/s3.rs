@@ -9,46 +9,98 @@ use aws_sdk_s3::{
     presigning::PresigningConfig,
     Client as S3Client,
 };
-use chrono::{DateTime, Utc};
-use serde::Serialize;
+use uuid::Uuid;
+
 use crate::{config::AppConfig, error::AppError, models::status::BucketStats};
 
-/// A single stored version of a mind map blob in MinIO.
-#[derive(Debug, Clone, Serialize)]
-pub struct ObjectVersionInfo {
-    pub version_id: String,
-    pub is_latest: bool,
-    pub last_modified: DateTime<Utc>,
-    /// Size of the ciphertext blob in bytes.
-    pub size_bytes: i64,
-}
+/// Marker segment separating a blob's base key from its per-version objects.
+const VERSION_SEGMENT: &str = "/v/";
 
 #[derive(Debug, Clone)]
-pub struct MinioClient {
+pub struct S3Store {
     pub client: S3Client,
     pub presign_client: S3Client,
     pub bucket: String,
     pub presign_expiry: Duration,
 }
 
-impl MinioClient {
+impl S3Store {
+    /// The object key holding one stored version of a blob.
+    ///
+    /// Every save writes its own object rather than a new S3 version of a
+    /// single key. Object versioning is not part of the S3 core that
+    /// implementations agree on — Garage and Cloudflare R2 both answer
+    /// `PutBucketVersioning` and `ListObjectVersions` with `NotImplemented` —
+    /// and Garage makes the gap dangerous rather than merely inconvenient: it
+    /// returns an `x-amz-version-id` on every PUT and then ignores that id on
+    /// GET, answering with the current bytes and a 200. A store can therefore
+    /// look like it supports versioning and silently serve the wrong data.
+    ///
+    /// Addressing versions by plain key needs only PutObject, GetObject,
+    /// HeadObject, DeleteObject and ListObjectsV2, which every S3
+    /// implementation provides.
+    pub fn version_key(object_key: &str, version_id: &str) -> String {
+        format!("{object_key}{VERSION_SEGMENT}{version_id}")
+    }
+
+    /// The base key a version object belongs to, or the key itself when it is
+    /// not a version object.
+    pub fn base_key(object_key: &str) -> &str {
+        match object_key.find(VERSION_SEGMENT) {
+            Some(at) => &object_key[..at],
+            None => object_key,
+        }
+    }
+
+    /// Mints a version id.
+    ///
+    /// Generated here rather than read from the store's response, so the
+    /// identity of a version never depends on `x-amz-version-id` — R2 does not
+    /// send that header at all, and Garage's is a value it will not honour.
+    pub fn new_version_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
     fn normalize_version_id(version_id: &str) -> String {
         version_id.trim().trim_matches('"').to_string()
     }
 
-    fn validate_uploaded_version_id(version_id: &str) -> Result<String, AppError> {
+    /// Checks that a version id is safe to concatenate into an object key.
+    ///
+    /// Version ids now reach `version_key` from client requests, so this is a
+    /// path-traversal boundary, not just a tidiness check: a `/` or `..` would
+    /// address someone else's object. Ids minted here are UUIDs; ids already
+    /// stored by older builds were the object store UUIDs or Garage hex, so the character
+    /// set stays wide enough to keep reading those.
+    pub fn validate_version_id(version_id: &str) -> Result<String, AppError> {
         let version_id = Self::normalize_version_id(version_id);
         if version_id.is_empty() {
             return Err(AppError::BadRequest("version_id is required".to_string()));
         }
-
+        if version_id.len() > 128 {
+            return Err(AppError::BadRequest("version_id is too long".to_string()));
+        }
+        if !version_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+        {
+            return Err(AppError::BadRequest(format!(
+                "invalid version id '{version_id}'"
+            )));
+        }
+        // A character-class check alone still admits `..`, which is a legal S3
+        // key segment but is collapsed by URL path normalisation in some
+        // proxies and SDKs. Nothing we mint contains it, so refuse it outright
+        // rather than depend on every hop treating the key as opaque.
+        if version_id.contains("..") {
+            return Err(AppError::BadRequest(format!(
+                "invalid version id '{version_id}'"
+            )));
+        }
         Ok(version_id)
     }
 
-    fn map_head_object_error<E>(
-        error: &aws_sdk_s3::error::SdkError<E>,
-        version_id: &str,
-    ) -> AppError
+    fn map_object_error<E>(error: &aws_sdk_s3::error::SdkError<E>, object_key: &str) -> AppError
     where
         E: std::error::Error + ProvideErrorMetadata + Send + Sync + 'static,
     {
@@ -60,26 +112,14 @@ impl MinioClient {
             .and_then(|service_error| service_error.message())
             .unwrap_or("service error");
 
-        if let Some(status) = error.raw_response().map(|response| response.status().as_u16()) {
-            if status == 404 {
-                return AppError::NotFound(format!("version '{version_id}' not found"));
-            }
-
-            if status == 400 {
-                return AppError::BadRequest(format!("invalid version id '{version_id}'"));
-            }
-        }
-
-        if matches!(service_code, Some("NotFound" | "NoSuchVersion" | "NoSuchKey")) {
-            return AppError::NotFound(format!("version '{version_id}' not found"));
-        }
-
-        if matches!(service_code, Some("InvalidArgument" | "InvalidRequest")) {
-            return AppError::BadRequest(format!("invalid version id '{version_id}'"));
+        if error.raw_response().map(|response| response.status().as_u16()) == Some(404)
+            || matches!(service_code, Some("NotFound" | "NoSuchKey"))
+        {
+            return AppError::NotFound(format!("'{object_key}' not found in storage"));
         }
 
         let code = service_code.unwrap_or("unknown");
-        AppError::Storage(format!("head_object failed for version '{version_id}' ({code}): {service_message}"))
+        AppError::Storage(format!("storage request for '{object_key}' failed ({code}): {service_message}"))
     }
 
     pub async fn connect(cfg: &AppConfig) -> anyhow::Result<Self> {
@@ -118,13 +158,60 @@ impl MinioClient {
         let bucket = cfg.s3_bucket.clone();
         Self::ensure_bucket(&client, &bucket).await?;
 
-        tracing::info!("Connected to S3 endpoint at {} (bucket: {})", cfg.s3_endpoint, bucket);
-
-        Ok(Self {
+        let this = Self {
             client,
             presign_client,
             bucket,
             presign_expiry: Duration::from_secs(cfg.s3_presign_expiry_secs),
+        };
+
+        this.self_test().await?;
+
+        tracing::info!(
+            "Connected to S3 endpoint at {} (bucket: {})",
+            cfg.s3_endpoint,
+            this.bucket
+        );
+
+        Ok(this)
+    }
+
+    /// Writes, reads back, and deletes a probe object before serving traffic.
+    ///
+    /// Every operation this server depends on is exercised against the real
+    /// endpoint, and the bytes are compared. A store that accepts a write and
+    /// then answers reads with something else is otherwise indistinguishable
+    /// from a working one until a user notices their data is wrong.
+    pub async fn self_test(&self) -> anyhow::Result<()> {
+        let key = format!("__mindmapvault_selftest/{}", Uuid::new_v4());
+        let payload = Uuid::new_v4().to_string().into_bytes();
+
+        let result = async {
+            self.upload_blob(&key, payload.clone()).await?;
+            let read_back = self.download_blob(&key).await?;
+            if read_back != payload {
+                return Err(AppError::Storage(
+                    "the object store returned different bytes than were written".to_string(),
+                ));
+            }
+            let size = self.head_size(&key).await?;
+            if size != payload.len() as i64 {
+                return Err(AppError::Storage(format!(
+                    "the object store reported {size} bytes for a {}-byte object",
+                    payload.len()
+                )));
+            }
+            Ok(())
+        }
+        .await;
+
+        // Always try to clean up, including after a failed comparison.
+        if let Err(error) = self.delete_object(&key).await {
+            tracing::warn!(?error, "could not remove the storage self-test object");
+        }
+
+        result.map_err(|error| {
+            anyhow::anyhow!("object storage self-test failed: {error}")
         })
     }
 
@@ -152,55 +239,132 @@ impl MinioClient {
         &self.bucket
     }
 
-    /// Counts what is actually in the bucket, for the status page.
+    /// Walks the bucket, calling `visit` with every object key and its size.
     ///
-    /// Lists **versions**, not current objects: this bucket is versioned, every
-    /// vault save leaves an older version behind until it is pruned, and those
-    /// occupy space. A current-objects listing would report a number well under
-    /// what the disk is really holding.
+    /// `ListObjectsV2` rather than `ListObjectVersions`: each saved version is
+    /// its own object, so a plain listing already sees all of them, and it is
+    /// the listing every S3 implementation supports. Returns `false` when
+    /// `max_pages` cut the walk short.
+    async fn walk_objects<F>(&self, max_pages: usize, mut visit: F) -> Result<bool, AppError>
+    where
+        F: FnMut(&str, i64),
+    {
+        let mut continuation: Option<String> = None;
+
+        for _ in 0..max_pages {
+            let mut request = self.client.list_objects_v2().bucket(&self.bucket);
+            if let Some(token) = continuation.take() {
+                request = request.continuation_token(token);
+            }
+
+            let response = request
+                .send()
+                .await
+                .map_err(|error| AppError::Storage(error.to_string()))?;
+
+            for object in response.contents() {
+                if let Some(key) = object.key() {
+                    visit(key, object.size().unwrap_or(0).max(0));
+                }
+            }
+
+            if !response.is_truncated().unwrap_or(false) {
+                return Ok(true);
+            }
+
+            continuation = response.next_continuation_token().map(str::to_string);
+
+            // A truncated response with no token would loop forever.
+            if continuation.is_none() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Counts what is actually in the bucket, for the status page.
     ///
     /// Bounded by `max_pages` so one status request cannot walk an enormous
     /// bucket. When the limit is hit the figures come back marked truncated, so
     /// the console can present them as a floor rather than a total.
     pub async fn bucket_stats(&self, max_pages: usize) -> Result<BucketStats, String> {
         let mut stats = BucketStats::default();
-        let mut key_marker: Option<String> = None;
-        let mut version_marker: Option<String> = None;
 
-        for _ in 0..max_pages {
-            let mut request = self.client.list_object_versions().bucket(&self.bucket);
-            if let Some(key) = key_marker.take() {
-                request = request.key_marker(key);
-            }
-            if let Some(version) = version_marker.take() {
-                request = request.version_id_marker(version);
-            }
-
-            let response = request.send().await.map_err(|error| {
+        let complete = self
+            .walk_objects(max_pages, |_key, size| {
+                stats.object_count += 1;
+                stats.size_bytes += size as u64;
+            })
+            .await
+            .map_err(|error| {
                 tracing::warn!(?error, "bucket listing failed");
                 "could not list the bucket".to_string()
             })?;
 
-            for version in response.versions() {
-                stats.object_count += 1;
-                stats.size_bytes += version.size().unwrap_or(0).max(0) as u64;
+        stats.truncated = !complete;
+        Ok(stats)
+    }
+
+    /// Totals the bytes stored under each of `object_keys`, counting every
+    /// saved version of a blob against its base key.
+    pub async fn prefix_size_totals(
+        &self,
+        object_keys: &HashSet<String>,
+    ) -> Result<HashMap<String, i64>, AppError> {
+        let mut totals = HashMap::new();
+        if object_keys.is_empty() {
+            return Ok(totals);
+        }
+
+        self.walk_objects(usize::MAX, |key, size| {
+            let base = Self::base_key(key);
+            if object_keys.contains(base) {
+                *totals.entry(base.to_string()).or_insert(0) += size;
+            }
+        })
+        .await?;
+
+        Ok(totals)
+    }
+
+    /// Lists every object key under a prefix.
+    pub async fn list_keys_under(&self, prefix: &str) -> Result<Vec<String>, AppError> {
+        let mut keys = Vec::new();
+        let mut continuation: Option<String> = None;
+
+        loop {
+            let mut request = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix);
+            if let Some(token) = continuation.take() {
+                request = request.continuation_token(token);
+            }
+
+            let response = request
+                .send()
+                .await
+                .map_err(|error| AppError::Storage(error.to_string()))?;
+
+            for object in response.contents() {
+                if let Some(key) = object.key() {
+                    keys.push(key.to_string());
+                }
             }
 
             if !response.is_truncated().unwrap_or(false) {
-                return Ok(stats);
+                break;
             }
 
-            key_marker = response.next_key_marker().map(str::to_string);
-            version_marker = response.next_version_id_marker().map(str::to_string);
-
-            // A truncated response with no marker would loop forever.
-            if key_marker.is_none() && version_marker.is_none() {
-                return Ok(stats);
+            continuation = response.next_continuation_token().map(str::to_string);
+            if continuation.is_none() {
+                break;
             }
         }
 
-        stats.truncated = true;
-        Ok(stats)
+        Ok(keys)
     }
 
     /// Creates the bucket if it does not yet exist.
@@ -215,9 +379,11 @@ impl MinioClient {
         }
     }
 
-    /// Generates a presigned PUT URL. The browser will receive the assigned
-    /// `x-amz-version-id` response header after a successful upload — it
-    /// should pass that back via `POST /:id/confirm-upload`.
+    /// Generates a presigned PUT URL for one object key.
+    ///
+    /// For vault blobs the caller mints the version id first and presigns the
+    /// key that version will live at, so the upload lands in its final place
+    /// and the client never has to report back an id the store invented.
     pub async fn presigned_put_url(&self, object_key: &str) -> Result<String, AppError> {
         let presign_cfg = PresigningConfig::expires_in(self.presign_expiry)
             .map_err(|e| AppError::Storage(e.to_string()))?;
@@ -234,15 +400,9 @@ impl MinioClient {
         Ok(presigned.uri().to_string())
     }
 
-    /// Uploads an encrypted blob through the backend using the internal S3
-    /// endpoint and returns the assigned object version ID.
-    pub async fn upload_blob(
-        &self,
-        object_key: &str,
-        blob: Vec<u8>,
-    ) -> Result<String, AppError> {
-        let output = self
-            .client
+    /// Uploads a blob through the backend using the internal S3 endpoint.
+    pub async fn upload_blob(&self, object_key: &str, blob: Vec<u8>) -> Result<(), AppError> {
+        self.client
             .put_object()
             .bucket(&self.bucket)
             .key(object_key)
@@ -252,34 +412,32 @@ impl MinioClient {
             .await
             .map_err(|e| AppError::Storage(e.to_string()))?;
 
-        let version_id = output
-            .version_id()
-            .ok_or_else(|| AppError::Storage("S3 backend did not return a version id".to_string()))?;
-
-        Self::validate_uploaded_version_id(version_id)
+        Ok(())
     }
 
-    /// Copies a stored object to a new key and returns the new version id.
+    /// Copies a stored object to a new key.
     ///
-    /// Used when a node carrying an attachment is duplicated. The ciphertext is
-    /// already sealed under the owner's master key, so the bytes stay valid
+    /// Used when a node carrying an attachment is duplicated, and by the
+    /// migration that moves legacy blobs onto per-version keys. The ciphertext
+    /// is already sealed under the owner's master key, so the bytes stay valid
     /// unchanged — there is nothing to re-encrypt, and the backend never needs
     /// to see the plaintext.
     ///
     /// Prefers the server-side `CopyObject`, which never moves the bytes
     /// through this process. Not every S3-compatible store implements it, so a
     /// failure falls back to a download-and-upload of the same bytes rather
-    /// than failing the duplicate; the log line says which path ran.
+    /// than failing the copy; the log line says which path ran.
     pub async fn copy_object(
         &self,
         source_key: &str,
         destination_key: &str,
-    ) -> Result<String, AppError> {
+    ) -> Result<(), AppError> {
         // `copy_source` is a URL path, so it would need percent-encoding for
-        // anything exotic. Attachment keys cannot contain anything exotic:
-        // every segment is a UUID or a name put through
-        // `sanitize_attachment_name`, which keeps only `[A-Za-z0-9._-]`. The
-        // check keeps that assumption honest rather than trusting it.
+        // anything exotic. Our keys cannot contain anything exotic: every
+        // segment is a UUID, a version id checked by `validate_version_id`, or
+        // a name put through `sanitize_attachment_name`, which keeps only
+        // `[A-Za-z0-9._-]`. The check keeps that assumption honest rather than
+        // trusting it.
         if !source_key
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '/'))
@@ -300,12 +458,7 @@ impl MinioClient {
             .await;
 
         match copied {
-            Ok(output) => {
-                let version_id = output.version_id().ok_or_else(|| {
-                    AppError::Storage("S3 backend did not return a version id".to_string())
-                })?;
-                Self::validate_uploaded_version_id(version_id)
-            }
+            Ok(_) => Ok(()),
             Err(error) => {
                 tracing::warn!(
                     ?error,
@@ -313,44 +466,22 @@ impl MinioClient {
                     %destination_key,
                     "server-side object copy failed; falling back to download and re-upload"
                 );
-                let bytes = self.download_blob(source_key, None).await?;
+                let bytes = self.download_blob(source_key).await?;
                 self.upload_blob(destination_key, bytes).await
             }
         }
     }
 
-    /// Downloads an encrypted blob through the backend using the internal
-    /// S3 endpoint. When `version_id` is provided, that historical version
-    /// is streamed instead of the latest object.
-    pub async fn download_blob(
-        &self,
-        object_key: &str,
-        version_id: Option<&str>,
-    ) -> Result<Vec<u8>, AppError> {
-        let mut request = self
+    /// Downloads a blob through the backend using the internal S3 endpoint.
+    pub async fn download_blob(&self, object_key: &str) -> Result<Vec<u8>, AppError> {
+        let response = self
             .client
             .get_object()
             .bucket(&self.bucket)
-            .key(object_key);
-
-        if let Some(version_id) = version_id {
-            request = request.version_id(version_id);
-        }
-
-        let response = request
+            .key(object_key)
             .send()
             .await
-            .map_err(|e| {
-                let service_code = e.as_service_error().and_then(|se| se.code());
-                let http_status = e.raw_response().map(|r| r.status().as_u16());
-                if http_status == Some(404)
-                    || matches!(service_code, Some("NoSuchKey" | "NotFound" | "NoSuchVersion"))
-                {
-                    AppError::NotFound("board content not found in storage".to_string())
-                } else {
-                    AppError::Storage(e.to_string())
-                }
-            })?;
+            .map_err(|error| Self::map_object_error(&error, object_key))?;
 
         let collected = response
             .body
@@ -361,27 +492,16 @@ impl MinioClient {
         Ok(collected.into_bytes().to_vec())
     }
 
-    /// Generates a presigned GET URL. Pass `version_id` to retrieve a specific
-    /// historical version; omit it to get the latest.
-    pub async fn presigned_get_url(
-        &self,
-        object_key: &str,
-        version_id: Option<&str>,
-    ) -> Result<String, AppError> {
+    /// Generates a presigned GET URL for one object key.
+    pub async fn presigned_get_url(&self, object_key: &str) -> Result<String, AppError> {
         let presign_cfg = PresigningConfig::expires_in(self.presign_expiry)
             .map_err(|e| AppError::Storage(e.to_string()))?;
 
-        let mut req = self
+        let presigned = self
             .presign_client
             .get_object()
             .bucket(&self.bucket)
-            .key(object_key);
-
-        if let Some(vid) = version_id {
-            req = req.version_id(vid);
-        }
-
-        let presigned = req
+            .key(object_key)
             .presigned(presign_cfg)
             .await
             .map_err(|e| AppError::Storage(e.to_string()))?;
@@ -389,228 +509,53 @@ impl MinioClient {
         Ok(presigned.uri().to_string())
     }
 
-    /// Verifies a version ID by issuing HeadObject against it. Returns the
-    /// version ID string if confirmed, or an error if not found.
-    pub async fn verify_version(
-        &self,
-        _object_key: &str,
-        version_id: &str,
-    ) -> Result<String, AppError> {
-        Self::validate_uploaded_version_id(version_id)
-    }
-
-    /// Lists all stored versions of a given object, newest first.
-    pub async fn list_object_versions(
-        &self,
-        object_key: &str,
-    ) -> Result<Vec<ObjectVersionInfo>, AppError> {
-        let resp = self
-            .client
-            .list_object_versions()
-            .bucket(&self.bucket)
-            .prefix(object_key)
-            .send()
-            .await
-            .map_err(|e| AppError::Storage(e.to_string()))?;
-
-        let mut versions: Vec<ObjectVersionInfo> = resp
-            .versions()
-            .iter()
-            // prefix may match longer keys; filter to exact key
-            .filter(|v| v.key().map(|k| k == object_key).unwrap_or(false))
-            .map(|v| {
-                // Convert aws_smithy_types::DateTime → chrono::DateTime<Utc>
-                let last_modified = v
-                    .last_modified()
-                    .and_then(|dt| {
-                        DateTime::from_timestamp(dt.secs(), dt.subsec_nanos())
-                    })
-                    .unwrap_or_else(Utc::now);
-
-                ObjectVersionInfo {
-                    version_id: v.version_id().unwrap_or("null").to_string(),
-                    is_latest: v.is_latest().unwrap_or(false),
-                    last_modified,
-                    size_bytes: v.size().unwrap_or(0),
-                }
-            })
-            .collect();
-
-        // Sort newest first
-        versions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-        Ok(versions)
-    }
-
-    pub async fn list_version_size_totals_for_keys(
-        &self,
-        object_keys: &HashSet<String>,
-    ) -> Result<HashMap<String, i64>, AppError> {
-        let mut totals = HashMap::new();
-        if object_keys.is_empty() {
-            return Ok(totals);
-        }
-
-        let mut key_marker: Option<String> = None;
-        let mut version_id_marker: Option<String> = None;
-
-        loop {
-            let mut request = self.client.list_object_versions().bucket(&self.bucket);
-            if let Some(marker) = key_marker.as_deref() {
-                request = request.key_marker(marker);
-            }
-            if let Some(marker) = version_id_marker.as_deref() {
-                request = request.version_id_marker(marker);
-            }
-
-            let response = request
-                .send()
-                .await
-                .map_err(|error| AppError::Storage(error.to_string()))?;
-
-            for version in response.versions() {
-                let Some(key) = version.key() else {
-                    continue;
-                };
-                if !object_keys.contains(key) {
-                    continue;
-                }
-                *totals.entry(key.to_string()).or_insert(0) += version.size().unwrap_or(0);
-            }
-
-            if !response.is_truncated().unwrap_or(false) {
-                break;
-            }
-
-            key_marker = response.next_key_marker().map(str::to_string);
-            version_id_marker = response.next_version_id_marker().map(str::to_string);
-
-            if key_marker.is_none() && version_id_marker.is_none() {
-                break;
-            }
-        }
-
-        Ok(totals)
-    }
-
-    pub async fn head_object_version(
-        &self,
-        object_key: &str,
-        version_id: &str,
-    ) -> Result<ObjectVersionInfo, AppError> {
-        let version_id = Self::normalize_version_id(version_id);
-        let resp = self
+    /// Returns the stored size of an object, or `NotFound` if it is not there.
+    ///
+    /// This is what confirms a presigned upload actually landed. The old code
+    /// took the client's word for it: `verify_version` only checked the id was
+    /// a non-empty string and never contacted the store at all.
+    pub async fn head_size(&self, object_key: &str) -> Result<i64, AppError> {
+        let response = self
             .client
             .head_object()
             .bucket(&self.bucket)
             .key(object_key)
-            .version_id(&version_id)
             .send()
             .await
-            .map_err(|error| Self::map_head_object_error(&error, &version_id))?;
+            .map_err(|error| Self::map_object_error(&error, object_key))?;
 
-        let last_modified = resp
-            .last_modified()
-            .and_then(|dt| DateTime::from_timestamp(dt.secs(), dt.subsec_nanos()))
-            .unwrap_or_else(Utc::now);
-
-        Ok(ObjectVersionInfo {
-            version_id,
-            is_latest: false,
-            last_modified,
-            size_bytes: resp.content_length().unwrap_or(0),
-        })
+        Ok(response.content_length().unwrap_or(0).max(0))
     }
 
-    pub async fn merge_known_versions(
-        &self,
-        object_key: &str,
-        expected_version_ids: &[String],
-        current_version_id: Option<&str>,
-    ) -> Result<Vec<ObjectVersionInfo>, AppError> {
-        let mut versions = self.list_object_versions(object_key).await?;
-        let mut seen: HashSet<String> = versions.iter().map(|version| version.version_id.clone()).collect();
-
-        for version_id in expected_version_ids {
-            if !seen.insert(version_id.clone()) {
-                continue;
-            }
-
-            match self.head_object_version(object_key, version_id).await {
-                Ok(info) => versions.push(info),
-                Err(AppError::NotFound(_)) => {}
-                Err(error) => return Err(error),
-            }
-        }
-
-        for version in &mut versions {
-            version.is_latest = current_version_id == Some(version.version_id.as_str());
-        }
-
-        versions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-        Ok(versions)
-    }
-
-    /// Deletes all versions and delete-markers for an object (hard delete).
+    /// Deletes one object.
     pub async fn delete_object(&self, object_key: &str) -> Result<(), AppError> {
-        // With versioning enabled, delete_object only inserts a delete marker.
-        // We explicitly delete every version instead.
-        let versions = match self.list_object_versions(object_key).await {
-            Ok(versions) => versions,
-            Err(_) => {
-                self.client
-                    .delete_object()
-                    .bucket(&self.bucket)
-                    .key(object_key)
-                    .send()
-                    .await
-                    .map_err(|e| AppError::Storage(e.to_string()))?;
-                return Ok(());
-            }
-        };
-
-        for v in versions {
-            self.client
-                .delete_object()
-                .bucket(&self.bucket)
-                .key(object_key)
-                .version_id(&v.version_id)
-                .send()
-                .await
-                .map_err(|e| AppError::Storage(e.to_string()))?;
-        }
-        Ok(())
-    }
-
-    /// Hard-deletes one specific version of an object.
-    pub async fn delete_version(&self, object_key: &str, version_id: &str) -> Result<(), AppError> {
         self.client
             .delete_object()
             .bucket(&self.bucket)
             .key(object_key)
-            .version_id(version_id)
             .send()
             .await
             .map_err(|e| AppError::Storage(e.to_string()))?;
         Ok(())
     }
 
-    /// After a successful upload, prune the oldest versions so that at most
-    /// `keep` versions remain.  The newest versions (by `last_modified`) are
-    /// retained; excess older ones are hard-deleted from MinIO.
-    pub async fn prune_versions(&self, object_key: &str, keep: u32) -> Result<(), AppError> {
-        let versions = self.list_object_versions(object_key).await?;
-        if versions.len() <= keep as usize { return Ok(()); }
+    /// Deletes a blob and every stored version of it.
+    ///
+    /// Covers the base key as well as `<key>/v/*`, so a vault deleted after the
+    /// migration and one deleted before it both leave nothing behind.
+    pub async fn delete_all_versions(&self, object_key: &str) -> Result<(), AppError> {
+        let mut keys = self
+            .list_keys_under(&format!("{object_key}{VERSION_SEGMENT}"))
+            .await
+            .unwrap_or_default();
+        keys.push(object_key.to_string());
 
-        // list_object_versions returns newest-first; skip the ones we keep.
-        for v in versions.into_iter().skip(keep as usize) {
-            self.client
-                .delete_object()
-                .bucket(&self.bucket)
-                .key(object_key)
-                .version_id(&v.version_id)
-                .send()
-                .await
-                .map_err(|e| AppError::Storage(e.to_string()))?;
+        for key in keys {
+            match self.delete_object(&key).await {
+                Ok(()) => {}
+                Err(AppError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
         Ok(())
     }
@@ -618,52 +563,90 @@ impl MinioClient {
 
 #[cfg(test)]
 mod tests {
-    use super::MinioClient;
+    use super::S3Store;
     use crate::error::AppError;
 
     #[test]
-    fn accepts_plain_uuid_version_id() {
+    fn builds_a_version_key_under_the_blob_key() {
+        let key = S3Store::version_key(
+            "62ea0a57-8b2a-4fd2-8046-cf8769d81489",
+            "4d1f0a11-0d5e-4a2c-9a1e-2f7d4c8b1a33",
+        );
+
+        assert_eq!(
+            key,
+            "62ea0a57-8b2a-4fd2-8046-cf8769d81489/v/4d1f0a11-0d5e-4a2c-9a1e-2f7d4c8b1a33"
+        );
+    }
+
+    #[test]
+    fn base_key_recovers_the_blob_key_from_a_version_key() {
+        let base = S3Store::base_key(
+            "62ea0a57-8b2a-4fd2-8046-cf8769d81489/v/4d1f0a11-0d5e-4a2c-9a1e-2f7d4c8b1a33",
+        );
+
+        assert_eq!(base, "62ea0a57-8b2a-4fd2-8046-cf8769d81489");
+    }
+
+    #[test]
+    fn base_key_leaves_a_plain_key_alone() {
+        let base = S3Store::base_key("62ea0a57-8b2a-4fd2-8046-cf8769d81489");
+
+        assert_eq!(base, "62ea0a57-8b2a-4fd2-8046-cf8769d81489");
+    }
+
+    #[test]
+    fn accepts_a_minted_uuid_version_id() {
         let version_id = "62ea0a57-8b2a-4fd2-8046-cf8769d81489";
 
-        let validated = MinioClient::validate_uploaded_version_id(version_id).unwrap();
+        let validated = S3Store::validate_version_id(version_id).unwrap();
 
         assert_eq!(validated, version_id);
     }
 
     #[test]
-    fn accepts_quoted_uuid_version_id_from_header() {
-        let validated = MinioClient::validate_uploaded_version_id(
-            " \"62ea0a57-8b2a-4fd2-8046-cf8769d81489\" ",
-        )
-        .unwrap();
+    fn accepts_quoted_version_id_from_header() {
+        let validated =
+            S3Store::validate_version_id(" \"62ea0a57-8b2a-4fd2-8046-cf8769d81489\" ").unwrap();
 
         assert_eq!(validated, "62ea0a57-8b2a-4fd2-8046-cf8769d81489");
     }
 
+    /// Version ids written by older builds are still readable.
     #[test]
-    fn accepts_garage_hex_version_id() {
+    fn accepts_legacy_garage_hex_version_id() {
         let version_id = "4e80be07b7c7a0a45c056ad43d3cbe807c7c5704ab5579328fc1da91140b5927";
 
-        let validated = MinioClient::validate_uploaded_version_id(version_id).unwrap();
-
-        assert_eq!(validated, version_id);
-    }
-
-    #[test]
-    fn accepts_arbitrary_non_empty_version_id() {
-        let version_id = "nonexistent-version-id";
-
-        let validated = MinioClient::validate_uploaded_version_id(version_id).unwrap();
+        let validated = S3Store::validate_version_id(version_id).unwrap();
 
         assert_eq!(validated, version_id);
     }
 
     #[test]
     fn rejects_empty_version_id() {
-        let error = MinioClient::validate_uploaded_version_id("   ").unwrap_err();
+        let error = S3Store::validate_version_id("   ").unwrap_err();
 
         assert!(matches!(error, AppError::BadRequest(_)));
         assert_eq!(error.to_string(), "bad request: version_id is required");
     }
 
+    /// A version id reaches `version_key`, so a separator would let a request
+    /// address an object outside its own vault.
+    #[test]
+    fn rejects_version_id_that_would_escape_the_key() {
+        for version_id in ["../../etc/passwd", "a/b", "..", "with space"] {
+            let error = S3Store::validate_version_id(version_id).unwrap_err();
+            assert!(
+                matches!(error, AppError::BadRequest(_)),
+                "expected '{version_id}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_overlong_version_id() {
+        let error = S3Store::validate_version_id(&"a".repeat(129)).unwrap_err();
+
+        assert!(matches!(error, AppError::BadRequest(_)));
+    }
 }

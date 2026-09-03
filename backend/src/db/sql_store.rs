@@ -169,13 +169,13 @@ pub struct StoredMindMap {
     pub id: String,
     pub user_id: String,
     pub title_encrypted: String,
-    pub minio_object_key: String,
+    pub object_key: String,
     pub eph_classical_public: String,
     pub eph_pq_ciphertext: String,
     pub wrapped_dek: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub minio_version_id: Option<String>,
+    pub current_version_id: Option<String>,
     pub version_history: Vec<VersionSnapshot>,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
@@ -189,13 +189,13 @@ pub struct NewMindMap {
     pub id: String,
     pub user_id: String,
     pub title_encrypted: String,
-    pub minio_object_key: String,
+    pub object_key: String,
     pub eph_classical_public: String,
     pub eph_pq_ciphertext: String,
     pub wrapped_dek: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub minio_version_id: Option<String>,
+    pub current_version_id: Option<String>,
     pub version_history: Vec<VersionSnapshot>,
     pub vault_color: Option<String>,
     pub vault_note_encrypted: Option<String>,
@@ -457,6 +457,17 @@ impl AdminUserRecord {
 pub trait SqlStore: Send + Sync {
     /// Cheapest round trip that proves the database is answering.
     async fn health_check(&self) -> Result<(), AppError>;
+
+    /// Takes the one-off lock that lets a single process run a data migration.
+    ///
+    /// `Ok(false)` means another replica already holds it and this one should
+    /// skip: replicas sharing a database all start at once, and a migration
+    /// that moves objects and then rewrites the row it read is not safe to run
+    /// twice at the same time.
+    async fn try_lock_migration(&self, key: i64) -> Result<bool, AppError>;
+
+    /// Releases the migration lock. Also released if the process exits.
+    async fn unlock_migration(&self, key: i64) -> Result<(), AppError>;
     /// Server version and on-disk size, for the status page.
     async fn database_stats(&self) -> Result<DatabaseStats, AppError>;
 
@@ -566,7 +577,7 @@ pub trait SqlStore: Send + Sync {
         &self,
         id: &str,
         user_id: &str,
-        minio_version_id: &str,
+        current_version_id: &str,
         version_history: Vec<VersionSnapshot>,
     ) -> Result<(), AppError>;
     async fn delete_mind_map(&self, id: &str, user_id: &str) -> Result<(), AppError>;

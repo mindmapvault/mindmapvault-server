@@ -33,7 +33,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use chrono::Utc;
 use config::AppConfig;
-use db::{minio::MinioClient, postgres::PostgresDb, sql_store::DynSqlStore};
+use db::{s3::S3Store, postgres::PostgresDb, sql_store::DynSqlStore};
 use error::AppError;
 use middleware::auth::{JwtService, KeyVersionCache};
 use middleware::request_cleanup::release_request_caches;
@@ -72,7 +72,7 @@ const THROTTLE_PRUNE_SECS: u64 = 5 * 60;
 /// owner's storage until it is gone.
 pub(crate) async fn purge_expired_shares(
     store: &DynSqlStore,
-    minio: &MinioClient,
+    storage: &S3Store,
     status: &PurgeStatusHandle,
 ) {
     let shares = match store
@@ -103,7 +103,7 @@ pub(crate) async fn purge_expired_shares(
 
         let mut failed = false;
         for attachment in &attachments {
-            if let Err(error) = minio.delete_object(&attachment.s3_key).await {
+            if let Err(error) = storage.delete_object(&attachment.s3_key).await {
                 if !matches!(error, AppError::NotFound(_)) {
                     tracing::warn!(?error, "share attachment delete failed");
                     failed = true;
@@ -111,7 +111,7 @@ pub(crate) async fn purge_expired_shares(
             }
         }
 
-        if let Err(error) = minio.delete_object(&share.s3_key).await {
+        if let Err(error) = storage.delete_object(&share.s3_key).await {
             if !matches!(error, AppError::NotFound(_)) {
                 tracing::warn!(?error, "share blob delete failed");
                 failed = true;
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting MindMapVault backend on {}", cfg.listen_addr());
 
     // ── Infra connections ─────────────────────────────────────────────────────
-    let minio = MinioClient::connect(&cfg).await?;
+    let storage = S3Store::connect(&cfg).await?;
 
     let jwt = Arc::new(JwtService::new(
         &cfg.jwt_secret,
@@ -241,6 +241,30 @@ async fn main() -> anyhow::Result<()> {
         log_effective_settings(&stored);
         InstanceSettingsHandle::new(stored)
     };
+    // ── Storage layout migration ─────────────────────────────────────────────
+    // Moves vault blobs that still rely on S3 object versioning onto their own
+    // per-version keys. Idempotent, and a no-op once every vault is migrated.
+    // A failure leaves version history degraded but the server usable, so it
+    // logs and carries on rather than refusing to start.
+    {
+        let store = sql_store.as_ref().expect("sql_store must be initialized");
+        match crate::db::blob_migration::run(store, &storage).await {
+            Ok(report) if report.vaults_migrated > 0 || report.failures > 0 => {
+                tracing::info!(
+                    vaults_migrated = report.vaults_migrated,
+                    versions_recovered = report.versions_recovered,
+                    versions_lost = report.versions_lost,
+                    failures = report.failures,
+                    "migrated vault blobs to per-version object keys"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(?error, "vault blob migration could not run");
+            }
+        }
+    }
+
     let throttle = Arc::new(AuthThrottle::new());
     // User id → current key_version, so write requests can refuse sessions
     // that predate a password rotation without a DB read per request.
@@ -304,12 +328,12 @@ async fn main() -> anyhow::Result<()> {
 
         let share_public_state = SharePublicState {
             db: sql_store.clone(),
-            minio: minio.clone(),
+            storage: storage.clone(),
         };
 
         let admin_state = AdminState {
             db: sql_store.clone(),
-            minio: minio.clone(),
+            storage: storage.clone(),
             admin_api_token: cfg.admin_api_token.clone(),
             settings: settings.clone(),
             purge_status: purge_status.clone(),
@@ -319,7 +343,7 @@ async fn main() -> anyhow::Result<()> {
 
         let auth_state = AuthSqlState {
             db: sql_store.clone(),
-            minio: minio.clone(),
+            storage: storage.clone(),
             jwt: jwt.clone(),
             settings: settings.clone(),
             throttle: throttle.clone(),
@@ -328,7 +352,7 @@ async fn main() -> anyhow::Result<()> {
 
         let mindmaps_state = MindMapsSqlState {
             db: sql_store.clone(),
-            minio: minio.clone(),
+            storage: storage.clone(),
             jwt: jwt.clone(),
             diagnostics_enabled: cfg.enable_diagnostics_routes,
             settings: settings.clone(),
@@ -366,13 +390,13 @@ async fn main() -> anyhow::Result<()> {
     // the ones that simply ran out of time, plus anything an inline delete
     // failed to remove.
     if let Some(store) = sql_store_for_purge {
-        let purge_minio = minio.clone();
+        let purge_storage = storage.clone();
         let purge_status = purge_status.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(24 * 60 * 60));
             loop {
                 ticker.tick().await;
-                purge_expired_shares(&store, &purge_minio, &purge_status).await;
+                purge_expired_shares(&store, &purge_storage, &purge_status).await;
             }
         });
     }

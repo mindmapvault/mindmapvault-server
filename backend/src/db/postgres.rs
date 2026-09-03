@@ -199,13 +199,13 @@ impl PostgresDb {
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     title_encrypted TEXT NOT NULL,
-                    minio_object_key TEXT NOT NULL,
+                    object_key TEXT NOT NULL,
                     eph_classical_public TEXT NOT NULL,
                     eph_pq_ciphertext TEXT NOT NULL,
                     wrapped_dek TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL,
-                    minio_version_id TEXT,
+                    current_version_id TEXT,
                     version_history JSONB NOT NULL DEFAULT '[]'::jsonb,
                     vault_color TEXT,
                     vault_note_encrypted TEXT,
@@ -213,6 +213,24 @@ impl PostgresDb {
                     max_versions INTEGER NOT NULL,
                     vault_labels JSONB NOT NULL DEFAULT '[]'::jsonb
                 );
+
+                -- These two were named after MinIO, which the server no longer
+                -- assumes it is talking to. Guarded so the rename runs once and a
+                -- database created after it is left alone.
+                DO $$ BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'mind_maps' AND column_name = 'minio_object_key'
+                    ) THEN
+                        ALTER TABLE mind_maps RENAME COLUMN minio_object_key TO object_key;
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'mind_maps' AND column_name = 'minio_version_id'
+                    ) THEN
+                        ALTER TABLE mind_maps RENAME COLUMN minio_version_id TO current_version_id;
+                    END IF;
+                END $$;
 
                 ALTER TABLE mind_maps ADD COLUMN IF NOT EXISTS vault_encryption_mode TEXT NOT NULL DEFAULT 'standard';
                 ALTER TABLE mind_maps ADD COLUMN IF NOT EXISTS vault_labels JSONB NOT NULL DEFAULT '[]'::jsonb;
@@ -342,6 +360,26 @@ impl SqlStore for PostgresDb {
             )
             .await?;
 
+        Ok(())
+    }
+
+    async fn try_lock_migration(&self, key: i64) -> Result<bool, AppError> {
+        // A session-level advisory lock on the shared connection: held for as
+        // long as this process lives, and dropped by the server if it dies
+        // mid-migration, so a crash cannot leave the lock stuck.
+        let row = self
+            .client
+            .query_one("SELECT pg_try_advisory_lock($1)", &[&key])
+            .await
+            .map_err(AppError::Database)?;
+        Ok(row.get::<_, bool>(0))
+    }
+
+    async fn unlock_migration(&self, key: i64) -> Result<(), AppError> {
+        self.client
+            .query_one("SELECT pg_advisory_unlock($1)", &[&key])
+            .await
+            .map_err(AppError::Database)?;
         Ok(())
     }
 
@@ -1120,8 +1158,8 @@ impl SqlStore for PostgresDb {
             .client
             .query(
                 "SELECT
-                    id, user_id, title_encrypted, minio_object_key, eph_classical_public,
-                    eph_pq_ciphertext, wrapped_dek, created_at, updated_at, minio_version_id,
+                    id, user_id, title_encrypted, object_key, eph_classical_public,
+                    eph_pq_ciphertext, wrapped_dek, created_at, updated_at, current_version_id,
                     version_history, vault_color, vault_note_encrypted,
                     vault_encryption_mode, max_versions, vault_labels
                  FROM mind_maps
@@ -1138,8 +1176,8 @@ impl SqlStore for PostgresDb {
         self.client
             .execute(
                 "INSERT INTO mind_maps (
-                    id, user_id, title_encrypted, minio_object_key, eph_classical_public,
-                    eph_pq_ciphertext, wrapped_dek, created_at, updated_at, minio_version_id,
+                    id, user_id, title_encrypted, object_key, eph_classical_public,
+                    eph_pq_ciphertext, wrapped_dek, created_at, updated_at, current_version_id,
                     version_history, vault_color, vault_note_encrypted,
                     vault_encryption_mode, max_versions, vault_labels
                  ) VALUES (
@@ -1152,13 +1190,13 @@ impl SqlStore for PostgresDb {
                     &map.id,
                     &map.user_id,
                     &map.title_encrypted,
-                    &map.minio_object_key,
+                    &map.object_key,
                     &map.eph_classical_public,
                     &map.eph_pq_ciphertext,
                     &map.wrapped_dek,
                     &map.created_at,
                     &map.updated_at,
-                    &map.minio_version_id,
+                    &map.current_version_id,
                     &Json(&map.version_history),
                     &map.vault_color,
                     &map.vault_note_encrypted,
@@ -1181,8 +1219,8 @@ impl SqlStore for PostgresDb {
             .client
             .query_opt(
                 "SELECT
-                    id, user_id, title_encrypted, minio_object_key, eph_classical_public,
-                    eph_pq_ciphertext, wrapped_dek, created_at, updated_at, minio_version_id,
+                    id, user_id, title_encrypted, object_key, eph_classical_public,
+                    eph_pq_ciphertext, wrapped_dek, created_at, updated_at, current_version_id,
                     version_history, vault_color, vault_note_encrypted,
                     vault_encryption_mode, max_versions, vault_labels
                  FROM mind_maps
@@ -1229,15 +1267,15 @@ impl SqlStore for PostgresDb {
         &self,
         id: &str,
         user_id: &str,
-        minio_version_id: &str,
+        current_version_id: &str,
         version_history: Vec<VersionSnapshot>,
     ) -> Result<(), AppError> {
         self.client
             .execute(
                 "UPDATE mind_maps
-                 SET minio_version_id = $1, version_history = $2
+                 SET current_version_id = $1, version_history = $2
                  WHERE id = $3 AND user_id = $4",
-                &[&minio_version_id, &Json(&version_history), &id, &user_id],
+                &[&current_version_id, &Json(&version_history), &id, &user_id],
             )
             .await?;
 
@@ -1836,13 +1874,13 @@ fn stored_mind_map_from_row(row: Row) -> Result<StoredMindMap, AppError> {
         id: row.get("id"),
         user_id: row.get("user_id"),
         title_encrypted: row.get("title_encrypted"),
-        minio_object_key: row.get("minio_object_key"),
+        object_key: row.get("object_key"),
         eph_classical_public: row.get("eph_classical_public"),
         eph_pq_ciphertext: row.get("eph_pq_ciphertext"),
         wrapped_dek: row.get("wrapped_dek"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-        minio_version_id: row.get("minio_version_id"),
+        current_version_id: row.get("current_version_id"),
         version_history: row.get::<_, Json<Vec<VersionSnapshot>>>("version_history").0,
         vault_color: row.get("vault_color"),
         vault_note_encrypted: row.get("vault_note_encrypted"),

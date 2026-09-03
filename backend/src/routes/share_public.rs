@@ -6,7 +6,7 @@ use axum::{
 use chrono::Utc;
 
 use crate::{
-    db::{minio::MinioClient, sql_store::{DynSqlStore, StoredMindMapShare, StoredMindMapShareAttachment}},
+    db::{s3::S3Store, sql_store::{DynSqlStore, StoredMindMapShare, StoredMindMapShareAttachment}},
     error::AppError,
     models::{attachment::AttachmentStatus, share::{MapShareAttachmentDownloadResponse, MapShareAttachmentMetadata, PublicMapShareResponse, ShareStatus}},
 };
@@ -14,7 +14,7 @@ use crate::{
 #[derive(Clone)]
 pub struct SharePublicState {
     pub db: DynSqlStore,
-    pub minio: MinioClient,
+    pub storage: S3Store,
 }
 
 pub fn router(state: SharePublicState) -> Router {
@@ -59,7 +59,7 @@ async fn get_share(
         encryption_meta: share.encryption_meta,
         checksum_sha256: share.checksum_sha256,
         download_url,
-        download_expires_at: public_presign_expires_at(&state.minio)?,
+        download_expires_at: public_presign_expires_at(&state.storage)?,
         attachments,
     }))
 }
@@ -70,8 +70,8 @@ async fn get_share_blob(
 ) -> Result<Response, AppError> {
     let share = find_public_share(&state.db, &share_id).await?;
     let bytes = state
-        .minio
-        .download_blob(&share.s3_key, share.s3_version_id.as_deref())
+        .storage
+        .download_blob(&share.s3_key)
         .await?;
 
     Ok((
@@ -104,7 +104,7 @@ async fn get_share_attachment_download(
 
     Ok(Json(MapShareAttachmentDownloadResponse {
         download_url: format!("/share/{share_id}/attachments/{attachment_id}/blob"),
-        expires_at: public_presign_expires_at(&state.minio)?,
+        expires_at: public_presign_expires_at(&state.storage)?,
         content_type: attachment.content_type,
         name: attachment.name,
         sanitized_name: attachment.sanitized_name,
@@ -134,8 +134,8 @@ async fn get_share_attachment_blob(
     }
 
     let bytes = state
-        .minio
-        .download_blob(&attachment.s3_key, attachment.s3_version_id.as_deref())
+        .storage
+        .download_blob(&attachment.s3_key)
         .await?;
 
     Ok((
@@ -166,8 +166,8 @@ async fn find_public_share(db: &DynSqlStore, share_id: &str) -> Result<StoredMin
     Ok(share)
 }
 
-fn public_presign_expires_at(minio: &MinioClient) -> Result<chrono::DateTime<Utc>, AppError> {
-    let delta = chrono::Duration::from_std(minio.presign_expiry)
+fn public_presign_expires_at(storage: &S3Store) -> Result<chrono::DateTime<Utc>, AppError> {
+    let delta = chrono::Duration::from_std(storage.presign_expiry)
         .map_err(|error| AppError::Internal(format!("invalid presign expiry: {error}")))?;
     Ok(Utc::now() + delta)
 }

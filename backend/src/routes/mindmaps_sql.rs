@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap, HashSet}, sync::Arc};
+use std::{collections::{BTreeMap, HashSet}, sync::Arc};
 
 use axum::{
     body::Bytes,
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    db::{minio::MinioClient, sql_store::{DynSqlStore, MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate, MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate, NewMindMap, NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment}},
+    db::{s3::S3Store, sql_store::{DynSqlStore, MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate, MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate, NewMindMap, NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment}},
     error::{AppError, PlanErrorMetadata},
     middleware::auth::{AuthenticatedUser, JwtService, KeyVersionCache, VerifiedWriter},
     models::{
@@ -22,7 +22,8 @@ use crate::{
         mindmap::{
             ConfirmUploadRequest, ConfirmUploadResponse, MindMapCreatedResponse, MindMapDetail,
             MindMapListItem, PresignedUrlResponse, StorageSummary, UpdateVaultMetaRequest,
-            UpsertMindMapRequest, VaultStorageInfo, VersionDetail, VersionSnapshot,
+            stored_version_bytes, UpsertMindMapRequest, VaultStorageInfo, VersionDetail,
+            VersionSnapshot,
         },
         share::{
             CompleteMapShareAttachmentUploadRequest, CompleteMapShareUploadRequest,
@@ -37,7 +38,7 @@ use crate::{
 #[derive(Clone)]
 pub struct MindMapsSqlState {
     pub db: DynSqlStore,
-    pub minio: MinioClient,
+    pub storage: S3Store,
     pub jwt: Arc<JwtService>,
     pub diagnostics_enabled: bool,
     pub settings: InstanceSettingsHandle,
@@ -250,13 +251,13 @@ async fn create_mind_map(
             id: id.clone(),
             user_id: user_id.clone(),
             title_encrypted: body.title_encrypted,
-            minio_object_key: object_key.clone(),
+            object_key: object_key.clone(),
             eph_classical_public: body.eph_classical_public,
             eph_pq_ciphertext: body.eph_pq_ciphertext,
             wrapped_dek: body.wrapped_dek,
             created_at: now,
             updated_at: now,
-            minio_version_id: None,
+            current_version_id: None,
             version_history: Vec::new(),
             vault_color: None,
             vault_note_encrypted: None,
@@ -266,7 +267,15 @@ async fn create_mind_map(
         })
         .await?;
 
-    let upload_url = match state.minio.presigned_put_url(&object_key).await {
+    // Minted before the URL is handed out, so the upload lands directly on the
+    // key this version will always live at and no id has to come back from the
+    // store afterwards.
+    let version_id = S3Store::new_version_id();
+    let upload_url = match state
+        .storage
+        .presigned_put_url(&S3Store::version_key(&object_key, &version_id))
+        .await
+    {
         Ok(upload_url) => upload_url,
         Err(error) => {
             if let Err(cleanup_error) = state.db.delete_mind_map(&id, &user_id).await {
@@ -283,8 +292,9 @@ async fn create_mind_map(
 
     Ok(Json(MindMapCreatedResponse {
         id,
-        minio_object_key: object_key,
+        object_key: object_key,
         upload_url,
+        version_id,
     }))
 }
 
@@ -299,10 +309,13 @@ async fn confirm_upload(
     }
 
     let map = find_owned(&state.db, &id, &user.0).await?;
-    let verified_vid = state
-        .minio
-        .verify_version(&map.minio_object_key, &body.version_id)
-        .await?;
+    let verified_vid = S3Store::validate_version_id(&body.version_id)?;
+    let object_key = S3Store::version_key(&map.object_key, &verified_vid);
+
+    // What actually proves the upload arrived. The check this replaced only
+    // looked at the shape of the id and never contacted the store, so a client
+    // could confirm a version that was never written.
+    let size_bytes = state.storage.head_size(&object_key).await?;
 
     let mut version_history = normalize_version_history(&map.version_history);
     version_history.push(VersionSnapshot {
@@ -311,14 +324,17 @@ async fn confirm_upload(
         eph_pq_ciphertext: map.eph_pq_ciphertext.clone(),
         wrapped_dek: map.wrapped_dek.clone(),
         saved_at: Utc::now(),
+        object_key: Some(object_key.clone()),
+        size_bytes: Some(size_bytes),
     });
+    let pruned_keys = prune_history(&mut version_history, map.max_versions);
 
     if let Err(error) = state
         .db
         .update_mind_map_upload(&id, &user.0, &verified_vid, version_history)
         .await
     {
-        if let Err(cleanup_error) = state.minio.delete_version(&map.minio_object_key, &verified_vid).await {
+        if let Err(cleanup_error) = state.storage.delete_object(&object_key).await {
             tracing::error!(
                 ?cleanup_error,
                 map_id = %id,
@@ -330,14 +346,7 @@ async fn confirm_upload(
         return Err(error);
     }
 
-    let prune_key = map.minio_object_key.clone();
-    let prune_limit = map.max_versions;
-    let minio = state.minio.clone();
-    tokio::spawn(async move {
-        if let Err(e) = minio.prune_versions(&prune_key, prune_limit).await {
-            tracing::warn!("Failed to prune old versions for {prune_key}: {e}");
-        }
-    });
+    spawn_object_cleanup(state.storage.clone(), pruned_keys);
 
     Ok(Json(ConfirmUploadResponse { version_id: verified_vid }))
 }
@@ -353,10 +362,10 @@ async fn upload_blob(
     }
 
     let map = find_owned(&state.db, &id, &user.0).await?;
-    let version_id = state
-        .minio
-        .upload_blob(&map.minio_object_key, body.to_vec())
-        .await?;
+    let version_id = S3Store::new_version_id();
+    let object_key = S3Store::version_key(&map.object_key, &version_id);
+    let size_bytes = body.len() as i64;
+    state.storage.upload_blob(&object_key, body.to_vec()).await?;
 
     let mut version_history = normalize_version_history(&map.version_history);
     version_history.push(VersionSnapshot {
@@ -365,14 +374,17 @@ async fn upload_blob(
         eph_pq_ciphertext: map.eph_pq_ciphertext.clone(),
         wrapped_dek: map.wrapped_dek.clone(),
         saved_at: Utc::now(),
+        object_key: Some(object_key.clone()),
+        size_bytes: Some(size_bytes),
     });
+    let pruned_keys = prune_history(&mut version_history, map.max_versions);
 
     if let Err(error) = state
         .db
         .update_mind_map_upload(&id, &user.0, &version_id, version_history)
         .await
     {
-        if let Err(cleanup_error) = state.minio.delete_version(&map.minio_object_key, &version_id).await {
+        if let Err(cleanup_error) = state.storage.delete_object(&object_key).await {
             tracing::error!(
                 ?cleanup_error,
                 map_id = %id,
@@ -384,14 +396,7 @@ async fn upload_blob(
         return Err(error);
     }
 
-    let prune_key = map.minio_object_key.clone();
-    let prune_limit = map.max_versions;
-    let minio = state.minio.clone();
-    tokio::spawn(async move {
-        if let Err(e) = minio.prune_versions(&prune_key, prune_limit).await {
-            tracing::warn!("Failed to prune old versions for {prune_key}: {e}");
-        }
-    });
+    spawn_object_cleanup(state.storage.clone(), pruned_keys);
 
     Ok(Json(ConfirmUploadResponse { version_id }))
 }
@@ -431,11 +436,15 @@ async fn update_mind_map(
         )
         .await?;
 
-    let upload_url = state.minio.presigned_put_url(&map.minio_object_key).await?;
+    let version_id = S3Store::new_version_id();
+    let upload_url = state
+        .storage
+        .presigned_put_url(&S3Store::version_key(&map.object_key, &version_id))
+        .await?;
     Ok(Json(PresignedUrlResponse {
         url: upload_url,
-        expires_in_secs: state.minio.presign_expiry.as_secs(),
-        version_id: None,
+        expires_in_secs: state.storage.presign_expiry.as_secs(),
+        version_id: Some(version_id),
     }))
 }
 
@@ -446,8 +455,8 @@ async fn delete_mind_map(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
     let attachments = state.db.list_mind_map_attachments(&id).await?;
-    delete_attachment_objects(&state.minio, &attachments).await?;
-    state.minio.delete_object(&map.minio_object_key).await?;
+    delete_attachment_objects(&state.storage, &attachments).await?;
+    state.storage.delete_all_versions(&map.object_key).await?;
 
     state.db.delete_mind_map(&id, &user.0).await?;
 
@@ -460,11 +469,15 @@ async fn get_upload_url(
     Path(id): Path<String>,
 ) -> Result<Json<PresignedUrlResponse>, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
-    let url = state.minio.presigned_put_url(&map.minio_object_key).await?;
+    let version_id = S3Store::new_version_id();
+    let url = state
+        .storage
+        .presigned_put_url(&S3Store::version_key(&map.object_key, &version_id))
+        .await?;
     Ok(Json(PresignedUrlResponse {
         url,
-        expires_in_secs: state.minio.presign_expiry.as_secs(),
-        version_id: None,
+        expires_in_secs: state.storage.presign_expiry.as_secs(),
+        version_id: Some(version_id),
     }))
 }
 
@@ -476,10 +489,8 @@ async fn download_blob(
 ) -> Result<Response, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
     let version_id = q.version_id.as_deref().map(normalize_version_id).filter(|value| !value.is_empty());
-    let bytes = state
-        .minio
-        .download_blob(&map.minio_object_key, version_id.as_deref())
-        .await?;
+    let object_key = resolve_blob_key(&map, version_id.as_deref())?;
+    let bytes = state.storage.download_blob(&object_key).await?;
 
     Ok((
         [(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
@@ -496,11 +507,11 @@ async fn get_download_url(
 ) -> Result<Json<PresignedUrlResponse>, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
     let normalized_version_id = q.version_id.map(|value| normalize_version_id(&value)).filter(|value| !value.is_empty());
-    let vid = normalized_version_id.as_deref();
-    let url = state.minio.presigned_get_url(&map.minio_object_key, vid).await?;
+    let object_key = resolve_blob_key(&map, normalized_version_id.as_deref())?;
+    let url = state.storage.presigned_get_url(&object_key).await?;
     Ok(Json(PresignedUrlResponse {
         url,
-        expires_in_secs: state.minio.presign_expiry.as_secs(),
+        expires_in_secs: state.storage.presign_expiry.as_secs(),
         version_id: normalized_version_id,
     }))
 }
@@ -580,12 +591,11 @@ async fn upload_attachment_blob(
 
     find_owned(&state.db, &id, &user.0).await?;
     let attachment = find_attachment(&state.db, &id, &attachment_id).await?;
-    let version_id = state
-        .minio
-        .upload_blob(&attachment.s3_key, body.to_vec())
-        .await?;
+    state.storage.upload_blob(&attachment.s3_key, body.to_vec()).await?;
 
-    Ok(Json(ConfirmUploadResponse { version_id }))
+    // Attachments already occupy a key of their own, so there is no version to
+    // report. Kept in the response shape for clients that still send it back.
+    Ok(Json(ConfirmUploadResponse { version_id: String::new() }))
 }
 
 async fn complete_attachment_upload(
@@ -598,10 +608,10 @@ async fn complete_attachment_upload(
     validate_attachment_complete(&body)?;
 
     let attachment = find_attachment(&state.db, &id, &attachment_id).await?;
-    let verified_vid = state
-        .minio
-        .verify_version(&attachment.s3_key, &body.version_id)
-        .await?;
+    // HeadObject on the attachment's own key: proof the upload landed that does
+    // not depend on the store returning a version id, which R2 never does.
+    state.storage.head_size(&attachment.s3_key).await?;
+    let verified_vid = normalize_version_id(&body.version_id);
 
     if let Err(error) = state
         .db
@@ -616,7 +626,7 @@ async fn complete_attachment_upload(
         )
         .await
     {
-        if let Err(cleanup_error) = state.minio.delete_version(&attachment.s3_key, &verified_vid).await {
+        if let Err(cleanup_error) = state.storage.delete_object(&attachment.s3_key).await {
             tracing::error!(
                 ?cleanup_error,
                 map_id = %id,
@@ -723,7 +733,7 @@ async fn copy_attachment(
         "maps/{id}/attachments/{new_id}/{}",
         source.sanitized_name
     );
-    let version_id = state.minio.copy_object(&source.s3_key, &s3_key).await?;
+    state.storage.copy_object(&source.s3_key, &s3_key).await?;
 
     let created = state
         .db
@@ -736,7 +746,7 @@ async fn copy_attachment(
             content_type: source.content_type.clone(),
             size_bytes: source.size_bytes,
             s3_key: s3_key.clone(),
-            s3_version_id: Some(version_id.clone()),
+            s3_version_id: None,
             uploaded_by: user.0.clone(),
             uploaded_at: Utc::now(),
             encrypted: source.encrypted,
@@ -749,7 +759,7 @@ async fn copy_attachment(
     // The object exists but no row points at it: remove it rather than leave a
     // byte-for-byte duplicate nothing can reach or account for.
     if let Err(error) = created {
-        if let Err(cleanup_error) = state.minio.delete_object(&s3_key).await {
+        if let Err(cleanup_error) = state.storage.delete_object(&s3_key).await {
             tracing::error!(
                 ?cleanup_error,
                 map_id = %id,
@@ -772,7 +782,7 @@ async fn delete_attachment(
     find_owned(&state.db, &id, &user.0).await?;
     let attachment = find_attachment(&state.db, &id, &attachment_id).await?;
 
-    match state.minio.delete_object(&attachment.s3_key).await {
+    match state.storage.delete_object(&attachment.s3_key).await {
         Ok(()) | Err(AppError::NotFound(_)) => {}
         Err(error) => return Err(error),
     }
@@ -785,143 +795,63 @@ async fn delete_attachment(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// Lists a vault's saved versions.
+///
+/// Answered entirely from `version_history`. The object store is never asked
+/// what versions exist, because that question has no portable answer: stores
+/// without `ListObjectVersions` used to send this down a fallback that
+/// reported every version as 0 B.
 async fn list_versions(
     State(state): State<MindMapsSqlState>,
     user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<VersionDetail>>, AppError> {
     let map = find_owned(&state.db, &id, &user.0).await?;
-    let normalized_history = normalize_version_history(&map.version_history);
-    let normalized_current_version_id = map
-        .minio_version_id
+    let history = normalize_version_history(&map.version_history);
+    let current_version_id = map
+        .current_version_id
         .as_deref()
         .map(normalize_version_id)
         .filter(|value| !value.is_empty());
-    let total_version_count = std::cmp::max(
-        normalized_history.len(),
-        usize::from(normalized_current_version_id.is_some()),
-    );
-    let expected_version_ids = known_version_ids(&normalized_history, normalized_current_version_id.as_deref());
-    let minio_versions = match state
-        .minio
-        .merge_known_versions(
-            &map.minio_object_key,
-            &expected_version_ids,
-            normalized_current_version_id.as_deref(),
-        )
-        .await
-    {
-        Ok(versions) => versions,
-        Err(AppError::Storage(error)) => {
-            tracing::warn!(
-                user_id = %user.0,
-                map_id = %id,
-                ?error,
-                "failed to load object version details; falling back to metadata-only versions"
-            );
 
-            let current_id = normalized_current_version_id.as_deref();
-            expected_version_ids
-                .iter()
-                .enumerate()
-                .map(|(_index, version_id)| {
-                    let history_snapshot = normalized_history
-                        .iter()
-                        .find(|snapshot| snapshot.version_id == *version_id);
-
-                    crate::db::minio::ObjectVersionInfo {
-                        version_id: version_id.clone(),
-                        is_latest: current_id == Some(version_id.as_str()),
-                        last_modified: history_snapshot
-                            .map(|snapshot| snapshot.saved_at)
-                            .unwrap_or(map.updated_at),
-                        size_bytes: 0,
-                    }
-                })
-                .collect()
-        }
-        Err(error) => return Err(error),
-    };
-
-    let current_version_id = normalized_current_version_id;
-    let current_eph_classical = map.eph_classical_public.clone();
-    let current_eph_pq = map.eph_pq_ciphertext.clone();
-    let current_wrapped_dek = map.wrapped_dek.clone();
-
-    let history: HashMap<String, (VersionSnapshot, usize)> = normalized_history
-        .into_iter()
+    let mut versions: Vec<VersionDetail> = history
+        .iter()
         .enumerate()
-        .map(|(index, snapshot)| (snapshot.version_id.clone(), (snapshot, index + 1)))
-        .collect();
-
-    let versions = minio_versions
-        .into_iter()
-        .map(|version| {
-            let snap = history.get(&version.version_id);
-            let is_current = current_version_id.as_deref() == Some(version.version_id.as_str());
-            let (version_number, eph_cl, eph_pq, wdek, saved_at) = if let Some((snapshot, version_number)) = snap {
-                (
-                    Some(*version_number),
-                    Some(snapshot.eph_classical_public.clone()),
-                    Some(snapshot.eph_pq_ciphertext.clone()),
-                    Some(snapshot.wrapped_dek.clone()),
-                    Some(snapshot.saved_at),
-                )
-            } else if is_current {
-                (
-                    Some(total_version_count.max(1)),
-                    Some(current_eph_classical.clone()),
-                    Some(current_eph_pq.clone()),
-                    Some(current_wrapped_dek.clone()),
-                    None,
-                )
-            } else {
-                (None, None, None, None, None)
-            };
-
-            VersionDetail {
-                version_id: version.version_id,
-                version_number,
-                is_latest: version.is_latest,
-                last_modified: version.last_modified,
-                size_bytes: version.size_bytes,
-                eph_classical_public: eph_cl,
-                eph_pq_ciphertext: eph_pq,
-                wrapped_dek: wdek,
-                saved_at,
-            }
+        .map(|(index, snapshot)| VersionDetail {
+            version_id: snapshot.version_id.clone(),
+            version_number: Some(index + 1),
+            is_latest: current_version_id.as_deref() == Some(snapshot.version_id.as_str()),
+            last_modified: snapshot.saved_at,
+            size_bytes: snapshot.size_bytes.unwrap_or(0),
+            eph_classical_public: Some(snapshot.eph_classical_public.clone()),
+            eph_pq_ciphertext: Some(snapshot.eph_pq_ciphertext.clone()),
+            wrapped_dek: Some(snapshot.wrapped_dek.clone()),
+            saved_at: Some(snapshot.saved_at),
         })
         .collect();
 
+    // A vault saved before version history was recorded has a current version
+    // that appears nowhere in the list. Its envelope is the one on the row.
+    if let Some(current) = current_version_id.as_deref() {
+        if !versions.iter().any(|version| version.version_id == current) {
+            versions.push(VersionDetail {
+                version_id: current.to_string(),
+                version_number: Some(versions.len() + 1),
+                is_latest: true,
+                last_modified: map.updated_at,
+                size_bytes: 0,
+                eph_classical_public: Some(map.eph_classical_public.clone()),
+                eph_pq_ciphertext: Some(map.eph_pq_ciphertext.clone()),
+                wrapped_dek: Some(map.wrapped_dek.clone()),
+                saved_at: None,
+            });
+        }
+    }
+
+    versions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
     Ok(Json(versions))
 }
 
-fn known_version_ids(
-    version_history: &[VersionSnapshot],
-    current_version_id: Option<&str>,
-) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut version_ids = Vec::new();
-
-    for snapshot in version_history.iter().rev() {
-        let version_id = normalize_version_id(&snapshot.version_id);
-        if version_id.is_empty() {
-            continue;
-        }
-        if seen.insert(version_id.clone()) {
-            version_ids.push(version_id);
-        }
-    }
-
-    if let Some(version_id) = current_version_id {
-        let version_id = normalize_version_id(version_id);
-        if !version_id.is_empty() && seen.insert(version_id.clone()) {
-            version_ids.insert(0, version_id);
-        }
-    }
-
-    version_ids
-}
 
 async fn delete_vault_version(
     State(state): State<MindMapsSqlState>,
@@ -935,7 +865,7 @@ async fn delete_vault_version(
         return Err(AppError::BadRequest("version_id is required".to_string()));
     }
     let normalized_current_version_id = map
-        .minio_version_id
+        .current_version_id
         .as_deref()
         .map(normalize_version_id)
         .filter(|value| !value.is_empty());
@@ -946,20 +876,26 @@ async fn delete_vault_version(
         ));
     }
 
-    state.minio.delete_version(&map.minio_object_key, &normalized_target_version_id).await?;
+    // A version that predates per-version keys has no object of its own; the
+    // row still goes, so the list stops offering something unloadable.
+    match resolve_blob_key(&map, Some(&normalized_target_version_id)) {
+        Ok(object_key) => state.storage.delete_object(&object_key).await?,
+        Err(AppError::NotFound(_)) => {}
+        Err(error) => return Err(error),
+    }
 
     let filtered_history: Vec<VersionSnapshot> = normalize_version_history(&map.version_history)
         .into_iter()
         .filter(|snapshot| snapshot.version_id != normalized_target_version_id)
         .collect();
 
-    let minio_version_id = normalized_current_version_id.ok_or_else(|| {
+    let current_version_id = normalized_current_version_id.ok_or_else(|| {
         AppError::BadRequest("Current active version is missing from vault metadata.".to_string())
     })?;
 
     state
         .db
-        .update_mind_map_upload(&id, &user.0, &minio_version_id, filtered_history)
+        .update_mind_map_upload(&id, &user.0, &current_version_id, filtered_history)
         .await?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1021,29 +957,7 @@ async fn get_storage(
     let mut grand_attachment_bytes = 0_i64;
 
     for map in maps {
-        let expected_version_ids = known_version_ids(&map.version_history, map.minio_version_id.as_deref());
-        let versions = match state
-            .minio
-            .merge_known_versions(
-                &map.minio_object_key,
-                &expected_version_ids,
-                map.minio_version_id.as_deref(),
-            )
-            .await
-        {
-            Ok(versions) => versions,
-            Err(AppError::Storage(error)) => {
-                tracing::warn!(
-                    user_id = %user.0,
-                    map_id = %map.id,
-                    ?error,
-                    "failed to load object version details for storage summary; falling back to attachment-only totals"
-                );
-                Vec::new()
-            }
-            Err(error) => return Err(error),
-        };
-        let version_total_bytes: i64 = versions.iter().map(|version| version.size_bytes).sum();
+        let version_total_bytes = stored_version_bytes(&map.version_history);
         let (attachment_count, attachment_bytes, all_attachment_bytes) = load_map_attachment_storage(&state.db, &map.id).await?;
         let total_bytes = version_total_bytes + all_attachment_bytes;
         grand_total += total_bytes;
@@ -1052,7 +966,7 @@ async fn get_storage(
         vaults.push(VaultStorageInfo {
             id: map.id,
             title_encrypted: map.title_encrypted,
-            version_count: versions.len(),
+            version_count: normalize_version_history(&map.version_history).len(),
             attachment_count,
             attachment_bytes,
             total_bytes,
@@ -1190,9 +1104,9 @@ async fn upload_share_blob(
         return Err(AppError::BadRequest("share is revoked".to_string()));
     }
 
-    let version_id = state.minio.upload_blob(&share.s3_key, body.to_vec()).await?;
+    state.storage.upload_blob(&share.s3_key, body.to_vec()).await?;
 
-    Ok(Json(ConfirmUploadResponse { version_id }))
+    Ok(Json(ConfirmUploadResponse { version_id: String::new() }))
 }
 
 async fn complete_share_upload(
@@ -1206,7 +1120,8 @@ async fn complete_share_upload(
     validate_share_complete(&body.version_id, body.checksum_sha256.as_deref())?;
 
     let share = find_share(&state.db, &id, &share_id).await?;
-    let verified_vid = state.minio.verify_version(&share.s3_key, &body.version_id).await?;
+    state.storage.head_size(&share.s3_key).await?;
+    let verified_vid = normalize_version_id(&body.version_id);
     if let Err(error) = state
         .db
         .complete_mind_map_share_upload(
@@ -1220,7 +1135,7 @@ async fn complete_share_upload(
         )
         .await
     {
-        if let Err(cleanup_error) = state.minio.delete_version(&share.s3_key, &verified_vid).await {
+        if let Err(cleanup_error) = state.storage.delete_object(&share.s3_key).await {
             tracing::error!(
                 ?cleanup_error,
                 map_id = %id,
@@ -1250,7 +1165,7 @@ async fn revoke_share(
     // blob is a second, independently-keyed copy of the map; leaving it in
     // storage means "revoked" only stops new downloads while the copy — and the
     // bytes it costs the owner — live on forever.
-    delete_share_objects(&state.db, &state.minio, std::slice::from_ref(&existing)).await?;
+    delete_share_objects(&state.db, &state.storage, std::slice::from_ref(&existing)).await?;
     state.db.mark_mind_map_share_purged(&share_id).await?;
 
     let updated = find_share(&state.db, &id, &share_id).await?;
@@ -1336,12 +1251,9 @@ async fn upload_share_attachment_blob(
     }
 
     let attachment = find_share_attachment(&state.db, &share_id, &attachment_id).await?;
-    let version_id = state
-        .minio
-        .upload_blob(&attachment.s3_key, body.to_vec())
-        .await?;
+    state.storage.upload_blob(&attachment.s3_key, body.to_vec()).await?;
 
-    Ok(Json(ConfirmUploadResponse { version_id }))
+    Ok(Json(ConfirmUploadResponse { version_id: String::new() }))
 }
 
 async fn complete_share_attachment_upload(
@@ -1353,10 +1265,8 @@ async fn complete_share_attachment_upload(
     find_owned(&state.db, &id, &user.0).await?;
     validate_share_complete(&body.version_id, body.checksum_sha256.as_deref())?;
     let attachment = find_share_attachment(&state.db, &share_id, &attachment_id).await?;
-    let verified_vid = state
-        .minio
-        .verify_version(&attachment.s3_key, &body.version_id)
-        .await?;
+    state.storage.head_size(&attachment.s3_key).await?;
+    let verified_vid = normalize_version_id(&body.version_id);
 
     if let Err(error) = state
         .db
@@ -1372,8 +1282,8 @@ async fn complete_share_attachment_upload(
         .await
     {
         if let Err(cleanup_error) = state
-            .minio
-            .delete_version(&attachment.s3_key, &verified_vid)
+            .storage
+            .delete_object(&attachment.s3_key)
             .await
         {
             tracing::error!(
@@ -1414,19 +1324,19 @@ async fn find_share_attachment(
 
 pub(crate) async fn delete_share_objects(
     store: &DynSqlStore,
-    minio: &MinioClient,
+    storage: &S3Store,
     shares: &[StoredMindMapShare],
 ) -> Result<(), AppError> {
     for share in shares {
         let attachments = store.list_mind_map_share_attachments(&share.id).await?;
         for attachment in attachments {
-            match minio.delete_object(&attachment.s3_key).await {
+            match storage.delete_object(&attachment.s3_key).await {
                 Ok(()) | Err(AppError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
         }
 
-        match minio.delete_object(&share.s3_key).await {
+        match storage.delete_object(&share.s3_key).await {
             Ok(()) | Err(AppError::NotFound(_)) => {}
             Err(error) => return Err(error),
         }
@@ -1479,11 +1389,8 @@ fn validate_share_attachment_init(body: &InitMapShareAttachmentRequest) -> Resul
     Ok(())
 }
 
-fn validate_share_complete(version_id: &str, checksum_sha256: Option<&str>) -> Result<(), AppError> {
-    if version_id.trim().is_empty() {
-        return Err(AppError::BadRequest("version_id is required".to_string()));
-    }
-
+/// As with attachments, the share blob has its own key and needs no version id.
+fn validate_share_complete(_version_id: &str, checksum_sha256: Option<&str>) -> Result<(), AppError> {
     if let Some(checksum) = checksum_sha256 {
         let normalized = checksum.trim();
         if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -1583,11 +1490,11 @@ async fn find_attachment(
 }
 
 async fn delete_attachment_objects(
-    minio: &MinioClient,
+    storage: &S3Store,
     attachments: &[StoredMindMapAttachment],
 ) -> Result<(), AppError> {
     for attachment in attachments {
-        match minio.delete_object(&attachment.s3_key).await {
+        match storage.delete_object(&attachment.s3_key).await {
             Ok(()) | Err(AppError::NotFound(_)) => {}
             Err(error) => return Err(error),
         }
@@ -1630,10 +1537,11 @@ fn validate_attachment_init(body: &InitAttachmentRequest) -> Result<(), AppError
     Ok(())
 }
 
-fn validate_attachment_complete(body: &CompleteAttachmentUploadRequest) -> Result<(), AppError> {
-    if body.version_id.trim().is_empty() {
-        return Err(AppError::BadRequest("version_id is required".to_string()));
-    }
+/// An attachment occupies a key of its own, so there is no version to report
+/// and an empty `version_id` is not an error. What proves the upload arrived is
+/// the HeadObject the caller does on the key; requiring an id here only ruled
+/// out stores that do not return one, R2 among them.
+fn validate_attachment_complete(_body: &CompleteAttachmentUploadRequest) -> Result<(), AppError> {
     Ok(())
 }
 
@@ -1668,6 +1576,80 @@ fn normalize_version_id(version_id: &str) -> String {
     version_id.trim().trim_matches('"').to_string()
 }
 
+/// Resolves a version id to the object key its ciphertext is stored under.
+///
+/// `None` means the current version. Versions written before per-version keys
+/// carry no `object_key`: their bytes were an S3 version of the base key, which
+/// only a store that really implemented versioning can still produce, so the
+/// current one resolves to the base key and older ones are reported gone rather
+/// than silently answered with the current data.
+fn resolve_blob_key(map: &StoredMindMap, version_id: Option<&str>) -> Result<String, AppError> {
+    let current = map
+        .current_version_id
+        .as_deref()
+        .map(normalize_version_id)
+        .filter(|value| !value.is_empty());
+
+    let wanted = match version_id {
+        Some(value) => S3Store::validate_version_id(value)?,
+        // Nothing saved yet, or a row from before version ids were recorded.
+        None => match current.clone() {
+            Some(value) => value,
+            None => return Ok(map.object_key.clone()),
+        },
+    };
+
+    if let Some(object_key) = normalize_version_history(&map.version_history)
+        .iter()
+        .find(|snapshot| snapshot.version_id == wanted)
+        .and_then(|snapshot| snapshot.object_key.clone())
+    {
+        return Ok(object_key);
+    }
+
+    if current.as_deref() == Some(wanted.as_str()) {
+        return Ok(map.object_key.clone());
+    }
+
+    Err(AppError::NotFound(format!(
+        "version '{wanted}' is no longer stored"
+    )))
+}
+
+/// Trims `history` to the newest `keep` entries, returning the object keys of
+/// the versions dropped so the caller can delete them once the row is written.
+///
+/// History is the record of what exists, so retention has to trim it; deleting
+/// objects alone would leave rows pointing at bytes that are gone.
+fn prune_history(history: &mut Vec<VersionSnapshot>, keep: u32) -> Vec<String> {
+    let keep = keep.max(1) as usize;
+    if history.len() <= keep {
+        return Vec::new();
+    }
+
+    let excess = history.len() - keep;
+    history
+        .drain(..excess)
+        .filter_map(|snapshot| snapshot.object_key)
+        .collect()
+}
+
+/// Deletes objects in the background, after the row that referenced them is
+/// already written. A failure here leaks bytes; it must not fail the save.
+fn spawn_object_cleanup(storage: S3Store, object_keys: Vec<String>) {
+    if object_keys.is_empty() {
+        return;
+    }
+
+    tokio::spawn(async move {
+        for object_key in object_keys {
+            if let Err(error) = storage.delete_object(&object_key).await {
+                tracing::warn!(?error, %object_key, "could not delete a pruned version object");
+            }
+        }
+    });
+}
+
 fn normalize_version_history(version_history: &[VersionSnapshot]) -> Vec<VersionSnapshot> {
     let mut normalized = Vec::with_capacity(version_history.len());
     let mut seen = HashSet::new();
@@ -1684,6 +1666,8 @@ fn normalize_version_history(version_history: &[VersionSnapshot]) -> Vec<Version
             eph_pq_ciphertext: snapshot.eph_pq_ciphertext.clone(),
             wrapped_dek: snapshot.wrapped_dek.clone(),
             saved_at: snapshot.saved_at,
+            object_key: snapshot.object_key.clone(),
+            size_bytes: snapshot.size_bytes,
         });
     }
 
@@ -1691,7 +1675,7 @@ fn normalize_version_history(version_history: &[VersionSnapshot]) -> Vec<Version
 }
 
 fn presign_expires_at(state: &MindMapsSqlState) -> Result<chrono::DateTime<Utc>, AppError> {
-    let delta = chrono::Duration::from_std(state.minio.presign_expiry)
+    let delta = chrono::Duration::from_std(state.storage.presign_expiry)
         .map_err(|error| AppError::Internal(format!("invalid presign expiry: {error}")))?;
     Ok(Utc::now() + delta)
 }
@@ -1720,13 +1704,13 @@ fn to_detail(map: StoredMindMap) -> MindMapDetail {
         id,
         user_id: _,
         title_encrypted,
-        minio_object_key: _,
+        object_key: _,
         eph_classical_public,
         eph_pq_ciphertext,
         wrapped_dek,
         created_at,
         updated_at,
-        minio_version_id,
+        current_version_id,
         version_history,
         vault_color,
         vault_note_encrypted,
@@ -1736,13 +1720,13 @@ fn to_detail(map: StoredMindMap) -> MindMapDetail {
     } = map;
 
     let normalized_history = normalize_version_history(&version_history);
-    let normalized_minio_version_id = minio_version_id
+    let normalized_current_version_id = current_version_id
         .as_deref()
         .map(normalize_version_id)
         .filter(|value| !value.is_empty());
     let total_version_count = std::cmp::max(
         normalized_history.len(),
-        usize::from(normalized_minio_version_id.is_some()),
+        usize::from(normalized_current_version_id.is_some()),
     );
 
     MindMapDetail {
@@ -1756,7 +1740,7 @@ fn to_detail(map: StoredMindMap) -> MindMapDetail {
         vault_encryption_mode,
         max_versions,
         total_version_count,
-        minio_version_id: normalized_minio_version_id,
+        current_version_id: normalized_current_version_id,
         created_at,
         updated_at,
     }
@@ -1766,7 +1750,44 @@ fn to_detail(map: StoredMindMap) -> MindMapDetail {
 mod tests {
     use chrono::Utc;
 
-    use super::{known_version_ids, normalize_version_history, normalize_version_id, sanitize_attachment_name, VersionSnapshot};
+    use super::{
+        normalize_version_history, normalize_version_id, prune_history, resolve_blob_key,
+        sanitize_attachment_name, AppError, StoredMindMap, VersionSnapshot,
+    };
+
+    fn snapshot(version_id: &str, object_key: Option<&str>) -> VersionSnapshot {
+        VersionSnapshot {
+            version_id: version_id.to_string(),
+            eph_classical_public: "eph".to_string(),
+            eph_pq_ciphertext: "pq".to_string(),
+            wrapped_dek: "dek".to_string(),
+            saved_at: Utc::now(),
+            object_key: object_key.map(str::to_string),
+            size_bytes: Some(128),
+        }
+    }
+
+    fn map_with(history: Vec<VersionSnapshot>, current: Option<&str>) -> StoredMindMap {
+        let now = Utc::now();
+        StoredMindMap {
+            id: "map-1".to_string(),
+            user_id: "user-1".to_string(),
+            title_encrypted: "title".to_string(),
+            object_key: "blob-key".to_string(),
+            eph_classical_public: "eph".to_string(),
+            eph_pq_ciphertext: "pq".to_string(),
+            wrapped_dek: "dek".to_string(),
+            created_at: now,
+            updated_at: now,
+            current_version_id: current.map(str::to_string),
+            version_history: history,
+            vault_color: None,
+            vault_note_encrypted: None,
+            vault_encryption_mode: "standard".to_string(),
+            max_versions: 50,
+            vault_labels: Vec::new(),
+        }
+    }
 
     #[test]
     fn sanitizes_attachment_names_for_object_keys() {
@@ -1781,29 +1802,10 @@ mod tests {
 
     #[test]
     fn normalizes_and_deduplicates_version_history_ids() {
-        let saved_at = Utc::now();
         let history = vec![
-            VersionSnapshot {
-                version_id: " \"62ea0a57-8b2a-4fd2-8046-cf8769d81489\" ".to_string(),
-                eph_classical_public: "eph-a".to_string(),
-                eph_pq_ciphertext: "pq-a".to_string(),
-                wrapped_dek: "dek-a".to_string(),
-                saved_at,
-            },
-            VersionSnapshot {
-                version_id: "62ea0a57-8b2a-4fd2-8046-cf8769d81489".to_string(),
-                eph_classical_public: "eph-b".to_string(),
-                eph_pq_ciphertext: "pq-b".to_string(),
-                wrapped_dek: "dek-b".to_string(),
-                saved_at,
-            },
-            VersionSnapshot {
-                version_id: " c913788a-3366-4846-8fc5-ed3074b0a20e ".to_string(),
-                eph_classical_public: "eph-c".to_string(),
-                eph_pq_ciphertext: "pq-c".to_string(),
-                wrapped_dek: "dek-c".to_string(),
-                saved_at,
-            },
+            snapshot(" \"62ea0a57-8b2a-4fd2-8046-cf8769d81489\" ", Some("blob-key/v/a")),
+            snapshot("62ea0a57-8b2a-4fd2-8046-cf8769d81489", Some("blob-key/v/a")),
+            snapshot(" c913788a-3366-4846-8fc5-ed3074b0a20e ", Some("blob-key/v/b")),
         ];
 
         let normalized = normalize_version_history(&history);
@@ -1813,41 +1815,82 @@ mod tests {
     }
 
     #[test]
-    fn prefers_normalized_current_id_and_dedupes_history() {
-        let saved_at = Utc::now();
-        let history = vec![
-            VersionSnapshot {
-                version_id: "\"a0000000-0000-0000-0000-000000000001\"".to_string(),
-                eph_classical_public: "eph".to_string(),
-                eph_pq_ciphertext: "pq".to_string(),
-                wrapped_dek: "dek".to_string(),
-                saved_at,
-            },
-            VersionSnapshot {
-                version_id: "a0000000-0000-0000-0000-000000000002".to_string(),
-                eph_classical_public: "eph".to_string(),
-                eph_pq_ciphertext: "pq".to_string(),
-                wrapped_dek: "dek".to_string(),
-                saved_at,
-            },
-        ];
-
-        let ids = known_version_ids(
-            &history,
-            Some(" \"a0000000-0000-0000-0000-000000000002\" "),
-        );
-
-        assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0], "a0000000-0000-0000-0000-000000000002");
-        assert_eq!(ids[1], "a0000000-0000-0000-0000-000000000001");
-    }
-
-    #[test]
     fn normalizes_single_version_id_from_legacy_formatting() {
         assert_eq!(
             normalize_version_id(" \"b0000000-0000-0000-0000-000000000003\" "),
             "b0000000-0000-0000-0000-000000000003"
         );
+    }
+
+    #[test]
+    fn resolves_a_version_to_its_own_object() {
+        let map = map_with(
+            vec![
+                snapshot("v-old", Some("blob-key/v/v-old")),
+                snapshot("v-new", Some("blob-key/v/v-new")),
+            ],
+            Some("v-new"),
+        );
+
+        assert_eq!(resolve_blob_key(&map, Some("v-old")).unwrap(), "blob-key/v/v-old");
+        assert_eq!(resolve_blob_key(&map, Some("v-new")).unwrap(), "blob-key/v/v-new");
+        assert_eq!(resolve_blob_key(&map, None).unwrap(), "blob-key/v/v-new");
+    }
+
+    /// The bug this design removes: an older version must never resolve to the
+    /// key holding the current data, which is what a store that ignores version
+    /// ids would hand back.
+    #[test]
+    fn refuses_a_legacy_version_instead_of_serving_the_current_blob() {
+        let map = map_with(
+            vec![snapshot("v-old", None), snapshot("v-current", None)],
+            Some("v-current"),
+        );
+
+        let error = resolve_blob_key(&map, Some("v-old")).unwrap_err();
+        assert!(matches!(error, AppError::NotFound(_)), "got {error:?}");
+
+        // The current version is still readable from the pre-migration key.
+        assert_eq!(resolve_blob_key(&map, Some("v-current")).unwrap(), "blob-key");
+    }
+
+    #[test]
+    fn rejects_a_version_id_that_would_escape_the_blob_key() {
+        let map = map_with(vec![snapshot("v-1", Some("blob-key/v/v-1"))], Some("v-1"));
+
+        let error = resolve_blob_key(&map, Some("../other-vault")).unwrap_err();
+        assert!(matches!(error, AppError::BadRequest(_)), "got {error:?}");
+    }
+
+    #[test]
+    fn a_vault_with_nothing_saved_resolves_to_its_base_key() {
+        let map = map_with(Vec::new(), None);
+
+        assert_eq!(resolve_blob_key(&map, None).unwrap(), "blob-key");
+    }
+
+    #[test]
+    fn pruning_drops_the_oldest_versions_and_reports_their_objects() {
+        let mut history = vec![
+            snapshot("v-1", Some("blob-key/v/v-1")),
+            snapshot("v-2", Some("blob-key/v/v-2")),
+            snapshot("v-3", Some("blob-key/v/v-3")),
+        ];
+
+        let dropped = prune_history(&mut history, 2);
+
+        assert_eq!(dropped, vec!["blob-key/v/v-1".to_string()]);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].version_id, "v-2");
+        assert_eq!(history[1].version_id, "v-3");
+    }
+
+    #[test]
+    fn pruning_leaves_a_short_history_alone() {
+        let mut history = vec![snapshot("v-1", Some("blob-key/v/v-1"))];
+
+        assert!(prune_history(&mut history, 50).is_empty());
+        assert_eq!(history.len(), 1);
     }
 }
 
@@ -1866,8 +1909,8 @@ async fn download_attachment_blob(
     }
 
     let bytes = state
-        .minio
-        .download_blob(&attachment.s3_key, attachment.s3_version_id.as_deref())
+        .storage
+        .download_blob(&attachment.s3_key)
         .await?;
 
     Ok((

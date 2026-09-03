@@ -10,7 +10,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    db::{minio::MinioClient, sql_store::{
+    db::{s3::S3Store, sql_store::{
         DynSqlStore, NewUser, RotateAttachmentEntry, RotateCredentialsUpdate, RotateVaultEntry,
         StoredMindMap, UserProfileUpdate,
     }},
@@ -25,7 +25,7 @@ use crate::{
         attachment::AttachmentStatus,
         instance_settings::InstanceSettingsHandle,
         invite::normalize_invite_code,
-        mindmap::VersionSnapshot,
+        mindmap::stored_version_bytes,
         settings::{UpdateUserAccountSettingsRequest, UserAccountSettings},
         user::{
             AccountCapabilitiesResponse, AccountStorageResponse, KeyBundleResponse,
@@ -39,7 +39,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AuthSqlState {
     pub db: DynSqlStore,
-    pub minio: MinioClient,
+    pub storage: S3Store,
     pub jwt: Arc<JwtService>,
     pub settings: InstanceSettingsHandle,
     pub throttle: Arc<AuthThrottle>,
@@ -449,16 +449,7 @@ async fn get_storage(
     let mut attachment_bytes = 0_i64;
 
     for map in &maps {
-        let expected_version_ids = known_version_ids(&map.version_history, map.minio_version_id.as_deref());
-        let versions = state
-            .minio
-            .merge_known_versions(
-                &map.minio_object_key,
-                &expected_version_ids,
-                map.minio_version_id.as_deref(),
-            )
-            .await?;
-        total_bytes += versions.iter().map(|version| version.size_bytes).sum::<i64>();
+        total_bytes += stored_version_bytes(&map.version_history);
         let attachments = state.db.list_mind_map_attachments(&map.id).await?;
         let available: Vec<_> = attachments
             .iter()
@@ -681,7 +672,7 @@ async fn delete_profile(
         .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
 
     let maps = state.db.list_mind_maps(&user.0).await?;
-    delete_owned_blobs(&state.db, &state.minio, &maps).await?;
+    delete_owned_blobs(&state.db, &state.storage, &maps).await?;
     state.db.delete_user(&user.0).await?;
 
     tracing::info!(user_id = %user.0, vault_count = maps.len(), "account deleted");
@@ -694,19 +685,19 @@ async fn delete_profile(
 
 async fn delete_owned_blobs(
     store: &DynSqlStore,
-    minio: &MinioClient,
+    storage: &S3Store,
     maps: &[StoredMindMap],
 ) -> Result<(), AppError> {
     for map in maps {
         let attachments = store.list_mind_map_attachments(&map.id).await?;
         for attachment in attachments {
-            match minio.delete_object(&attachment.s3_key).await {
+            match storage.delete_object(&attachment.s3_key).await {
                 Ok(()) | Err(AppError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
         }
 
-        match minio.delete_object(&map.minio_object_key).await {
+        match storage.delete_object(&map.object_key).await {
             Ok(()) | Err(AppError::NotFound(_)) => {}
             Err(error) => return Err(error),
         }
@@ -715,27 +706,6 @@ async fn delete_owned_blobs(
     Ok(())
 }
 
-fn known_version_ids(
-    version_history: &[VersionSnapshot],
-    current_version_id: Option<&str>,
-) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut version_ids = Vec::new();
-
-    for snapshot in version_history.iter().rev() {
-        if seen.insert(snapshot.version_id.clone()) {
-            version_ids.push(snapshot.version_id.clone());
-        }
-    }
-
-    if let Some(version_id) = current_version_id {
-        if seen.insert(version_id.to_string()) {
-            version_ids.insert(0, version_id.to_string());
-        }
-    }
-
-    version_ids
-}
 
 /// GET /api/auth/rotation-manifest
 ///

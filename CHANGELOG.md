@@ -4,6 +4,44 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.5.1] - 2026-09-03
+
+A fix for version history, which did not work on the object store this repo's own
+`docker-compose.yml` ships. Release notes: `docs/RELEASE_0.5.1.md`.
+
+### Fixed
+- **Version history was broken on any store without S3 object versioning.** Vault
+  blobs were kept as versions of a single object key, which Garage — the store in
+  this repo's own `docker-compose.yml` — does not implement. It accepted a version
+  id on upload and ignored it on download, answering with the current bytes and a
+  200, so loading an older version appeared to do nothing. Every save now writes its
+  own object at `<key>/v/<version-id>`, and a version id is minted by the server
+  instead of read from an `x-amz-version-id` header. Existing vaults are migrated at
+  startup; historical versions that a store never actually kept are removed from the
+  history rather than left in the list unloadable. ([#4](https://github.com/mindmapvault/mindmapvault-server/issues/4))
+- **Every version showed 0 B.** Listing versions asked the object store for their
+  sizes and fell back to zeroes when the call was unsupported. Sizes are recorded
+  when a version is written, so the list no longer contacts the store at all.
+- **`confirm-upload` accepted uploads that never happened.** The check only tested
+  that the version id was a non-empty string. It now confirms the object with
+  HeadObject.
+
+### Added
+- A storage self-test at startup: writes, reads back, compares and deletes a probe
+  object. A store that accepts a write and serves something else is otherwise
+  indistinguishable from a working one until a user loses data.
+- A PostgreSQL advisory lock around the migration, so replicas sharing a database
+  can be restarted together without racing each other through it.
+
+### Changed
+- Attachment and share uploads no longer require a version id to be reported back,
+  since each already occupies its own key. This is what R2 needs — it returns no
+  version id at all.
+- `MinioClient` is now `S3Store` in `db/s3.rs`, and the `minio_object_key` /
+  `minio_version_id` columns are `object_key` / `current_version_id`. The server
+  does not assume it is talking to MinIO. The JSON field names are unchanged, so
+  existing clients keep working.
+
 ## [0.5.0] - 2026-09-02
 
 The first release that changes what a map looks like rather than what the

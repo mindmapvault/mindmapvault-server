@@ -446,6 +446,68 @@ SERVER_IMAGE='ghcr.io/mindmapvault/mindmapvault-server:v0.3.33' docker compose u
 
 See [Published Images](#published-images) for what the tags mean.
 
+### One-Time: Vault Blob Storage Migration
+
+The release that fixes [#4](https://github.com/mindmapvault/mindmapvault-server/issues/4)
+changes how vault versions are stored. Each saved version now has its own object
+key instead of relying on S3 object versioning, which Garage does not implement.
+Upgrading is still just pulling the image and restarting — the migration runs
+automatically on first start — but three things are worth knowing before you do.
+
+**Version counts will drop, and that is the correct number.** Garage accepted a
+version id on upload and ignored it on download, so only the most recent save was
+ever really stored. The migration keeps every version whose ciphertext exists and
+removes the rows for the ones that do not, because leaving them would list
+versions that cannot be opened. Each removal is logged:
+
+```
+WARN this version's ciphertext was never stored; removing it from the history
+INFO migrated vault blobs to per-version object keys
+     vaults_migrated=2 versions_recovered=2 versions_lost=20 failures=0
+```
+
+If your bucket genuinely had versioning — MinIO or AWS S3 with it switched on —
+the migration reads that history and keeps it. Nothing is discarded that the
+store still holds.
+
+**Back up PostgreSQL *and* Garage before starting, because this upgrade is
+one-way.** Two columns on `mind_maps` are renamed, so the previous image cannot
+read the migrated database — and it fails late rather than at boot: sign-in still
+works and the vault list returns `500` only when something touches a vault.
+
+A database dump on its own is **not** a rollback. The migration deletes each
+vault's old object after copying it, so restoring only the dump gives you a
+server that lists every vault and cannot open any of them:
+
+```
+vault list: HTTP 200
+vault blob: HTTP 404 {"error":"board content not found in storage"}
+```
+
+To be able to go back, snapshot both, together, with the stack stopped:
+
+```bash
+docker compose stop server
+docker compose exec -T postgres pg_dump -U postgres mindmapvault > mindmapvault-pre-migration.sql
+docker run --rm -v mindmapvault-server_garage-data:/data -v "$PWD":/backup \
+  busybox tar czf /backup/garage-data-pre-migration.tar.gz -C /data .
+docker run --rm -v mindmapvault-server_garage-meta:/meta -v "$PWD":/backup \
+  busybox tar czf /backup/garage-meta-pre-migration.tar.gz -C /meta .
+```
+
+**First start takes longer than usual.** The migration copies each vault's
+current blob to its new key and reads it back to compare before deleting the
+original, and the server does not accept requests until it finishes. Only vault
+blobs are touched — attachments already had their own keys, so the large files
+are not moved and the work is proportional to your vault count, not your disk
+usage.
+
+Failures are per-vault: the map id is logged, the rest of the instance still
+migrates, and anything that failed is retried on the next start. Replicas
+sharing one database are safe to start together — the migration takes a
+PostgreSQL advisory lock, and the instances that do not get it skip it and serve
+normally.
+
 ## Common Operations
 
 Start the stack:

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     db::{
-        minio::MinioClient,
+        s3::S3Store,
         sql_store::{AdminUserAdminUpdate, AdminUserRecord, DynSqlStore, StoredMindMap},
     },
     error::AppError,
@@ -65,7 +65,7 @@ fn format_bytes(value: u64) -> String {
 #[derive(Clone)]
 pub struct AdminState {
     pub db: DynSqlStore,
-    pub minio: MinioClient,
+    pub storage: S3Store,
     pub admin_api_token: String,
     pub settings: InstanceSettingsHandle,
     pub purge_status: PurgeStatusHandle,
@@ -241,7 +241,7 @@ async fn get_status(
     let bucket_stats = if object_storage.reachable {
         match tokio::time::timeout(
             Duration::from_secs(10),
-            state.minio.bucket_stats(BUCKET_SCAN_MAX_PAGES),
+            state.storage.bucket_stats(BUCKET_SCAN_MAX_PAGES),
         )
         .await
         {
@@ -264,7 +264,7 @@ async fn get_status(
     // The counts come from the same overview query the People page uses, so
     // the two pages can never disagree about how much is stored.
     let users = state.db.list_admin_users().await?;
-    let storage = load_sql_user_storage(&state.db, &state.minio, &users).await?;
+    let storage = load_sql_user_storage(&state.db, &state.storage, &users).await?;
     let invites = state.db.list_registration_invites().await?;
     let settings = state.settings.get();
 
@@ -376,7 +376,7 @@ async fn get_status(
         database,
         database_stats,
         object_storage,
-        storage_bucket: state.minio.bucket_name().to_string(),
+        storage_bucket: state.storage.bucket_name().to_string(),
         bucket_stats,
         totals,
         purge: state.purge_status.get(),
@@ -414,7 +414,7 @@ where
 
 async fn measure_storage(state: &AdminState) -> DependencyHealth {
     let started = std::time::Instant::now();
-    let result = tokio::time::timeout(Duration::from_secs(5), state.minio.health_check()).await;
+    let result = tokio::time::timeout(Duration::from_secs(5), state.storage.health_check()).await;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     match result {
@@ -603,7 +603,7 @@ async fn run_share_purge(
 ) -> Result<Json<PurgeRunResponse>, AppError> {
     authorize_admin(&state, &headers).await?;
 
-    crate::purge_expired_shares(&state.db, &state.minio, &state.purge_status).await;
+    crate::purge_expired_shares(&state.db, &state.storage, &state.purge_status).await;
     let purge = state.purge_status.get();
 
     write_audit_event(
@@ -849,7 +849,7 @@ async fn delete_user_account(
     }
 
     {
-        delete_sql_user_account(&state.db, &state.minio, &user_id).await?;
+        delete_sql_user_account(&state.db, &state.storage, &user_id).await?;
     }
 
     write_audit_event(
@@ -872,7 +872,7 @@ async fn build_overview(state: &AdminState) -> Result<AdminOverviewResponse, App
     let users = store.list_admin_users().await?;
     let audit_events = store.list_admin_audit_events(DEFAULT_AUDIT_LIMIT).await?;
 
-    let storage = load_sql_user_storage(store, &state.minio, &users).await?;
+    let storage = load_sql_user_storage(store, &state.storage, &users).await?;
 
     let total_vaults: usize = storage.iter().map(|summary| summary.vault_count).sum();
     let total_used_bytes: i64 = storage.iter().map(|summary| summary.used_bytes).sum();
@@ -930,7 +930,7 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 
 async fn load_sql_user_storage(
     store: &DynSqlStore,
-    minio: &MinioClient,
+    storage: &S3Store,
     users: &[AdminUserRecord],
 ) -> Result<Vec<UserStorageSummary>, AppError> {
     let mut user_maps = Vec::with_capacity(users.len());
@@ -938,16 +938,16 @@ async fn load_sql_user_storage(
 
     for user in users {
         let maps = store.list_mind_maps(&user.id).await?;
-        object_keys.extend(maps.iter().map(|map| map.minio_object_key.clone()));
+        object_keys.extend(maps.iter().map(|map| map.object_key.clone()));
         user_maps.push(maps);
     }
 
-    let size_totals = load_bucket_size_totals(minio, &object_keys).await;
+    let size_totals = load_bucket_size_totals(storage, &object_keys).await;
     let mut storage = Vec::with_capacity(user_maps.len());
     for maps in user_maps {
         let mut used_bytes = 0_i64;
         for map in &maps {
-            used_bytes += size_totals.get(&map.minio_object_key).copied().unwrap_or(0);
+            used_bytes += size_totals.get(&map.object_key).copied().unwrap_or(0);
             let attachments = store.list_mind_map_attachments(&map.id).await?;
             used_bytes += attachments
                 .iter()
@@ -966,7 +966,7 @@ async fn load_sql_user_storage(
 }
 
 async fn load_bucket_size_totals(
-    minio: &MinioClient,
+    storage: &S3Store,
     object_keys: &HashSet<String>,
 ) -> HashMap<String, i64> {
     if object_keys.is_empty() {
@@ -975,21 +975,21 @@ async fn load_bucket_size_totals(
 
     match tokio::time::timeout(
         Duration::from_secs(10),
-        minio.list_version_size_totals_for_keys(object_keys),
+        storage.prefix_size_totals(object_keys),
     )
     .await
     {
         Ok(Ok(totals)) => totals,
         Ok(Err(error)) => {
             tracing::warn!(
-                "Admin overview storage totals fallback triggered after MinIO error: {}",
+                "Admin overview storage totals fallback triggered after the object store error: {}",
                 error
             );
             HashMap::new()
         }
         Err(_) => {
             tracing::warn!(
-                "Admin overview storage totals fallback triggered after MinIO timeout"
+                "Admin overview storage totals fallback triggered after the object store timeout"
             );
             HashMap::new()
         }
@@ -1000,7 +1000,7 @@ async fn load_bucket_size_totals(
 
 async fn delete_sql_user_account(
     store: &DynSqlStore,
-    minio: &MinioClient,
+    storage: &S3Store,
     user_id: &str,
 ) -> Result<(), AppError> {
     let db_user = store
@@ -1008,7 +1008,7 @@ async fn delete_sql_user_account(
         .await?
         .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
     let maps = store.list_mind_maps(user_id).await?;
-    delete_owned_blobs(store, minio, &maps).await?;
+    delete_owned_blobs(store, storage, &maps).await?;
     store.delete_user(user_id).await?;
 
     tracing::info!(
@@ -1022,19 +1022,19 @@ async fn delete_sql_user_account(
 
 async fn delete_owned_blobs(
     store: &DynSqlStore,
-    minio: &MinioClient,
+    storage: &S3Store,
     maps: &[StoredMindMap],
 ) -> Result<(), AppError> {
     for map in maps {
         let attachments = store.list_mind_map_attachments(&map.id).await?;
         for attachment in attachments {
-            match minio.delete_object(&attachment.s3_key).await {
+            match storage.delete_object(&attachment.s3_key).await {
                 Ok(()) | Err(AppError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
         }
 
-        match minio.delete_object(&map.minio_object_key).await {
+        match storage.delete_object(&map.object_key).await {
             Ok(()) | Err(AppError::NotFound(_)) => {}
             Err(error) => return Err(error),
         }
