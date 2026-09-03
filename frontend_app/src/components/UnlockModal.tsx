@@ -4,6 +4,7 @@ import { aesDecrypt } from '../crypto/aes';
 import { deriveMasterAesKey, deriveMasterKey, deriveAuthToken } from '../crypto/kdf';
 import { fromBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
+import { PasswordInput } from './PasswordInput';
 import type { SessionKeys } from '../types';
 
 interface Props {
@@ -87,12 +88,11 @@ export function UnlockModal({ onUnlocked }: Props) {
             <label className="mb-1.5 block text-sm font-medium text-slate-300">
               Password for <span className="text-accent">{username}</span>
             </label>
-            <input
-              type="password"
+            <PasswordInput
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
-              className="w-full rounded-lg border border-slate-600 bg-surface px-4 py-2.5 text-white placeholder-slate-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              autoComplete="current-password"
               autoFocus
             />
           </div>
