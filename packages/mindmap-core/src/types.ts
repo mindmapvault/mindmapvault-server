@@ -50,6 +50,9 @@ export interface NodeParts {
   lines: string[];
   iconCount: number;
   urlCount: number;
+  /** The node's tags. Only the count changes the measurement; the band that
+   *  draws them reads these so it need not go back to the node. */
+  tags: string[];
   tagCount: number;
   linkId: string | null;
   hasCheckbox: boolean;

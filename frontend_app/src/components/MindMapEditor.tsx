@@ -37,7 +37,17 @@ import { SettingsButton } from './SettingsButton';
 import { MindMapIconPicker } from './MindMapIconPicker.tsx';
 import { MindMapColorPicker } from './MindMapColorPicker';
 import { MindMapDateDialog } from './MindMapDateDialog';
-import DynamicLucideIcon from './DynamicLucideIcon.tsx';
+import {
+  BodyBand,
+  CollapseControls,
+  DateBadge,
+  FooterBand,
+  ImageBand,
+  MetaBand,
+  TagBand,
+  type BodyActions,
+  type NodeVisual,
+} from './mindmap/NodeBands';
 import { MindMapNotesDialog } from './MindMapNotesDialog';
 import type { NoteEditorHandle } from './notes/NoteEditor';
 import { useUserLabels } from '../hooks/useUserLabels';
@@ -46,13 +56,6 @@ import {
   NODE_COLORS,
   COLOR_PALETTE,
   PROGRESS_PRESETS,
-  CHECKBOX_SIZE,
-  ICON_SIZE,
-  PROGRESS_PIE_SIZE,
-  NODE_LINE_H,
-  NODE_PAD_X,
-  LINK_STRIP_H,
-  TAG_STRIP_H,
 } from './MindMapConstants';
 import {
   uid,
@@ -69,7 +72,7 @@ import { layoutTree, bezierPath, describeNode, nodeGeometry } from '@mindmapvaul
 import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils/nodeAttachments';
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
-import { handleDelegatedLinkClick, openExternalUrl } from '../utils/openExternal';
+import { handleDelegatedLinkClick } from '../utils/openExternal';
 import { createNodeImageGlyph, type NodeImageGlyph } from '../utils/filePreview';
 import './MindMapEditor.css';
 
@@ -2098,34 +2101,6 @@ export function DesktopMindMapEditor({
   //  SVG RENDERING
   // ══════════════════════════════════════════════════════════════════════════
 
-  const renderProgressPie = (cx: number, cy: number, pct: number, size: number, onClickPie?: () => void) => {
-    const r = size / 2 - 2;
-    const inner = pct >= 100
-      ? (<g><circle cx={cx} cy={cy} r={r} fill="#16a34a" /><path d={`M ${cx - 4} ${cy} l 3 3 5 -5`} fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></g>)
-      : (() => {
-        const angle = (pct / 100) * 360;
-        const rad = (angle - 90) * (Math.PI / 180);
-        const ex = cx + r * Math.cos(rad);
-        const ey = cy + r * Math.sin(rad);
-        const large = angle > 180 ? 1 : 0;
-        const piePath = pct > 0 ? `M ${cx} ${cy} L ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${ex} ${ey} Z` : '';
-        return (
-          <g>
-            <circle cx={cx} cy={cy} r={r} fill="var(--mm-node-fill)" stroke="var(--mm-node-stroke)" strokeWidth={1} />
-            {piePath && <path d={piePath} fill="var(--accent)" opacity={0.8} />}
-            <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="middle" fontSize={11} fontWeight="bold" fill="var(--mm-node-text)">{pct}%</text>
-          </g>
-        );
-      })();
-    if (!onClickPie) return inner;
-    return (
-      <g style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); onClickPie(); }}>
-        {inner}
-        <circle cx={cx} cy={cy} r={r} fill="transparent" />
-      </g>
-    );
-  };
-
   const renderConnections = useCallback((node: MindMapTreeNode): JSX.Element[] => {
     const paths: JSX.Element[] = [];
     if (node.collapsed) return paths;
@@ -2169,32 +2144,6 @@ export function DesktopMindMapEditor({
     return paths;
   }, [layout, focusMode, focusedIds, rootLeftCollapsed, rootRightCollapsed]);
 
-  const renderAttachmentIndicator = (x: number, y: number, count: number, ownColor: string | null) => {
-    const indicatorWidth = count > 1 ? 28 : 18;
-    const iconX = x - indicatorWidth / 2 + 5;
-    const textX = x + indicatorWidth / 2 - 6;
-    const stroke = ownColor ? '#ffffffcc' : '#cbd5e1';
-    const fill = ownColor ? 'rgba(15, 23, 42, 0.34)' : 'rgba(15, 23, 42, 0.82)';
-    return (
-      <g className="mm-attachment-indicator">
-        <rect x={x - indicatorWidth / 2} y={y - 7} width={indicatorWidth} height={14} rx={7} fill={fill} stroke={stroke} strokeWidth={1} />
-        <path
-          d={`M ${iconX} ${y + 1.5} l 4.1 -4.1 a 2.2 2.2 0 1 1 3.1 3.1 l -4.8 4.8 a 3.3 3.3 0 1 1 -4.7 -4.7 l 4.2 -4.2`}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={1.1}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {count > 1 && (
-          <text x={textX} y={y + 0.5} textAnchor="middle" dominantBaseline="middle" fontSize={8.5} fontWeight="700" fill={ownColor ? '#ffffff' : '#f8fafc'}>
-            {count}
-          </text>
-        )}
-      </g>
-    );
-  };
-
   const cancelHoverPopupClose = useCallback(() => {
     if (!hoverPopupCloseTimerRef.current) return;
     clearTimeout(hoverPopupCloseTimerRef.current);
@@ -2214,6 +2163,11 @@ export function DesktopMindMapEditor({
     }, 140);
   }, [cancelHoverPopupClose, hoveringNotePopup]);
 
+  const bodyActions = useMemo<BodyActions>(
+    () => ({ onToggleCheckbox: toggleCheckbox, onCycleProgress: cycleProgress }),
+    [toggleCheckbox, cycleProgress],
+  );
+
   const renderNodes = useCallback((node: MindMapTreeNode, depth = 0): JSX.Element[] => {
     const box = layout[node.id];
     if (!box) return [];
@@ -2221,54 +2175,46 @@ export function DesktopMindMapEditor({
     const isSelected = node.id === selectedId;
     const isEditing = node.id === editingId;
     const isDrop = node.id === dropTargetId;
-    const ownColor = node.color ?? null;
-    // Only the node's own explicit color fills the bubble — and, in
-    // renderConnections, the one line coming into it. Nothing is inherited.
-    const rx = isRoot ? 18 : 8;
-
-    const fillColor = ownColor ?? (isRoot ? 'var(--mm-root-fill)' : 'var(--mm-node-fill)');
-    // Selection has to win over the node's own colour and over the root's
-    // stroke: both used to be checked first, so a coloured node drew its
-    // border in the same colour as its fill and selecting it showed nothing.
-    const strokeColor = isDrop
-      ? '#22c55e'
-      : isSelected
-        ? 'var(--accent)'
-        : (ownColor ?? (isRoot ? 'var(--mm-root-stroke)' : 'var(--mm-node-stroke)'));
-    const textColor = ownColor ? '#ffffff' : (isRoot ? 'var(--mm-root-text)' : 'var(--mm-node-text)');
-
-    const fontSize = isRoot ? 15 : 13;
-    const fontWeight = isRoot ? 'bold' : 'normal';
-    const attachments = getNodeAttachments(node.id, node.attachments);
+    const isMulti = multiSelect.has(node.id);
+    const isFaded = focusMode && focusedIds.size > 0 && !focusedIds.has(node.id);
 
     // Which bands this node has was decided once, when it was measured, and
     // rides along in the layout entry. Working it out again here is how the
     // text used to drift out of the box that was reserved for it.
-    //
-    // The picture gets a band of its own between the tag strip and the text, so
-    // the text stays centred in what is left rather than being pushed off-centre.
     const parts = box.parts;
-    const { lines, iconCount, topMetaH, hasCheckbox, hasProgress, hasNote } = parts;
-    // Derived from the parts, not re-read from the node, so the glyph and the
-    // band that makes room for it cannot disagree about whether there is one.
-    const nodeImage = parts.image ? node.image! : null;
-    const { bodyTopY, bodyH, centreY, imageY, textCentreX, lineStartY, metaCentreY, tagTopY, tagBottomY, footerTopY } =
-      nodeGeometry(box, parts);
+    const geom = nodeGeometry(box, parts);
 
-    const formatDate = (d: string) => {
-      const dt = new Date(d);
-      return `${dt.getDate().toString().padStart(2, '0')}.${(dt.getMonth() + 1).toString().padStart(2, '0')}.${String(dt.getFullYear()).slice(2)} ${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}`;
+    // Only the node's own explicit color fills the bubble — and, in
+    // renderConnections, the one line coming into it. Nothing is inherited.
+    const ownColor = node.color ?? null;
+    const rx = isRoot ? 18 : 8;
+    const visual: NodeVisual = {
+      ownColor,
+      fillColor: ownColor ?? (isRoot ? 'var(--mm-root-fill)' : 'var(--mm-node-fill)'),
+      // Selection has to win over the node's own colour and over the root's
+      // stroke: both used to be checked first, so a coloured node drew its
+      // border in the same colour as its fill and selecting it showed nothing.
+      strokeColor: isDrop
+        ? '#22c55e'
+        : isSelected
+          ? 'var(--accent)'
+          : (ownColor ?? (isRoot ? 'var(--mm-root-stroke)' : 'var(--mm-node-stroke)')),
+      textColor: ownColor ? '#ffffff' : (isRoot ? 'var(--mm-root-text)' : 'var(--mm-node-text)'),
+      fontSize: isRoot ? 15 : 13,
+      fontWeight: isRoot ? 'bold' : 'normal',
     };
-    const hasDate = !!(node.startDate || node.endDate);
-    const startLabel = node.startDate ? formatDate(node.startDate) : '–';
-    const endLabel = node.endDate ? formatDate(node.endDate) : '–';
-    const checkedInfo = (node.children.length > 0 && node.checked != null) ? countChecked(node) : null;
 
-    const isMulti = multiSelect.has(node.id);
+    const editor = isEditing ? (
+      <foreignObject x={box.x + 2} y={geom.bodyTopY + 2} width={box.w - 4} height={Math.max(0, geom.bodyH - 4)}>
+        <textarea ref={editRef} value={editText} onChange={(e) => setEditText(e.target.value)} onBlur={commitEdit}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(); } if (e.key === 'Escape') cancelEdit(); e.stopPropagation(); }}
+          className="mm-edit-textarea" style={{ color: visual.textColor, background: visual.fillColor }} />
+      </foreignObject>
+    ) : null;
 
     const elems: JSX.Element[] = [
       <g key={node.id} data-node={node.id}
-        className={`mm-node-group${isSelected ? ' mm-selected' : ''}${isMulti ? ' mm-multi-selected' : ''}${isDrop ? ' mm-drop-target' : ''}${focusMode && focusedIds.size > 0 && !focusedIds.has(node.id) ? ' mm-faded' : ''}`}
+        className={`mm-node-group${isSelected ? ' mm-selected' : ''}${isMulti ? ' mm-multi-selected' : ''}${isDrop ? ' mm-drop-target' : ''}${isFaded ? ' mm-faded' : ''}`}
         style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
         onClick={(e) => {
           e.stopPropagation();
@@ -2295,211 +2241,36 @@ export function DesktopMindMapEditor({
           dragRef.current = { nodeId: node.id, startClientX: e.clientX, startClientY: e.clientY, origX: box.x, origY: box.y, currentX: box.x, currentY: box.y, moved: false };
         }}
       >
-        {hasDate && (
-          <g className="mm-date-badge">
-            <svg x={box.x + box.w / 2 - 52} y={box.y - 32} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth={2}>
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
-            </svg>
-            <text x={box.x + box.w / 2 - 33} y={box.y - 25} fontSize={11} fill="var(--accent)" fontWeight="500">{startLabel}</text>
-            <text x={box.x + box.w / 2 - 33} y={box.y - 12} fontSize={11} fill="var(--mm-statusbar-text)">{endLabel}</text>
-          </g>
-        )}
+        {parts.hasDate && <DateBadge box={box} node={node} />}
 
-        <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={rx} ry={rx} fill={fillColor} stroke={strokeColor}
+        <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={rx} ry={rx} fill={visual.fillColor} stroke={visual.strokeColor}
           strokeWidth={isSelected ? 2.5 : isDrop ? 3 : 1.5} className={isSelected ? 'mm-node-selected' : ''} />
 
-        {topMetaH > 0 && (
-          <line
-            x1={box.x + 6}
-            y1={box.y + topMetaH}
-            x2={box.x + box.w - 6}
-            y2={box.y + topMetaH}
-            stroke={ownColor ? '#ffffff22' : 'var(--mm-node-stroke)'}
-            strokeWidth={0.5}
-          />
-        )}
-
-        {/* An SVG <image>, deliberately not a foreignObject: the PDF export
-            strips every foreignObject before serializing, and a data: URI in an
-            <image> survives into the standalone SVG and rasterizes. The bitmap
-            was encoded at exactly these dimensions, so it maps 1:1 and there is
-            no crop-versus-letterbox question to answer. */}
-        {nodeImage && (
-          <image
-            href={nodeImage.thumb}
-            x={box.x + (box.w - nodeImage.w) / 2}
-            y={imageY}
-            width={nodeImage.w}
-            height={nodeImage.h}
-            className="mm-node-image"
-            // Inline, not in the stylesheet: the export serializes this element
-            // into a standalone SVG where no class rule follows it, and a glyph
-            // with square corners in the PDF would not match the canvas.
-            style={{ clipPath: 'inset(0 round 5px)' }}
-            onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); void openNodeImage(node); }}
-          >
-            <title>{nodeImage.name ?? 'Image'}</title>
-          </image>
-        )}
-
-        {hasCheckbox && (
-          <g className="mm-checkbox-g" onClick={(e) => { e.stopPropagation(); toggleCheckbox(node.id); }} style={{ cursor: 'pointer' }}>
-            <rect x={box.x + NODE_PAD_X - 2} y={centreY - CHECKBOX_SIZE / 2} width={CHECKBOX_SIZE} height={CHECKBOX_SIZE}
-              rx={3} fill={node.checked ? 'var(--accent)' : 'transparent'} stroke={node.checked ? 'var(--accent)' : (ownColor ? '#ffffff88' : 'var(--mm-node-stroke)')} strokeWidth={1.5} />
-            {node.checked && <path d={`M ${box.x + NODE_PAD_X + 2} ${centreY} l 3 3 5 -6`} fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
-          </g>
-        )}
-
-        {iconCount > 0 && !isEditing && (
-          <g
-            transform={`translate(${box.x + NODE_PAD_X + (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) - 2}, ${centreY - ICON_SIZE / 2})`}
-            style={{ pointerEvents: 'none' }}
-          >
-            {(node.icons ?? []).map((iconName, ii) => (
-              <g key={`${iconName}-${ii}`} transform={`translate(${ii * (ICON_SIZE + 4)}, 0)`}>
-                <DynamicLucideIcon name={iconName} size={ICON_SIZE} color={textColor} />
-              </g>
-            ))}
-          </g>
-        )}
-
-        {hasProgress && renderProgressPie(
-          box.x + NODE_PAD_X + (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) + (iconCount > 0 ? (ICON_SIZE + 4) * iconCount + 2 : 0) + PROGRESS_PIE_SIZE / 2,
-          centreY, node.progress!, PROGRESS_PIE_SIZE, () => cycleProgress(node.id))}
-
-        {isEditing ? (
-          <foreignObject x={box.x + 2} y={bodyTopY + 2} width={box.w - 4} height={Math.max(0, bodyH - 4)}>
-            <textarea ref={editRef} value={editText} onChange={(e) => setEditText(e.target.value)} onBlur={commitEdit}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(); } if (e.key === 'Escape') cancelEdit(); e.stopPropagation(); }}
-              className="mm-edit-textarea" style={{ color: textColor, background: fillColor }} />
-          </foreignObject>
-        ) : (
-          lines.map((line, li) => (
-            <text key={li} x={textCentreX} y={lineStartY + li * NODE_LINE_H}
-              textAnchor="middle" dominantBaseline="middle" fontSize={fontSize} fontWeight={fontWeight} fill={textColor}
-              className={`mm-node-text${searchResults.includes(node.id) ? ' mm-search-highlight' : ''}`}>{line}</text>
-          ))
-        )}
-
-        {attachments.length > 0 && renderAttachmentIndicator(box.x + box.w - (hasNote ? 26 : 11), metaCentreY, attachments.length, ownColor)}
-
-        {hasNote && <circle cx={box.x + box.w - 7} cy={metaCentreY} r={5} fill="#f59e0b" className="mm-indicator" />}
-
-        {(node.tags ?? []).length > 0 && (() => {
-          const tags = (node.tags ?? []).slice(0, 5);
-          const gap = 3;
-          const tagH = 13;
-          const tagY = tagTopY + (TAG_STRIP_H - tagH) / 2;
-          const compact = tags.map((tag) => {
-            const txt = tag.length > 14 ? `${tag.slice(0, 13)}…` : tag;
-            const width = Math.min(box.w - 8, Math.max(18, 8 + txt.length * 5.5));
-            const color = userLabels.find((l) => l.name === tag)?.color ?? 'var(--accent)';
-            return { tag, txt, width, color };
-          });
-          const totalW = compact.reduce((sum, item) => sum + item.width, 0) + (compact.length - 1) * gap;
-          let cursorX = box.x + Math.max(4, (box.w - totalW) / 2);
-          return (
-            <>
-              <line x1={box.x + 6} y1={tagBottomY} x2={box.x + box.w - 6} y2={tagBottomY}
-                stroke={ownColor ? '#ffffff22' : 'var(--mm-node-stroke)'} strokeWidth={0.5} />
-              {compact.map((item) => {
-                const x = cursorX;
-                cursorX += item.width + gap;
-                return (
-                  <g key={item.tag} pointerEvents="none">
-                    <rect x={x} y={tagY} width={item.width} height={tagH} rx={6.5} fill={item.color} opacity={0.92} />
-                    <text
-                      x={x + item.width / 2}
-                      y={tagY + tagH / 2 + 0.5}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      fontSize={8.5}
-                      fontWeight={700}
-                      fill="#fff"
-                    >
-                      {item.txt}
-                    </text>
-                  </g>
-                );
-              })}
-            </>
-          );
-        })()}
-
-        {checkedInfo && checkedInfo.total > 0 && (
-          <text x={box.x + box.w - 8} y={bodyTopY + bodyH - 6} textAnchor="end" fontSize={9} fill={ownColor ? '#ffffff99' : 'var(--mm-statusbar-text)'}>{checkedInfo.checked}/{checkedInfo.total}</text>
-        )}
-
-        {(node.urls ?? []).map((urlItem, ui) => {
-          const fy = footerTopY + ui * LINK_STRIP_H;
-          const rawUrl = (urlItem.url ?? '').trim();
-          const openUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
-          return (
-            <g key={`url-${ui}`}>
-              <line x1={box.x + 4} y1={fy} x2={box.x + box.w - 4} y2={fy} stroke={ownColor ? '#ffffff33' : 'var(--mm-node-stroke)'} strokeWidth={0.5} />
-              <text
-                x={box.x + 8}
-                y={fy + LINK_STRIP_H / 2 + 1.5}
-                fontSize={10.5}
-                fontWeight={600}
-                fill={ownColor ? '#ffffff' : 'var(--accent)'}
-                dominantBaseline="middle"
-                className={`mm-url-link${ownColor ? ' mm-url-link--on-color' : ''}`}
-                style={{ cursor: 'pointer', textDecoration: 'underline' }}
-                onMouseDown={(e) => { e.stopPropagation(); }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void openExternalUrl(openUrl);
-                }}
-              >
-                {urlItem.label || rawUrl}
-              </text>
-            </g>
-          );
-        })}
-
-        {node.children.length > 0 && node.id !== 'root' && (
-          <g className="mm-collapse-btn"
-            transform={`translate(${box.direction === 'left' ? box.x - 1 : box.x + box.w + 1}, ${box.y + box.h / 2})`}
-            onClick={(e) => { e.stopPropagation(); toggleCollapse(node.id); }}>
-            <circle r={8} fill="var(--mm-collapse-fill)" stroke="var(--mm-collapse-stroke)" strokeWidth={1.5} />
-            <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="var(--mm-collapse-text)" fontWeight="bold" y={0.5}>
-              {node.collapsed ? `+${node.children.length}` : '−'}</text>
-          </g>
-        )}
-
-        {node.id === 'root' && (() => {
-          const leftChildren = node.children.filter((ch) => ch.side === 'left');
-          const rightChildren = node.children.filter((ch) => ch.side !== 'left');
-          return (
-            <>
-              {leftChildren.length > 0 && (
-                <g
-                  className="mm-collapse-btn"
-                  transform={`translate(${box.x - 1}, ${box.y + box.h / 2})`}
-                  onClick={(e) => { e.stopPropagation(); setRootLeftCollapsed((current) => !current); }}
-                >
-                  <circle r={8} fill="var(--mm-collapse-fill)" stroke="var(--mm-collapse-stroke)" strokeWidth={1.5} />
-                  <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="var(--mm-collapse-text)" fontWeight="bold" y={0.5}>
-                    {rootLeftCollapsed ? `+${leftChildren.length}` : '−'}
-                  </text>
-                </g>
-              )}
-              {rightChildren.length > 0 && (
-                <g
-                  className="mm-collapse-btn"
-                  transform={`translate(${box.x + box.w + 1}, ${box.y + box.h / 2})`}
-                  onClick={(e) => { e.stopPropagation(); setRootRightCollapsed((current) => !current); }}
-                >
-                  <circle r={8} fill="var(--mm-collapse-fill)" stroke="var(--mm-collapse-stroke)" strokeWidth={1.5} />
-                  <text textAnchor="middle" dominantBaseline="middle" fontSize={11} fill="var(--mm-collapse-text)" fontWeight="bold" y={0.5}>
-                    {rootRightCollapsed ? `+${rightChildren.length}` : '−'}
-                  </text>
-                </g>
-              )}
-            </>
-          );
-        })()}
+        <MetaBand box={box} geom={geom} parts={parts} visual={visual} />
+        <TagBand box={box} geom={geom} parts={parts} visual={visual} labels={userLabels} />
+        <ImageBand box={box} geom={geom} parts={parts} node={node} onOpen={(n) => { setSelectedId(n.id); void openNodeImage(n); }} />
+        <BodyBand
+          box={box}
+          geom={geom}
+          parts={parts}
+          visual={visual}
+          node={node}
+          actions={bodyActions}
+          isSearchHit={searchResults.includes(node.id)}
+          editor={editor}
+          checkedInfo={(node.children.length > 0 && node.checked != null) ? countChecked(node) : null}
+        />
+        <FooterBand box={box} geom={geom} parts={parts} visual={visual} urls={node.urls ?? []} />
+        <CollapseControls
+          box={box}
+          node={node}
+          isRoot={node.id === 'root'}
+          rootLeftCollapsed={rootLeftCollapsed}
+          rootRightCollapsed={rootRightCollapsed}
+          onToggle={toggleCollapse}
+          onToggleRootLeft={() => setRootLeftCollapsed((current) => !current)}
+          onToggleRootRight={() => setRootRightCollapsed((current) => !current)}
+        />
       </g>,
     ];
 
@@ -2515,7 +2286,7 @@ export function DesktopMindMapEditor({
     }
     return elems;
     }, [layout, selectedId, multiSelect, editingId, editText, dropTargetId, isDragging, searchResults,
-      attachmentPreviewUrls, cancelHoverPopupClose, scheduleHoverPopupClose, commitEdit, cancelEdit, getNodeAttachments, onOpenNodeAttachment, toggleCollapse, toggleCheckbox,
+      cancelHoverPopupClose, scheduleHoverPopupClose, commitEdit, cancelEdit, openNodeImage, toggleCollapse, bodyActions, userLabels,
       focusMode, focusedIds, rootLeftCollapsed, rootRightCollapsed]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const selNode = findNode(root, selectedId)?.node;

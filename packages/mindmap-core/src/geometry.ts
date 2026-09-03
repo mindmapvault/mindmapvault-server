@@ -74,7 +74,7 @@ export const describeNode = <N extends LayoutNode<N>>(
   const lines = getVisibleNodeTextLines(node.text);
   const iconCount = node.icons?.length ?? 0;
   const urlCount = node.urls?.length ?? 0;
-  const tagCount = node.tags?.length ?? 0;
+  const tags = node.tags ?? [];
   const linkId = node.link?.id || null;
 
   const hasCheckbox = node.checked != null;
@@ -90,7 +90,8 @@ export const describeNode = <N extends LayoutNode<N>>(
     lines,
     iconCount,
     urlCount,
-    tagCount,
+    tags,
+    tagCount: tags.length,
     linkId,
     hasCheckbox,
     hasProgress,
@@ -103,7 +104,7 @@ export const describeNode = <N extends LayoutNode<N>>(
       (iconCount > 0 ? (ICON_SIZE + 4) * iconCount + 2 : 0) +
       (hasProgress ? PROGRESS_PIE_SIZE + 6 : 0),
     topMetaH: hasNote || attachmentCount > 0 ? TOP_META_STRIP_H : 0,
-    topTagH: tagCount > 0 ? TAG_STRIP_H : 0,
+    topTagH: tags.length > 0 ? TAG_STRIP_H : 0,
     imageBandH: image ? image.h + NODE_IMAGE_PAD : 0,
     footerH: ((linkId ? 1 : 0) + urlCount) * LINK_STRIP_H,
     visualTopExtra: hasDate ? DATE_BADGE_OFFSET_H : 0,
