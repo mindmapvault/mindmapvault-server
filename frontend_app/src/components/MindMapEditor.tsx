@@ -425,6 +425,19 @@ export function DesktopMindMapEditor({
   const [notesSaveState, setNotesSaveState] = useState<'saved' | 'saving'>('saved');
   const notesAttachmentInputRef = useRef<HTMLInputElement>(null);
   const nodeAttachmentInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Attach-to-node entry point. The secure vault dialog already offers a file
+   * picker, a drop zone and node attribution, and anything uploaded there with
+   * a node selected comes back through `externalNodeAttachments` — so there is
+   * no reason for this button to raise a bare OS picker of its own. Local mode
+   * has no such dialog, so it keeps the picker.
+   */
+  const openAttachFiles = useCallback(() => {
+    if (onOpenSecurePanel) onOpenSecurePanel('attachments');
+    else nodeAttachmentInputRef.current?.click();
+  }, [onOpenSecurePanel]);
+
   const nodeImageInputRef = useRef<HTMLInputElement>(null);
   // The picker is shared, so the node it was opened for has to outlive the
   // click — the context menu that opened it is gone by the time a file arrives.
@@ -1471,7 +1484,7 @@ export function DesktopMindMapEditor({
       'node.notesToggle': () => { openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); },
       'node.notesOpen': () => { openNotes(selectedId); setTimeout(() => notesRef.current?.focus(), 20); },
       'node.addImage': () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); },
-      'node.attachFile': () => { nodeAttachmentInputRef.current?.click(); },
+      'node.attachFile': () => { openAttachFiles(); },
       'node.fold': () => { hasBulk ? bulkToggleCollapse() : toggleCollapse(selectedId); },
       'node.resetPosition': () => { hasBulk ? bulkResetPosition() : resetNodePosition(selectedId); },
       'node.resetAllPositions': () => { resetAllPositions(); },
@@ -1563,7 +1576,7 @@ export function DesktopMindMapEditor({
     }
     }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
       toggleCheckbox, undo, redo, toggleCollapse, openNotes, showToast, resetNodePosition, resetAllPositions, autoAlignSubtree, showIconPicker, showColorPicker, focusMode, focusedIds,
-      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel, onShowHistory,
+      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel, onShowHistory, openAttachFiles,
       // fitView is declared below this hook, so it cannot be listed here; it is
       // only ever called lazily from inside the handler.
       keyboardLayout, onBack, setColourTray, colourTrayEnabled, setIconTray, iconTrayEnabled,
@@ -2765,9 +2778,12 @@ export function DesktopMindMapEditor({
             className="mm-btn"
             data-label="Attach"
             data-shortcut={formatButtonShortcut('node.attachFile', keyboardLayout)}
-            onClick={() => nodeAttachmentInputRef.current?.click()}
+            onClick={openAttachFiles}
             title="Attach encrypted files to selected node (F6)"
-            disabled={!onNodeFileDrop || selectedId === 'root'}
+            // The dialog attaches to any node and labels root "Vault root", so
+            // it needs neither a drop handler nor a non-root selection. Only the
+            // local-mode picker fallback carries those requirements.
+            disabled={!onOpenSecurePanel && (!onNodeFileDrop || selectedId === 'root')}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg>
           </button>
@@ -2907,7 +2923,7 @@ export function DesktopMindMapEditor({
                     ['node.dates', 'Dates', () => setShowDateDialog(true)],
                     ['node.labels', 'Tags', () => setShowTagDialog((v) => !v)],
                     ['node.addImage', 'Image', () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }],
-                    ['node.attachFile', 'Attach file', () => nodeAttachmentInputRef.current?.click()],
+                    ['node.attachFile', 'Attach file', () => openAttachFiles()],
                     ['view.zoomIn', 'Zoom in', () => setZoom((z) => Math.min(3, z + 0.15))],
                     ['view.zoomOut', 'Zoom out', () => setZoom((z) => Math.max(0.3, z - 0.15))],
                     ['view.zoomFit', 'Fit view', fitView],
