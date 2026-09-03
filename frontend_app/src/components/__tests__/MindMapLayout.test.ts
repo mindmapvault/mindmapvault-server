@@ -2,12 +2,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { MindMapTreeNode } from '../../types';
 
 /**
- * Characterisation tests for the layout engine.
+ * Characterisation tests for the layout engine and the node geometry.
  *
  * These do not assert that the numbers are *right* — they assert that they are
- * what they are today, so the geometry extraction that follows can be shown to
- * change nothing. Read a failure here as "the layout moved", not "the layout is
- * wrong".
+ * what they are today, so a change to the geometry can be shown to move only
+ * what it meant to. Read a failure here as "the layout moved", not "the layout
+ * is wrong".
  *
  * `measureText` asks a canvas for a width. Real font metrics differ between
  * machines, which would make every expected number a property of the runner, so
@@ -36,11 +36,11 @@ const node = (over: Partial<MindMapTreeNode> = {}): MindMapTreeNode =>
   ({ id: 'n', text: 'hello', children: [], ...over }) as MindMapTreeNode;
 
 describe('measureNodeSize', () => {
-  const measure = (...args: Parameters<Layout['measureNodeSize']>) =>
-    layout.measureNodeSize(...args);
+  const measure = (over: Partial<MindMapTreeNode> = {}) =>
+    layout.measureNodeSize(node(over));
 
   it('gives a plain one-line node the minimum height', () => {
-    const { w, h, lines } = measure('hello', null, 0, false, 0, false);
+    const { w, h, lines } = measure();
     // 'hello' is 5 chars = 35px, + 18px padding each side = 71, under MIN_W 80
     expect(w).toBe(80);
     expect(h).toBe(36); // NODE_MIN_H wins over 1 * 20 + 2 * 8
@@ -48,44 +48,128 @@ describe('measureNodeSize', () => {
   });
 
   it('grows by a line height once the text needs more than two lines', () => {
-    const three = measure('a\nb\nc', null, 0, false, 0, false);
+    const three = measure({ text: 'a\nb\nc' });
     expect(three.lines).toHaveLength(3);
     expect(three.h).toBe(3 * 20 + 8 * 2); // 76, past the 36 minimum
   });
 
   it('widens for icons, the checkbox and the progress pie', () => {
-    const plain = measure('wide enough to matter', null, 0, false, 0, false);
-    const decorated = measure('wide enough to matter', null, 2, true, 0, true);
+    const plain = measure({ text: 'wide enough to matter' });
+    const decorated = measure({
+      text: 'wide enough to matter',
+      icons: ['a', 'b'],
+      checked: false,
+      progress: 50,
+    });
     // 2 icons (16+4 each, +2) + checkbox (16+6) + pie (32+6) = 102
     expect(decorated.w - plain.w).toBe(102);
     expect(decorated.h).toBe(plain.h);
   });
 
   it('adds one strip for notes or attachments, however many there are', () => {
-    const base = measure('x', null, 0, false, 0, false).h;
-    expect(measure('x', null, 0, false, 0, false, true).h).toBe(base + 18);
-    expect(measure('x', null, 0, false, 0, false, false, 3).h).toBe(base + 18);
-    expect(measure('x', null, 0, false, 0, false, true, 3).h).toBe(base + 18);
+    const base = measure({ text: 'x' }).h;
+    const attachment = (id: string) => ({ attachment_id: id }) as never;
+    expect(measure({ text: 'x', notes: 'a note' }).h).toBe(base + 18);
+    expect(measure({ text: 'x', attachments: [1, 2, 3].map((i) => attachment(String(i))) }).h)
+      .toBe(base + 18);
+    expect(measure({ text: 'x', notes: 'a note', attachments: [attachment('1')] }).h)
+      .toBe(base + 18);
+  });
+
+  it('does not give a strip to notes that are only whitespace', () => {
+    const base = measure({ text: 'x' }).h;
+    expect(measure({ text: 'x', notes: '   \n ' }).h).toBe(base);
   });
 
   it('adds a strip per footer link, and one for tags', () => {
-    const base = measure('x', null, 0, false, 0, false).h;
-    expect(measure('x', 'lnk', 0, false, 0, false).h).toBe(base + 18);
-    expect(measure('x', null, 0, false, 2, false).h).toBe(base + 36);
-    expect(measure('x', 'lnk', 0, false, 2, false).h).toBe(base + 54);
-    expect(measure('x', null, 0, false, 0, false, false, 0, 4).h).toBe(base + 18);
+    const base = measure({ text: 'x' }).h;
+    const url = (u: string) => ({ url: u, label: u }) as never;
+    expect(measure({ text: 'x', link: { type: 'vault', id: 'lnk' } }).h).toBe(base + 18);
+    expect(measure({ text: 'x', urls: [url('a'), url('b')] }).h).toBe(base + 36);
+    expect(measure({ text: 'x', link: { type: 'vault', id: 'lnk' }, urls: [url('a'), url('b')] }).h)
+      .toBe(base + 54);
+    expect(measure({ text: 'x', tags: ['w', 'x', 'y', 'z'] }).h).toBe(base + 18);
   });
 
   it('takes the image into account on both axes', () => {
-    const base = measure('x', null, 0, false, 0, false);
-    const withImage = measure('x', null, 0, false, 0, false, false, 0, 0, 200, 120);
+    const base = measure({ text: 'x' });
+    const withImage = measure({ text: 'x', image: { thumb: 'data:,', w: 200, h: 120 } });
     expect(withImage.h).toBe(base.h + 120 + 6); // image + NODE_IMAGE_PAD
     expect(withImage.w).toBe(200 + 18 * 2);     // image + NODE_PAD_X either side
   });
 
   it('ignores attachment markdown lines when measuring text', () => {
-    const withMarkdown = measure('visible\n[Attachment: notes.pdf](attachment://abc)', null, 0, false, 0, false);
+    const withMarkdown = measure({
+      text: 'visible\n[Attachment: notes.pdf](attachment://abc)',
+    });
     expect(withMarkdown.lines).toEqual(['visible']);
+  });
+});
+
+describe('describeNode', () => {
+  it('counts attachments the node does not carry itself when told to', () => {
+    const bare = layout.describeNode(node());
+    const resolved = layout.describeNode(node(), { attachmentCount: 2 });
+    expect(bare.topMetaH).toBe(0);
+    expect(resolved.topMetaH).toBe(18);
+  });
+});
+
+describe('nodeGeometry', () => {
+  /**
+   * The invariant the split exists to hold: every band the measurement added
+   * is a band the geometry takes back out, so the text body is exactly as tall
+   * as it was measured to be. Before the split the renderer subtracted a band
+   * the measurement had not added, and the body lost that many pixels.
+   */
+  const decorated = (over: Partial<MindMapTreeNode> = {}) =>
+    node({
+      text: 'a body of text',
+      notes: 'note',
+      tags: ['one'],
+      urls: [{ url: 'https://example.com', label: 'e' } as never],
+      image: { thumb: 'data:,', w: 40, h: 30 },
+      ...over,
+    });
+
+  it('leaves the body exactly as tall as it was measured', () => {
+    const parts = layout.describeNode(decorated());
+    const { w, h } = layout.measureNodeSize(decorated(), parts);
+    const geom = layout.nodeGeometry({ x: 0, y: 0, w, h }, parts);
+    const measuredBody = h - parts.topMetaH - parts.topTagH - parts.imageBandH - parts.footerH;
+    expect(geom.bodyH).toBe(measuredBody);
+    expect(geom.bodyH).toBe(36); // one line, the NODE_MIN_H floor
+  });
+
+  it('stacks the bands in order down the box', () => {
+    const parts = layout.describeNode(decorated());
+    const { w, h } = layout.measureNodeSize(decorated(), parts);
+    const g = layout.nodeGeometry({ x: 0, y: 100, w, h }, parts);
+    expect(g.metaCentreY).toBe(109);   // 100 + 18/2
+    expect(g.tagTopY).toBe(118);       // 100 + meta
+    expect(g.tagBottomY).toBe(136);    // + tags
+    expect(g.imageY).toBe(139);        // + half the image padding
+    expect(g.bodyTopY).toBe(172);      // + the whole image band (30 + 6)
+    expect(g.footerTopY).toBe(g.bodyTopY + g.bodyH);
+    expect(g.footerTopY + parts.footerH).toBe(100 + h);
+  });
+
+  it('centres one line of text in the body', () => {
+    const parts = layout.describeNode(node());
+    const { w, h } = layout.measureNodeSize(node(), parts);
+    const g = layout.nodeGeometry({ x: 0, y: 0, w, h }, parts);
+    expect(g.lineStartY).toBe(g.centreY);
+    expect(g.textX).toBe(18); // NODE_PAD_X, nothing to the left of the text
+    expect(g.textCentreX).toBe(w / 2);
+  });
+
+  it('pushes the text right by whatever sits to its left', () => {
+    const withDial = node({ checked: true, progress: 25, icons: ['a'] });
+    const parts = layout.describeNode(withDial);
+    const { w, h } = layout.measureNodeSize(withDial, parts);
+    const g = layout.nodeGeometry({ x: 0, y: 0, w, h }, parts);
+    expect(g.textX).toBe(18 + parts.leftPad);
+    expect(g.textCentreX).toBe(g.textX + (w - 36 - parts.leftPad) / 2);
   });
 });
 
@@ -157,6 +241,24 @@ describe('layoutTree', () => {
     const children = pos.a.h + pos.b.h + pos.c.h + 8 * 2; // three boxes, two gaps
     expect(pos.root.subtreeH).toBe(children);
     expect(pos.root.subtreeH).toBeGreaterThan(pos.root.h);
+  });
+
+  it('carries the parts each node was measured from', () => {
+    const root = node({ id: 'root', tags: ['a'], notes: 'n' });
+    const pos = layout.layoutTree(root, 0, 0);
+    expect(pos.root.parts.topTagH).toBe(18);
+    expect(pos.root.parts.topMetaH).toBe(18);
+  });
+
+  it('measures with the caller\'s own reading of a node when given one', () => {
+    // The editor resolves attachments that live outside the tree; the layout
+    // has to reserve the strip for them or the renderer draws over the text.
+    const root = node({ id: 'root' });
+    const plain = layout.layoutTree(root, 0, 0);
+    const withExternal = layout.layoutTree(root, 0, 0, (n) =>
+      layout.describeNode(n, { attachmentCount: 1 }),
+    );
+    expect(withExternal.root.h - plain.root.h).toBe(18);
   });
 });
 

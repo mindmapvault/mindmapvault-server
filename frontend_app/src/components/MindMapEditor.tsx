@@ -53,8 +53,6 @@ import {
   NODE_PAD_X,
   LINK_STRIP_H,
   TAG_STRIP_H,
-  TOP_META_STRIP_H,
-  NODE_IMAGE_PAD,
 } from './MindMapConstants';
 import {
   uid,
@@ -67,7 +65,7 @@ import {
   defaultRoot,
   migrateNode,
 } from './MindMapHelpers';
-import { layoutTree, bezierPath } from './MindMapLayout';
+import { layoutTree, bezierPath, describeNode, nodeGeometry } from './MindMapLayout';
 import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils/nodeAttachments';
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
@@ -590,7 +588,34 @@ export function DesktopMindMapEditor({
   }, [recordingBlobUrl]);
 
   // ── Layout ────────────────────────────────────────────────────────────────
-  const layout = useMemo(() => layoutTree(root), [root]);
+  const getNodeAttachments = useCallback((nodeId: string, inlineAttachments?: NodeAttachmentRef[]) => {
+    const inline = inlineAttachments ?? [];
+    const external = externalNodeAttachments?.[nodeId] ?? [];
+    if (inline.length === 0) return external;
+    if (external.length === 0) return inline;
+
+    const merged = new Map<string, NodeAttachmentRef>();
+    for (const attachment of external) merged.set(attachment.attachment_id, attachment);
+    for (const attachment of inline) {
+      merged.set(attachment.attachment_id, {
+        ...merged.get(attachment.attachment_id),
+        ...attachment,
+      });
+    }
+    return Array.from(merged.values()).sort((left, right) => right.uploaded_at.localeCompare(left.uploaded_at));
+  }, [externalNodeAttachments]);
+
+  /**
+   * The editor knows more about a node's attachments than the node does: some
+   * arrive through `externalNodeAttachments` rather than inside the tree. The
+   * layout has to measure with the same count the renderer draws with, or the
+   * meta strip is drawn in space nothing reserved and the text loses 18px.
+   */
+  const layout = useMemo(
+    () => layoutTree(root, 0, 0, (node) =>
+      describeNode(node, { attachmentCount: getNodeAttachments(node.id, node.attachments).length })),
+    [root, getNodeAttachments],
+  );
 
   const loadAttachmentPreview = useCallback(async (attachment: NodeAttachmentRef) => {
     const isImage = (attachment.content_type ?? '').startsWith('image/');
@@ -1774,23 +1799,6 @@ export function DesktopMindMapEditor({
     setDropTargetId(null);
   }, []);
 
-  const getNodeAttachments = useCallback((nodeId: string, inlineAttachments?: NodeAttachmentRef[]) => {
-    const inline = inlineAttachments ?? [];
-    const external = externalNodeAttachments?.[nodeId] ?? [];
-    if (inline.length === 0) return external;
-    if (external.length === 0) return inline;
-
-    const merged = new Map<string, NodeAttachmentRef>();
-    for (const attachment of external) merged.set(attachment.attachment_id, attachment);
-    for (const attachment of inline) {
-      merged.set(attachment.attachment_id, {
-        ...merged.get(attachment.attachment_id),
-        ...attachment,
-      });
-    }
-    return Array.from(merged.values()).sort((left, right) => right.uploaded_at.localeCompare(left.uploaded_at));
-  }, [externalNodeAttachments]);
-
   // ── Node images ───────────────────────────────────────────────────────────
 
   /**
@@ -2229,33 +2237,20 @@ export function DesktopMindMapEditor({
         : (ownColor ?? (isRoot ? 'var(--mm-root-stroke)' : 'var(--mm-node-stroke)'));
     const textColor = ownColor ? '#ffffff' : (isRoot ? 'var(--mm-root-text)' : 'var(--mm-node-text)');
 
-    const lines = getVisibleNodeTextLines(node.text);
     const fontSize = isRoot ? 15 : 13;
     const fontWeight = isRoot ? 'bold' : 'normal';
     const attachments = getNodeAttachments(node.id, node.attachments);
 
-    const iconCount = (node.icons ?? []).length;
-    const hasCheckbox = node.checked != null;
-    const hasProgress = node.progress != null;
-    const leftPad = (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) + (iconCount > 0 ? (ICON_SIZE + 4) * iconCount + 2 : 0) + (hasProgress ? PROGRESS_PIE_SIZE + 6 : 0);
-
-    const urlCount = (node.urls ?? []).length;
-    const linkId = node.link?.id || null;
-    const footerLinks = (linkId ? 1 : 0) + urlCount;
-    const previewHeight = 0;
-    const footerHeight = footerLinks > 0 ? LINK_STRIP_H * footerLinks : 0;
-    const tagCount = (node.tags ?? []).length;
-    const topTagH = tagCount > 0 ? TAG_STRIP_H : 0;
-    const topMetaH = (attachments.length > 0 || Boolean(node.notes)) ? TOP_META_STRIP_H : 0;
+    // Which bands this node has was decided once, when it was measured, and
+    // rides along in the layout entry. Working it out again here is how the
+    // text used to drift out of the box that was reserved for it.
+    //
     // The picture gets a band of its own between the tag strip and the text, so
     // the text stays centred in what is left rather than being pushed off-centre.
-    const nodeImage = node.image?.thumb ? node.image : null;
-    const imageBandH = nodeImage ? nodeImage.h + NODE_IMAGE_PAD : 0;
-    const imageY = box.y + topMetaH + topTagH + NODE_IMAGE_PAD / 2;
-    const bodyTopY = box.y + topMetaH + topTagH + imageBandH;
-    const bodyH = box.h - footerHeight - previewHeight - topTagH - topMetaH - imageBandH;
-    const textX = box.x + NODE_PAD_X + leftPad;
-    const lineStartY = bodyTopY + bodyH / 2 - ((lines.length - 1) * NODE_LINE_H) / 2;
+    const parts = box.parts;
+    const { lines, iconCount, topMetaH, hasCheckbox, hasProgress, image: nodeImage } = parts;
+    const { bodyTopY, bodyH, centreY, imageY, textCentreX, lineStartY, metaCentreY, tagTopY, tagBottomY, footerTopY } =
+      nodeGeometry(box, parts);
 
     const formatDate = (d: string) => {
       const dt = new Date(d);
@@ -2346,15 +2341,15 @@ export function DesktopMindMapEditor({
 
         {hasCheckbox && (
           <g className="mm-checkbox-g" onClick={(e) => { e.stopPropagation(); toggleCheckbox(node.id); }} style={{ cursor: 'pointer' }}>
-            <rect x={box.x + NODE_PAD_X - 2} y={bodyTopY + bodyH / 2 - CHECKBOX_SIZE / 2} width={CHECKBOX_SIZE} height={CHECKBOX_SIZE}
+            <rect x={box.x + NODE_PAD_X - 2} y={centreY - CHECKBOX_SIZE / 2} width={CHECKBOX_SIZE} height={CHECKBOX_SIZE}
               rx={3} fill={node.checked ? 'var(--accent)' : 'transparent'} stroke={node.checked ? 'var(--accent)' : (ownColor ? '#ffffff88' : 'var(--mm-node-stroke)')} strokeWidth={1.5} />
-            {node.checked && <path d={`M ${box.x + NODE_PAD_X + 2} ${bodyTopY + bodyH / 2} l 3 3 5 -6`} fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
+            {node.checked && <path d={`M ${box.x + NODE_PAD_X + 2} ${centreY} l 3 3 5 -6`} fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
           </g>
         )}
 
         {iconCount > 0 && !isEditing && (
           <g
-            transform={`translate(${box.x + NODE_PAD_X + (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) - 2}, ${bodyTopY + bodyH / 2 - ICON_SIZE / 2})`}
+            transform={`translate(${box.x + NODE_PAD_X + (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) - 2}, ${centreY - ICON_SIZE / 2})`}
             style={{ pointerEvents: 'none' }}
           >
             {(node.icons ?? []).map((iconName, ii) => (
@@ -2367,7 +2362,7 @@ export function DesktopMindMapEditor({
 
         {hasProgress && renderProgressPie(
           box.x + NODE_PAD_X + (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) + (iconCount > 0 ? (ICON_SIZE + 4) * iconCount + 2 : 0) + PROGRESS_PIE_SIZE / 2,
-          bodyTopY + bodyH / 2, node.progress!, PROGRESS_PIE_SIZE, () => cycleProgress(node.id))}
+          centreY, node.progress!, PROGRESS_PIE_SIZE, () => cycleProgress(node.id))}
 
         {isEditing ? (
           <foreignObject x={box.x + 2} y={bodyTopY + 2} width={box.w - 4} height={Math.max(0, bodyH - 4)}>
@@ -2377,21 +2372,21 @@ export function DesktopMindMapEditor({
           </foreignObject>
         ) : (
           lines.map((line, li) => (
-            <text key={li} x={textX + (box.w - NODE_PAD_X * 2 - leftPad) / 2} y={lineStartY + li * NODE_LINE_H}
+            <text key={li} x={textCentreX} y={lineStartY + li * NODE_LINE_H}
               textAnchor="middle" dominantBaseline="middle" fontSize={fontSize} fontWeight={fontWeight} fill={textColor}
               className={`mm-node-text${searchResults.includes(node.id) ? ' mm-search-highlight' : ''}`}>{line}</text>
           ))
         )}
 
-        {attachments.length > 0 && renderAttachmentIndicator(box.x + box.w - (node.notes ? 26 : 11), box.y + topMetaH / 2, attachments.length, ownColor)}
+        {attachments.length > 0 && renderAttachmentIndicator(box.x + box.w - (node.notes ? 26 : 11), metaCentreY, attachments.length, ownColor)}
 
-        {node.notes && <circle cx={box.x + box.w - 7} cy={box.y + topMetaH / 2} r={5} fill="#f59e0b" className="mm-indicator" />}
+        {node.notes && <circle cx={box.x + box.w - 7} cy={metaCentreY} r={5} fill="#f59e0b" className="mm-indicator" />}
 
         {(node.tags ?? []).length > 0 && (() => {
           const tags = (node.tags ?? []).slice(0, 5);
           const gap = 3;
           const tagH = 13;
-          const tagY = box.y + topMetaH + (TAG_STRIP_H - tagH) / 2;
+          const tagY = tagTopY + (TAG_STRIP_H - tagH) / 2;
           const compact = tags.map((tag) => {
             const txt = tag.length > 14 ? `${tag.slice(0, 13)}…` : tag;
             const width = Math.min(box.w - 8, Math.max(18, 8 + txt.length * 5.5));
@@ -2402,7 +2397,7 @@ export function DesktopMindMapEditor({
           let cursorX = box.x + Math.max(4, (box.w - totalW) / 2);
           return (
             <>
-              <line x1={box.x + 6} y1={box.y + topMetaH + topTagH} x2={box.x + box.w - 6} y2={box.y + topMetaH + topTagH}
+              <line x1={box.x + 6} y1={tagBottomY} x2={box.x + box.w - 6} y2={tagBottomY}
                 stroke={ownColor ? '#ffffff22' : 'var(--mm-node-stroke)'} strokeWidth={0.5} />
               {compact.map((item) => {
                 const x = cursorX;
@@ -2433,7 +2428,7 @@ export function DesktopMindMapEditor({
         )}
 
         {(node.urls ?? []).map((urlItem, ui) => {
-          const fy = bodyTopY + bodyH + previewHeight + ui * LINK_STRIP_H;
+          const fy = footerTopY + ui * LINK_STRIP_H;
           const rawUrl = (urlItem.url ?? '').trim();
           const openUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
           return (

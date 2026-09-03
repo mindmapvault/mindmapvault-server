@@ -3,78 +3,23 @@
  *
  * Layout engine for the MindMap — computes node positions in a two-pass
  * (bottom-up height, then top-down position) tree layout algorithm.
- * Accounts for icons, checkbox, progress pie, link strips, and URL footers.
+ *
+ * How big each node is, and what it is made of, lives in `MindMapGeometry`;
+ * this file only decides where the boxes go. The parts each node was measured
+ * from ride along in the layout entry, so the renderer draws inside exactly
+ * the box that was measured rather than working the bands out a second time.
  */
 
 import type { MindMapTreeNode } from '../types';
+import { H_GAP, V_GAP } from './MindMapConstants';
 import {
-  NODE_LINE_H,
-  NODE_MIN_H,
-  NODE_PAD_X,
-  NODE_PAD_Y,
-  H_GAP,
-  V_GAP,
-  MIN_W,
-  LINK_STRIP_H,
-  TAG_STRIP_H,
-  TOP_META_STRIP_H,
-  DATE_BADGE_OFFSET_H,
-  ICON_SIZE,
-  CHECKBOX_SIZE,
-  PROGRESS_PIE_SIZE,
-  NODE_IMAGE_PAD,
-} from './MindMapConstants';
-import { getVisibleNodeTextLines } from '../utils/nodeAttachments';
+  describeNode,
+  measureNodeSize,
+  type DescribeNode,
+  type NodeParts,
+} from './MindMapGeometry';
 
-// ── Text measurement ────────────────────────────────────────────
-
-let _measureCtx: CanvasRenderingContext2D | null = null;
-
-export const measureText = (text: string, fontSize = 14): number => {
-  if (!_measureCtx) {
-    const c = document.createElement('canvas');
-    _measureCtx = c.getContext('2d')!;
-  }
-  _measureCtx.font = `${fontSize}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
-  return _measureCtx.measureText(text || ' ').width;
-};
-
-/**
- * Measure size for a node, accounting for icons, checkbox, progress pie,
- * link strip, tag strip, and URL footers.
- */
-export const measureNodeSize = (
-  text: string,
-  linkId: string | null,
-  iconCount: number,
-  hasCheckbox: boolean,
-  urlCount: number,
-  hasProgress: boolean,
-  hasNote = false,
-  attachmentCount = 0,
-  tagCount = 0,
-  imageW = 0,
-  imageH = 0,
-): { w: number; h: number; lines: string[] } => {
-  const lines = getVisibleNodeTextLines(text);
-  const linkW = linkId ? measureText(linkId, 10) + 24 : 0;
-  const urlW = urlCount > 0 ? 120 : 0;
-  const maxW = Math.max(...lines.map((l) => measureText(l || ' ')), linkW, urlW);
-  const extraLeft =
-    (iconCount > 0 ? (ICON_SIZE + 4) * iconCount + 2 : 0) +
-    (hasCheckbox ? CHECKBOX_SIZE + 6 : 0) +
-    (hasProgress ? PROGRESS_PIE_SIZE + 6 : 0);
-  const textW = Math.max(MIN_W, maxW + NODE_PAD_X * 2 + extraLeft);
-  // The glyph's dimensions come from the node JSON, so a node with a picture
-  // measures exactly as fast as one without — no decode, no async, no reflow.
-  const imageBandH = imageH > 0 ? imageH + NODE_IMAGE_PAD : 0;
-  const w = Math.max(textW, imageW > 0 ? imageW + NODE_PAD_X * 2 : 0);
-  const baseH = Math.max(NODE_MIN_H, lines.length * NODE_LINE_H + NODE_PAD_Y * 2);
-  const footerLinks = (linkId ? 1 : 0) + urlCount;
-  const topMetaH = (hasNote || attachmentCount > 0) ? TOP_META_STRIP_H : 0;
-  const h = baseH + topMetaH + imageBandH + (footerLinks > 0 ? LINK_STRIP_H * footerLinks : 0) + (tagCount > 0 ? TAG_STRIP_H : 0);
-  return { w, h, lines };
-};
+export * from './MindMapGeometry';
 
 // ── Layout types ────────────────────────────────────────────────
 
@@ -87,6 +32,8 @@ export interface LayoutEntry {
   subtreeH: number;
   direction: 'left' | 'right';
   node: MindMapTreeNode;
+  /** What this node was measured from. The renderer draws from the same parts. */
+  parts: NodeParts;
 }
 
 // ── Tree layout ─────────────────────────────────────────────────
@@ -95,28 +42,19 @@ export const layoutTree = (
   root: MindMapTreeNode,
   startX = 0,
   startY = 0,
+  describe: DescribeNode = describeNode,
 ): Record<string, LayoutEntry> => {
   const pos: Record<string, Partial<LayoutEntry>> = {};
 
   // First pass: compute subtree heights (bottom-up)
   const computeHeight = (node: MindMapTreeNode): number => {
-    const linkId = node.link?.id || null;
-    const iconCount = Array.isArray(node.icons) ? node.icons.length : 0;
-    const hasCheckbox = node.checked != null;
-    const urlCount = Array.isArray(node.urls) ? node.urls.length : 0;
-    const hasProgress = node.progress != null;
-    const hasNote = Boolean((node.notes ?? '').trim());
-    const attachmentCount = Array.isArray(node.attachments) ? node.attachments.length : 0;
-    const tagCount = Array.isArray(node.tags) ? node.tags.length : 0;
-    const hasDate = Boolean(node.startDate || node.endDate);
-    const visualTopExtra = hasDate ? DATE_BADGE_OFFSET_H : 0;
-    const imageW = node.image?.thumb ? (node.image.w ?? 0) : 0;
-    const imageH = node.image?.thumb ? (node.image.h ?? 0) : 0;
-    const { w, h } = measureNodeSize(node.text, linkId, iconCount, hasCheckbox, urlCount, hasProgress, hasNote, attachmentCount, tagCount, imageW, imageH);
+    const parts = describe(node);
+    const { w, h } = measureNodeSize(node, parts);
+    const visualTopExtra = parts.visualTopExtra;
     const visualH = h + visualTopExtra;
 
     if (!node.children || node.children.length === 0 || node.collapsed) {
-      pos[node.id] = { w, h, visualTopExtra, subtreeH: visualH, node };
+      pos[node.id] = { w, h, visualTopExtra, subtreeH: visualH, node, parts };
       return visualH;
     }
 
@@ -127,7 +65,7 @@ export const layoutTree = (
     });
 
     const subtreeH = Math.max(visualH, childrenH);
-    pos[node.id] = { w, h, visualTopExtra, subtreeH, node };
+    pos[node.id] = { w, h, visualTopExtra, subtreeH, node, parts };
     return subtreeH;
   };
 
