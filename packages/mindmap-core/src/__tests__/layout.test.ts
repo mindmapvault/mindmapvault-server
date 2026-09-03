@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { MindMapTreeNode } from '../../types';
+import type { LayoutNode } from '../types';
 
 /**
  * Characterisation tests for the layout engine and the node geometry.
@@ -17,7 +17,7 @@ import type { MindMapTreeNode } from '../../types';
 
 const CHAR_W = 7;
 
-type Layout = typeof import('../MindMapLayout');
+type Layout = typeof import('../index');
 let layout: Layout;
 
 beforeAll(async () => {
@@ -29,14 +29,17 @@ beforeAll(async () => {
       }),
     }),
   };
-  layout = await import('../MindMapLayout');
+  layout = await import('../index');
 });
 
-const node = (over: Partial<MindMapTreeNode> = {}): MindMapTreeNode =>
-  ({ id: 'n', text: 'hello', children: [], ...over }) as MindMapTreeNode;
+/** Stands in for the apps' own `MindMapTreeNode`, which satisfies this shape. */
+interface TestNode extends LayoutNode<TestNode> {}
+
+const node = (over: Partial<TestNode> = {}): TestNode =>
+  ({ id: 'n', text: 'hello', children: [], ...over }) as TestNode;
 
 describe('measureNodeSize', () => {
-  const measure = (over: Partial<MindMapTreeNode> = {}) =>
+  const measure = (over: Partial<TestNode> = {}) =>
     layout.measureNodeSize(node(over));
 
   it('gives a plain one-line node the minimum height', () => {
@@ -122,7 +125,7 @@ describe('nodeGeometry', () => {
    * as it was measured to be. Before the split the renderer subtracted a band
    * the measurement had not added, and the body lost that many pixels.
    */
-  const decorated = (over: Partial<MindMapTreeNode> = {}) =>
+  const decorated = (over: Partial<TestNode> = {}) =>
     node({
       text: 'a body of text',
       notes: 'note',
@@ -191,7 +194,7 @@ describe('layoutTree', () => {
   it('sends nodes marked side:left to the other side', () => {
     const root = node({
       id: 'root',
-      children: [node({ id: 'r' }), node({ id: 'l', side: 'left' } as Partial<MindMapTreeNode>)],
+      children: [node({ id: 'r' }), node({ id: 'l', side: 'left' } as Partial<TestNode>)],
     });
     const pos = layout.layoutTree(root, 0, 0);
     expect(pos.l.direction).toBe('left');
@@ -214,7 +217,7 @@ describe('layoutTree', () => {
   it('honours a dragged node\'s own position', () => {
     const root = node({
       id: 'root',
-      children: [node({ id: 'a', customX: 500, customY: 250 } as Partial<MindMapTreeNode>)],
+      children: [node({ id: 'a', customX: 500, customY: 250 } as Partial<TestNode>)],
     });
     const pos = layout.layoutTree(root, 0, 0);
     expect(pos.a.x).toBe(500);
@@ -224,7 +227,7 @@ describe('layoutTree', () => {
   it('reserves room above a node carrying a date badge', () => {
     const plain = layout.layoutTree(node({ id: 'root' }), 0, 0);
     const dated = layout.layoutTree(
-      node({ id: 'root', startDate: '2026-01-01' } as Partial<MindMapTreeNode>), 0, 0,
+      node({ id: 'root', startDate: '2026-01-01' } as Partial<TestNode>), 0, 0,
     );
     expect(plain.root.visualTopExtra).toBe(0);
     expect(dated.root.visualTopExtra).toBe(34); // DATE_BADGE_OFFSET_H

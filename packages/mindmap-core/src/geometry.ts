@@ -1,24 +1,20 @@
 /**
- * MindMapGeometry
- *
  * A node's parts, how much room each needs, and where each one goes.
  *
- * This exists because the same arithmetic was being done three times: in
+ * This exists because the same arithmetic used to be done three times: in
  * `measureNodeSize`, to decide how big a node is; inline in the editor's
- * render function, to decide where inside it each part goes; and again in
- * `utils/vaultPreview.ts`, to draw the thumbnail. All three derived
- * `leftPad`, `topMetaH`, `topTagH`, `bodyTopY` and `bodyH` from the same
- * fields, and they have to agree exactly or the text drifts out of the box it
- * was measured for. They had already drifted — see `describeNode` below.
+ * render function, to decide where inside it each part goes; and again in the
+ * vault preview, to draw the thumbnail. All three derived `leftPad`, the strip
+ * heights, `bodyTopY` and `bodyH` from the same fields, and they have to agree
+ * exactly or the text drifts out of the box it was measured for. They had
+ * already drifted.
  *
- * The split is the one proved out in `mindmapvault-live`
- * (`app/src/maps/geometry.ts`): `describeNode` reads the node once,
- * `measureNodeSize` adds the bands up, and `nodeGeometry` turns the box the
- * layout produced back into positions. Measuring and drawing then use the same
- * numbers by construction rather than by inspection.
+ * So: `describeNode` reads the node once, `measureNodeSize` adds the bands up,
+ * and `nodeGeometry` turns the box the layout produced back into positions.
+ * Measuring and drawing then use the same numbers by construction rather than
+ * by inspection.
  */
 
-import type { MindMapTreeNode, NodeImage } from '../types';
 import {
   NODE_LINE_H,
   NODE_MIN_H,
@@ -33,8 +29,16 @@ import {
   CHECKBOX_SIZE,
   PROGRESS_PIE_SIZE,
   NODE_IMAGE_PAD,
-} from './MindMapConstants';
-import { getVisibleNodeTextLines } from '../utils/nodeAttachments';
+} from './constants';
+import { getVisibleNodeTextLines } from './text';
+import type {
+  DescribeOptions,
+  LayoutNode,
+  NodeBox,
+  NodeGeometry,
+  NodeParts,
+  NodeSize,
+} from './types';
 
 // ── Text measurement ────────────────────────────────────────────
 
@@ -63,57 +67,8 @@ export const measureText = (text: string, fontSize = 14): number => {
 
 // ── What a node is made of ──────────────────────────────────────
 
-/**
- * Which parts a node has and how tall each band is. Derived from the node
- * alone, so measuring and drawing cannot disagree about it.
- *
- * Bands run top to bottom: the date badge sits *above* the box, then the meta
- * strip, the tags, the picture, the text body, and one footer strip per link.
- */
-export interface NodeParts {
-  lines: string[];
-  iconCount: number;
-  urlCount: number;
-  tagCount: number;
-  linkId: string | null;
-  hasCheckbox: boolean;
-  hasProgress: boolean;
-  hasNote: boolean;
-  attachmentCount: number;
-  hasDate: boolean;
-  /** The glyph to draw, or null. Dimensions come from the node JSON, so a node
-   *  with a picture measures as fast as one without — no decode, no reflow. */
-  image: NodeImage | null;
-  /** Room taken by the checkbox, icons and progress dial, left of the text. */
-  leftPad: number;
-  /** Band above the body: note dot and attachment count. */
-  topMetaH: number;
-  /** Band below the meta strip: the tag pills. */
-  topTagH: number;
-  /** Band below the tags: the picture. */
-  imageBandH: number;
-  /** Band below the body: one strip per footer link. */
-  footerH: number;
-  /** Space reserved *above* the node for the date badge. */
-  visualTopExtra: number;
-}
-
-export interface DescribeOptions {
-  /**
-   * Attachments resolved for this node, when the caller knows more than the
-   * node does. The editor merges the node's own list with
-   * `externalNodeAttachments`, so a node whose attachments live only outside
-   * the tree used to get a meta strip drawn that the layout had reserved no
-   * height for — 18px stolen from the text body. Pass the resolved count and
-   * both sides agree again.
-   */
-  attachmentCount?: number;
-}
-
-export type DescribeNode = (node: MindMapTreeNode) => NodeParts;
-
-export const describeNode = (
-  node: MindMapTreeNode,
+export const describeNode = <N extends LayoutNode<N>>(
+  node: N,
   options: DescribeOptions = {},
 ): NodeParts => {
   const lines = getVisibleNodeTextLines(node.text);
@@ -157,15 +112,9 @@ export const describeNode = (
 
 // ── How big it has to be ────────────────────────────────────────
 
-export interface NodeSize {
-  w: number;
-  h: number;
-  lines: string[];
-}
-
 /** How big a node has to be to hold everything `describeNode` found in it. */
-export const measureNodeSize = (
-  node: MindMapTreeNode,
+export const measureNodeSize = <N extends LayoutNode<N>>(
+  node: N,
   parts: NodeParts = describeNode(node),
 ): NodeSize => {
   const linkW = parts.linkId ? measureText(parts.linkId, 10) + 24 : 0;
@@ -184,38 +133,6 @@ export const measureNodeSize = (
 };
 
 // ── Where each part goes, once the node has been placed ─────────
-
-export interface NodeBox {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface NodeGeometry {
-  /** Centre of the meta strip: the note dot and the attachment badge. */
-  metaCentreY: number;
-  /** Top of the tag strip, and the divider under the meta strip. */
-  tagTopY: number;
-  /** Divider under the tag strip. */
-  tagBottomY: number;
-  /** Top of the picture glyph. */
-  imageY: number;
-  /** Top of the text body, below the meta, tag and image bands. */
-  bodyTopY: number;
-  /** Height of the text body — the number `measureNodeSize` started from. */
-  bodyH: number;
-  /** Vertical centre of the body: checkbox, icons and progress dial. */
-  centreY: number;
-  /** Left edge of the text, past the decorations. */
-  textX: number;
-  /** Horizontal centre of the text column. */
-  textCentreX: number;
-  /** Baseline of the first line of text. */
-  lineStartY: number;
-  /** Top of the first footer strip. */
-  footerTopY: number;
-}
 
 /**
  * The counterpart to `measureNodeSize`: given the box the layout produced,

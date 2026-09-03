@@ -65,7 +65,7 @@ import {
   defaultRoot,
   migrateNode,
 } from './MindMapHelpers';
-import { layoutTree, bezierPath, describeNode, nodeGeometry } from './MindMapLayout';
+import { layoutTree, bezierPath, describeNode, nodeGeometry } from '@mindmapvault/mindmap-core';
 import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils/nodeAttachments';
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
@@ -2248,7 +2248,10 @@ export function DesktopMindMapEditor({
     // The picture gets a band of its own between the tag strip and the text, so
     // the text stays centred in what is left rather than being pushed off-centre.
     const parts = box.parts;
-    const { lines, iconCount, topMetaH, hasCheckbox, hasProgress, image: nodeImage } = parts;
+    const { lines, iconCount, topMetaH, hasCheckbox, hasProgress, hasNote } = parts;
+    // Derived from the parts, not re-read from the node, so the glyph and the
+    // band that makes room for it cannot disagree about whether there is one.
+    const nodeImage = parts.image ? node.image! : null;
     const { bodyTopY, bodyH, centreY, imageY, textCentreX, lineStartY, metaCentreY, tagTopY, tagBottomY, footerTopY } =
       nodeGeometry(box, parts);
 
@@ -2378,9 +2381,9 @@ export function DesktopMindMapEditor({
           ))
         )}
 
-        {attachments.length > 0 && renderAttachmentIndicator(box.x + box.w - (node.notes ? 26 : 11), metaCentreY, attachments.length, ownColor)}
+        {attachments.length > 0 && renderAttachmentIndicator(box.x + box.w - (hasNote ? 26 : 11), metaCentreY, attachments.length, ownColor)}
 
-        {node.notes && <circle cx={box.x + box.w - 7} cy={metaCentreY} r={5} fill="#f59e0b" className="mm-indicator" />}
+        {hasNote && <circle cx={box.x + box.w - 7} cy={metaCentreY} r={5} fill="#f59e0b" className="mm-indicator" />}
 
         {(node.tags ?? []).length > 0 && (() => {
           const tags = (node.tags ?? []).slice(0, 5);

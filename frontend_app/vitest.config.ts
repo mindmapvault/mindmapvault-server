@@ -14,6 +14,15 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    include: ['src/**/*.test.ts', 'src/**/__tests__/**/*.test.ts?(x)'],
+    include: [
+      'src/**/*.test.ts',
+      'src/**/__tests__/**/*.test.ts?(x)',
+      // The layout and geometry moved to @mindmapvault/mindmap-core; their
+      // tests moved with them, and this project is what runs them.
+      '../packages/*/src/**/__tests__/**/*.test.ts?(x)',
+    ],
+    alias: {
+      '@mindmapvault/mindmap-core': new URL('../packages/mindmap-core/src/index.ts', import.meta.url).pathname,
+    },
   },
 });

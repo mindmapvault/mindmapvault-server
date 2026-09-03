@@ -1,53 +1,27 @@
 /**
- * MindMapLayout
+ * Where the boxes go.
  *
- * Layout engine for the MindMap — computes node positions in a two-pass
- * (bottom-up height, then top-down position) tree layout algorithm.
- *
- * How big each node is, and what it is made of, lives in `MindMapGeometry`;
- * this file only decides where the boxes go. The parts each node was measured
- * from ride along in the layout entry, so the renderer draws inside exactly
- * the box that was measured rather than working the bands out a second time.
+ * A two-pass tree layout: subtree heights bottom-up, then positions top-down.
+ * How big each node is, and what it is made of, is `geometry.ts`'s job; this
+ * file only places the boxes. The parts each node was measured from ride along
+ * in its `LayoutEntry`, so a renderer draws inside exactly the box that was
+ * measured rather than working the bands out a second time.
  */
 
-import type { MindMapTreeNode } from '../types';
-import { H_GAP, V_GAP } from './MindMapConstants';
-import {
-  describeNode,
-  measureNodeSize,
-  type DescribeNode,
-  type NodeParts,
-} from './MindMapGeometry';
+import { H_GAP, V_GAP } from './constants';
+import { describeNode, measureNodeSize } from './geometry';
+import type { DescribeNode, LayoutEntry, LayoutNode } from './types';
 
-export * from './MindMapGeometry';
-
-// ── Layout types ────────────────────────────────────────────────
-
-export interface LayoutEntry {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  visualTopExtra: number;
-  subtreeH: number;
-  direction: 'left' | 'right';
-  node: MindMapTreeNode;
-  /** What this node was measured from. The renderer draws from the same parts. */
-  parts: NodeParts;
-}
-
-// ── Tree layout ─────────────────────────────────────────────────
-
-export const layoutTree = (
-  root: MindMapTreeNode,
+export const layoutTree = <N extends LayoutNode<N>>(
+  root: N,
   startX = 0,
   startY = 0,
-  describe: DescribeNode = describeNode,
-): Record<string, LayoutEntry> => {
-  const pos: Record<string, Partial<LayoutEntry>> = {};
+  describe: DescribeNode<N> = describeNode,
+): Record<string, LayoutEntry<N>> => {
+  const pos: Record<string, Partial<LayoutEntry<N>>> = {};
 
   // First pass: compute subtree heights (bottom-up)
-  const computeHeight = (node: MindMapTreeNode): number => {
+  const computeHeight = (node: N): number => {
     const parts = describe(node);
     const { w, h } = measureNodeSize(node, parts);
     const visualTopExtra = parts.visualTopExtra;
@@ -73,7 +47,7 @@ export const layoutTree = (
 
   // Second pass: assign x, y positions (top-down)
   const assignPos = (
-    node: MindMapTreeNode,
+    node: N,
     x: number,
     yCenter: number,
     direction: 'left' | 'right' = 'right',
@@ -93,7 +67,7 @@ export const layoutTree = (
 
     if (!node.children || node.children.length === 0 || node.collapsed) return;
 
-    const layoutGroup = (children: MindMapTreeNode[], dir: 'left' | 'right') => {
+    const layoutGroup = (children: N[], dir: 'left' | 'right') => {
       let totalH = 0;
       children.forEach((ch, i) => {
         totalH += pos[ch.id]!.subtreeH ?? 0;
@@ -123,7 +97,7 @@ export const layoutTree = (
   };
 
   assignPos(root, startX, startY);
-  return pos as Record<string, LayoutEntry>;
+  return pos as Record<string, LayoutEntry<N>>;
 };
 
 /** Bezier connection path between two points. */
