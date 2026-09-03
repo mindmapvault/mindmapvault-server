@@ -92,7 +92,7 @@ export function DesktopMindMapEditor({
   initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
   onExportMarkdown, onExportFreemind, onExportFreeplane, onExportWisemapping, onExportXmind, titleChanged, onRenameTitle, renamingTitle,
   versionLabel, versionTooltip,
-  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onOpenNodeAttachment,
+  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onShowHistory, onOpenNodeAttachment,
   onFetchNodeAttachmentContent,
   onDeleteNodeAttachment,
   onCopyNodeAttachment,
@@ -1496,6 +1496,7 @@ export function DesktopMindMapEditor({
       'find.shortcuts': () => setShowShortcuts((v) => !v),
       'vault.files': () => { onOpenSecurePanel?.('attachments'); },
       'vault.shares': () => { onOpenSecurePanel?.('shares'); },
+      'vault.history': () => { onShowHistory?.(); },
       'nav.back': () => { onBack?.(); },
     };
 
@@ -1512,6 +1513,7 @@ export function DesktopMindMapEditor({
       // only the root has a left side to add to.
       if (actionId === 'vault.files' && !onOpenSecurePanel) return;
       if (actionId === 'vault.shares' && !onOpenSecurePanel) return;
+      if (actionId === 'vault.history' && !onShowHistory) return;
       e.preventDefault();
       actionHandlers[actionId]();
       const def = SHORTCUTS.find((sc) => sc.id === actionId);
@@ -1561,7 +1563,7 @@ export function DesktopMindMapEditor({
     }
     }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
       toggleCheckbox, undo, redo, toggleCollapse, openNotes, showToast, resetNodePosition, resetAllPositions, autoAlignSubtree, showIconPicker, showColorPicker, focusMode, focusedIds,
-      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel,
+      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel, onShowHistory,
       // fitView is declared below this hook, so it cannot be listed here; it is
       // only ever called lazily from inside the handler.
       keyboardLayout, onBack, setColourTray, colourTrayEnabled, setIconTray, iconTrayEnabled,
@@ -2769,24 +2771,6 @@ export function DesktopMindMapEditor({
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-9.19 9.19a6 6 0 11-8.49-8.49l9.2-9.19a4 4 0 015.65 5.66l-9.2 9.19a2 2 0 11-2.82-2.82l8.48-8.48"/></svg>
           </button>
-          {onOpenSecurePanel && (
-            <>
-              <button
-                className="mm-btn"
-                onClick={() => onOpenSecurePanel('attachments')}
-                data-label="Vault files" data-shortcut={formatButtonShortcut('vault.files', keyboardLayout)} title="Vault files (F7)"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4h5l2 2h9a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
-              </button>
-              <button
-                className="mm-btn"
-                onClick={() => onOpenSecurePanel('shares')}
-                data-label="Shares" data-shortcut={formatButtonShortcut('vault.shares', keyboardLayout)} title="Share exports (F8)"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              </button>
-            </>
-          )}
               </div>
             </div>
           )}
@@ -2815,6 +2799,42 @@ export function DesktopMindMapEditor({
               <div className="mm-toolbar-group-btns">
           <button className="mm-btn" onClick={() => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }} data-label="Search" data-shortcut={formatButtonShortcut('find.search', keyboardLayout)} title="Search (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
           <button className="mm-btn" onClick={() => setShowShortcuts((v) => !v)} data-label="Shortcuts" data-shortcut={formatButtonShortcut('find.shortcuts', keyboardLayout)} title="Shortcuts (F1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg></button>
+              </div>
+            </div>
+          )}
+          {onOpenSecurePanel && (densityPreset !== 'large' || activeRibbonTab === 'export') && (
+            <div className="mm-toolbar-group" data-ribbon-tab="export">
+              <span className="mm-toolbar-group-label">Vault</span>
+              <div className="mm-toolbar-group-btns">
+                <button
+                  className="mm-btn"
+                  onClick={() => onOpenSecurePanel('attachments')}
+                  data-label="Vault files"
+                  data-shortcut={formatButtonShortcut('vault.files', keyboardLayout)}
+                  title={`Vault files (${formatShortcut('vault.files', keyboardLayout)})`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4h5l2 2h9a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
+                </button>
+                <button
+                  className="mm-btn"
+                  onClick={() => onOpenSecurePanel('shares')}
+                  data-label="Shares"
+                  data-shortcut={formatButtonShortcut('vault.shares', keyboardLayout)}
+                  title={`Share exports (${formatShortcut('vault.shares', keyboardLayout)})`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </button>
+                {onShowHistory && (
+                  <button
+                    className="mm-btn"
+                    onClick={onShowHistory}
+                    data-label="History"
+                    data-shortcut={formatButtonShortcut('vault.history', keyboardLayout)}
+                    title={`Version history (${formatShortcut('vault.history', keyboardLayout)})`}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path strokeLinecap="round" strokeLinejoin="round" d="M3 4v4h4M12 7v5l3 2"/></svg>
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -2894,7 +2914,15 @@ export function DesktopMindMapEditor({
                     ['node.autoAlign', 'Auto-align', () => autoAlignSubtree(selectedId)],
                     ['view.focusMode', 'Focus mode', () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }],
                     ['find.shortcuts', 'Shortcuts', () => setShowShortcuts((v) => !v)],
-                  ] as const).map(([id, label, onClick]) => (
+                    ['vault.files', 'Vault files', () => onOpenSecurePanel?.('attachments')],
+                    ['vault.shares', 'Share exports', () => onOpenSecurePanel?.('shares')],
+                    ['vault.history', 'Version history', () => onShowHistory?.()],
+                  ] as const).filter(([id]) => {
+                    // Vault-scoped entries only exist where the callbacks do.
+                    if (id === 'vault.files' || id === 'vault.shares') return Boolean(onOpenSecurePanel);
+                    if (id === 'vault.history') return Boolean(onShowHistory);
+                    return true;
+                  }).map(([id, label, onClick]) => (
                     <button key={label} className="mm-context-item" onClick={() => { onClick(); setShowToolbarOverflow(false); }}>
                       {label}{id && <kbd>{formatShortcut(id, keyboardLayout)}</kbd>}
                     </button>

@@ -90,6 +90,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Mod+Shift+S opens the shares of what was saved.
   { id: 'vault.files', label: 'Vault files', group: 'File', freemind: ['F7'], mac: ['Mod+Shift+O'] },
   { id: 'vault.shares', label: 'Share exports', group: 'File', freemind: ['F8'], mac: ['Mod+Shift+S'] },
+  { id: 'vault.history', label: 'Version history', group: 'File', freemind: ['Mod+Shift+H'], mac: ['Mod+Shift+H'] },
   // Each platform's own "navigate back" convention (Alt+Left on
   // Windows/Linux browsers, Cmd+[ on macOS — Safari, Finder). Not Mod+W:
   // that's already claimed by the native Close Window menu item, at the

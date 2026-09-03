@@ -1150,7 +1150,7 @@ export function EditorPage() {
         onRenameTitle={() => void handleRenameTitle()}
         renamingTitle={renamingTitle}
         onBack={() => navigate('/vaults')}
-        onShowHistory={() => { if (!isLocalMode) setShowHistory(true); }}
+        onShowHistory={isLocalMode ? undefined : () => setShowHistory(true)}
         onExportMarkdown={handleExportMarkdown}
         onExportFreemind={handleExportFreemind}
         onExportFreeplane={handleExportFreeplane}
