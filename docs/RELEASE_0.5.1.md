@@ -1,21 +1,69 @@
-# Release 0.5.1 — Version History That Actually Works
+# Release 0.5.1 — A Toolbar That Fits, And Version History That Works
 
 **Date:** 2026-09-03
 
 ## Overview
 
-Opening an older version of a vault did nothing. It looked like a UI bug. It was
-not: the bytes never arrived, because the object store this repository's own
-`docker-compose.yml` ships does not keep older versions, and does not say so.
+Two things in this release. The toolbar, menus and shortcuts were reworked so the
+app can be as sparse or as full as you want it. And version history — which
+appeared to do nothing when you opened an older version — was found to be broken
+underneath, not in the UI.
+
+Self-hosters on the shipped Compose stack are affected by the second one.
+**Please read [What Changes For Existing Installs](#what-changes-for-existing-installs)
+before upgrading** — version counts will drop, and the upgrade is one-way.
+
+## The Interface
+
+**Three densities.** *Lean* strips the chrome back to the canvas, *Standard* is
+the familiar layout, and *Large* gives every button a caption and groups them
+under a ribbon with **Home**, **Insert**, **View** and **Export** tabs. Switch in
+Settings → Interface. Each density sets sensible defaults for the status bar,
+button captions and the shortcut hints, and every one of those can be overridden
+on its own without leaving the preset.
+
+**Dockable colour and icon trays**, which can sit against any edge of the canvas —
+left, right, top or bottom — so applying a colour or an icon no longer means a
+trip through a menu.
+
+**Two keyboard layouts.** Pick *FreeMind* if that is what your hands know, or
+*Mac* for the conventions the platform uses. `Mod` resolves to the right key for
+the machine you are on regardless of which layout you chose, so a Mac user running
+the FreeMind layout still gets ⌘ rather than Ctrl. Shortcut hints can be shown on
+the buttons themselves, and the floating shortcut panel can be dragged anywhere
+and stays inside the window.
+
+**Settings gained an Interface tab**, opens on Account, and uses toggle switches
+rather than checkboxes. What's New sits between Interface and Help.
+
+### Fixes that came with it
+
+- The export dropdown, the node context menu and the shortcut panel could all be
+  drawn partly outside the window. They are now measured and moved to fit, and a
+  context menu near the bottom of the screen opens upward.
+- A node with a fill colour looked unselectable — the selection border was being
+  drawn under the node's own colour.
+- A node's colour was cascading down the tree. It now paints only its own incoming
+  line; children set their own.
+- The version number beside the vault name follows the version actually on screen,
+  rather than always showing the newest.
+- Every password field has a reveal toggle, including the vault unlock dialog.
+  This passphrase is the encryption key and nobody can reset it, so being able to
+  check what you typed is the cheapest guard against locking yourself out.
+- **Attach file** and **Vault files** opened two different dialogs for the same
+  job. Attach now opens the vault dialog, so attaching to a node gets the upload
+  button and the drop area it never had.
+
+## Version History
+
+Opening an older version of a vault did nothing. The bytes never arrived, because
+the object store this repository's own `docker-compose.yml` ships does not keep
+older versions, and does not say so.
 
 Every save now writes its own object. Nothing in the server depends on S3 bucket
 versioning any more, which also means it now runs correctly on Cloudflare R2.
 
-Self-hosters on the shipped Compose stack were affected. **Please read
-[What Changes For Existing Installs](#what-changes-for-existing-installs) before
-upgrading** — version counts will drop, and the upgrade is one-way.
-
-## What Was Wrong
+### What Was Wrong
 
 Vault versions were stored as S3 object versions of one key. That is not part of
 the S3 core: Garage and Cloudflare R2 both answer `PutBucketVersioning` and
@@ -39,7 +87,7 @@ So the store advertised the capability at write time and declined it at read
 time. The one check that would have caught a store without versioning — "did the
 upload return a version id?" — passed cleanly.
 
-## What Changed
+### What Changed
 
 Each version is now its own object at `<key>/v/<version-id>`, and the version id
 is minted by the server rather than read from a response header. The storage

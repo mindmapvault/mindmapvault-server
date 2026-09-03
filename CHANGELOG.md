@@ -6,8 +6,24 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [0.5.1] - 2026-09-03
 
-A fix for version history, which did not work on the object store this repo's own
-`docker-compose.yml` ships. Release notes: `docs/RELEASE_0.5.1.md`.
+A reworked toolbar with three densities, and a fix for version history, which did
+not work on the object store this repo's own `docker-compose.yml` ships. Release
+notes: `docs/RELEASE_0.5.1.md`.
+
+### Added
+- **Three interface densities.** *Lean* strips the chrome back to the canvas,
+  *Standard* is the familiar layout, and *Large* captions every button and groups
+  them under a ribbon with Home, Insert, View and Export tabs. Each preset sets
+  defaults for the status bar, captions and shortcut hints, and each of those can
+  be overridden individually without leaving the preset.
+- **Dockable colour and icon trays**, which can sit against any edge of the canvas.
+- **Two keyboard layouts**, FreeMind and Mac. `Mod` resolves to the current OS
+  regardless of the layout chosen, so a Mac user on the FreeMind layout still gets
+  ⌘ rather than Ctrl. Shortcut hints can be shown on the buttons themselves.
+- **A Settings → Interface tab.** Settings now opens on Account, uses toggle
+  switches rather than checkboxes, and What's New sits between Interface and Help.
+- **Version history is reachable from the editor**, alongside the other
+  vault-scoped buttons, which are now grouped together.
 
 ### Fixed
 - **Version history was broken on any store without S3 object versioning.** Vault
@@ -25,6 +41,18 @@ A fix for version history, which did not work on the object store this repo's ow
 - **`confirm-upload` accepted uploads that never happened.** The check only tested
   that the version id was a non-empty string. It now confirms the object with
   HeadObject.
+- The export dropdown, the node context menu and the shortcut panel could be drawn
+  partly outside the window. They are measured and moved to fit, and a context menu
+  near the bottom of the screen opens upward.
+- A node with a fill colour looked unselectable: the selection border was drawn
+  under the node's own colour.
+- A node's colour cascaded down the tree. It now paints only its own incoming line.
+- The version number beside the vault name follows the version actually on screen
+  rather than always showing the newest.
+- Every password field has a reveal toggle, including the vault unlock dialog.
+- **Attach file** and **Vault files** opened different dialogs for the same job.
+  Attach now opens the vault dialog, so attaching to a node gets the upload button
+  and drop area it did not have.
 
 ### Added
 - A storage self-test at startup: writes, reads back, compares and deletes a probe
