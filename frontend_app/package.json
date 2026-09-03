@@ -21,7 +21,6 @@
     "@noble/curves": "^1.7.0",
     "@noble/hashes": "^1.7.1",
     "@noble/post-quantum": "^0.2.1",
-    "@xyflow/react": "^12.3.6",
     "dompurify": "^3.4.13",
     "fflate": "^0.8.2",
     "hash-wasm": "^4.11.0",
