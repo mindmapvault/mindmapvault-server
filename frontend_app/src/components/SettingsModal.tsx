@@ -8,8 +8,17 @@ import { VaultIcon } from './Logo';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 import { AutosaveMode, useThemeStore } from '../store/theme';
+import {
+  useUiStore,
+  useEffectiveKeyboardLayout,
+  resolveDensity,
+  type KeyboardLayoutName,
+  type DensityPreset,
+  type TrayPosition,
+} from '../store/ui';
+import { isMac } from '../platform/isMac';
 
-export type SettingsTab = 'account' | 'appearance' | 'support';
+export type SettingsTab = 'account' | 'appearance' | 'interface' | 'support';
 
 const PRESETS = [
   '#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f97316',
@@ -40,6 +49,262 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
+
+/**
+ * On/off switch for the settings rows. It stays a real checkbox under the
+ * paint — `appearance-none` turns the input itself into the track — so the
+ * wrapping `<label>`, keyboard operation and focus handling all keep working.
+ */
+function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <span className="relative inline-flex shrink-0">
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-6 w-11 cursor-pointer appearance-none rounded-full transition-colors"
+        style={{
+          background: checked ? 'var(--accent)' : 'var(--surface-2)',
+          border: `1px solid ${checked ? 'var(--accent)' : 'var(--border-light)'}`,
+        }}
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute left-[3px] top-1/2 h-[18px] w-[18px] rounded-full transition-transform"
+        style={{
+          transform: `translateY(-50%) translateX(${checked ? '20px' : '0'})`,
+          background: checked ? '#fff' : 'var(--text-muted)',
+        }}
+      />
+    </span>
+  );
+}
+
+// ─── Local storage folder ────────────────────────────────────────────────────
+// ─── Keyboard layout ──────────────────────────────────────────────────────────
+
+const LAYOUT_OPTIONS: { value: KeyboardLayoutName; title: string; blurb: string }[] = [
+  { value: 'freemind', title: 'FreeMind', blurb: 'F-key driven — Tab/Enter to add, F2 rename, F9/F10 undo/redo. The classic mind-map layout.' },
+  { value: 'mac', title: 'Mac', blurb: 'Modelled on MindNode — no function keys. ⌘Return rename, ⌘Z/⇧⌘Z undo/redo, B for colour, H for root.' },
+];
+
+function KeyboardLayoutPicker() {
+  const chosen = useUiStore((s) => s.keyboardLayout);
+  const setKeyboardLayout = useUiStore((s) => s.setKeyboardLayout);
+  const effective = useEffectiveKeyboardLayout();
+
+  return (
+    <div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {LAYOUT_OPTIONS.map((opt) => {
+          const active = effective === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setKeyboardLayout(opt.value)}
+              className="rounded-lg p-3 text-left text-sm transition"
+              style={{
+                background: active ? 'var(--accent-soft, var(--surface-2))' : 'var(--surface-2)',
+                border: `1px solid ${active ? 'var(--accent)' : 'var(--border-light)'}`,
+                color: 'var(--text-primary)',
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{opt.title}</span>
+                {active && <span className="text-xs" style={{ color: 'var(--accent)' }}>Active</span>}
+              </div>
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>{opt.blurb}</p>
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+        {chosen == null
+          ? `Following this device's default (${isMac ? 'Mac' : 'FreeMind'} — macOS uses Mac, everything else uses FreeMind).`
+          : 'Set explicitly — stays this way on this device regardless of the operating system default.'}
+        {chosen != null && (
+          <>
+            {' '}
+            <button type="button" onClick={() => setKeyboardLayout(null)} className="underline decoration-dotted underline-offset-2" style={{ color: 'var(--accent)' }}>
+              Reset to device default
+            </button>
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+// ─── Interface ────────────────────────────────────────────────────────────────
+
+const DENSITY_OPTIONS: { value: DensityPreset; title: string; blurb: string }[] = [
+  { value: 'lean', title: 'Lean', blurb: 'Smaller buttons. Only the essentials stay on the toolbar; the rest live in a "More actions" menu. Status bar hidden by default.' },
+  { value: 'standard', title: 'Standard', blurb: 'Today\'s toolbar — every action visible, default sizing.' },
+  { value: 'large', title: 'Large', blurb: 'Bigger buttons with labels under the essentials. Colour and icon trays turn on by default.' },
+];
+
+const TRAY_POSITIONS: TrayPosition[] = ['top', 'bottom', 'left', 'right'];
+
+function InterfaceTab() {
+  const densityPreset = useUiStore((s) => s.densityPreset);
+  const setDensityPreset = useUiStore((s) => s.setDensityPreset);
+  const statusBarOverride = useUiStore((s) => s.statusBarOverride);
+  const setStatusBarOverride = useUiStore((s) => s.setStatusBarOverride);
+  const toolbarLabelsOverride = useUiStore((s) => s.toolbarLabelsOverride);
+  const setToolbarLabelsOverride = useUiStore((s) => s.setToolbarLabelsOverride);
+  const buttonShortcutsOverride = useUiStore((s) => s.buttonShortcutsOverride);
+  const setButtonShortcutsOverride = useUiStore((s) => s.setButtonShortcutsOverride);
+  const colourTrayEnabled = useUiStore((s) => s.colourTrayEnabled);
+  const colourTrayPosition = useUiStore((s) => s.colourTrayPosition);
+  const setColourTray = useUiStore((s) => s.setColourTray);
+  const iconTrayEnabled = useUiStore((s) => s.iconTrayEnabled);
+  const iconTrayPosition = useUiStore((s) => s.iconTrayPosition);
+  const setIconTray = useUiStore((s) => s.setIconTray);
+
+  const resolved = resolveDensity(densityPreset, statusBarOverride, toolbarLabelsOverride, buttonShortcutsOverride);
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <SectionLabel>Density</SectionLabel>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {DENSITY_OPTIONS.map((opt) => {
+            const active = densityPreset === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setDensityPreset(opt.value)}
+                className="rounded-lg p-3 text-left text-sm transition"
+                style={{
+                  background: 'var(--surface-2)',
+                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border-light)'}`,
+                  color: 'var(--text-primary)',
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{opt.title}</span>
+                  {active && <span className="text-xs" style={{ color: 'var(--accent)' }}>Active</span>}
+                </div>
+                <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>{opt.blurb}</p>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
+        <SectionLabel>Overrides</SectionLabel>
+        <label className="flex items-center justify-between gap-3 py-1.5 text-sm" style={{ color: 'var(--text-primary)' }}>
+          <span>
+            Status bar
+            <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              {statusBarOverride == null ? `(following ${densityPreset} default: ${resolved.statusBarVisible ? 'on' : 'off'})` : '(set explicitly)'}
+            </span>
+          </span>
+          <ToggleSwitch checked={resolved.statusBarVisible} onChange={setStatusBarOverride} />
+        </label>
+        {statusBarOverride != null && (
+          <button type="button" onClick={() => setStatusBarOverride(null)} className="text-xs underline decoration-dotted underline-offset-2" style={{ color: 'var(--accent)' }}>
+            Reset to density default
+          </button>
+        )}
+
+        <label className="mt-2 flex items-center justify-between gap-3 py-1.5 text-sm" style={{ color: 'var(--text-primary)' }}>
+          <span>
+            Toolbar labels
+            <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              {toolbarLabelsOverride == null ? `(following ${densityPreset} default: ${resolved.toolbarLabels ? 'on' : 'off'})` : '(set explicitly)'}
+            </span>
+          </span>
+          <ToggleSwitch checked={resolved.toolbarLabels} onChange={setToolbarLabelsOverride} />
+        </label>
+        {toolbarLabelsOverride != null && (
+          <button type="button" onClick={() => setToolbarLabelsOverride(null)} className="text-xs underline decoration-dotted underline-offset-2" style={{ color: 'var(--accent)' }}>
+            Reset to density default
+          </button>
+        )}
+
+        <label className="mt-2 flex items-center justify-between gap-3 py-1.5 text-sm" style={{ color: 'var(--text-primary)' }}>
+          <span>
+            Keyboard shortcuts on buttons
+            <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              {buttonShortcutsOverride == null ? `(following ${densityPreset} default: ${resolved.buttonShortcuts ? 'on' : 'off'})` : '(set explicitly)'}
+            </span>
+          </span>
+          <ToggleSwitch checked={resolved.buttonShortcuts} onChange={setButtonShortcutsOverride} />
+        </label>
+        {buttonShortcutsOverride != null && (
+          <button type="button" onClick={() => setButtonShortcutsOverride(null)} className="text-xs underline decoration-dotted underline-offset-2" style={{ color: 'var(--accent)' }}>
+            Reset to density default
+          </button>
+        )}
+      </section>
+
+      <section className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
+        <SectionLabel>Colour tray</SectionLabel>
+        <label className="flex items-center justify-between gap-3 py-1.5 text-sm" style={{ color: 'var(--text-primary)' }}>
+          <span>Show the colour swatch strip on the canvas</span>
+          <ToggleSwitch checked={colourTrayEnabled} onChange={(v) => setColourTray(v)} />
+        </label>
+        {colourTrayEnabled && (
+          <div className="mt-1 flex gap-1.5">
+            {TRAY_POSITIONS.map((pos) => (
+              <button
+                key={pos}
+                type="button"
+                onClick={() => setColourTray(true, pos)}
+                className="rounded px-2.5 py-1 text-xs capitalize transition"
+                style={{
+                  background: colourTrayPosition === pos ? 'var(--accent)' : 'var(--surface-2)',
+                  color: colourTrayPosition === pos ? '#fff' : 'var(--text-secondary)',
+                  border: '1px solid var(--border-light)',
+                }}
+              >
+                {pos}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
+        <SectionLabel>Icon tray</SectionLabel>
+        <label className="flex items-center justify-between gap-3 py-1.5 text-sm" style={{ color: 'var(--text-primary)' }}>
+          <span>Show the icon strip on the canvas</span>
+          <ToggleSwitch checked={iconTrayEnabled} onChange={(v) => setIconTray(v)} />
+        </label>
+        {iconTrayEnabled && (
+          <div className="mt-1 flex gap-1.5">
+            {TRAY_POSITIONS.map((pos) => (
+              <button
+                key={pos}
+                type="button"
+                onClick={() => setIconTray(true, pos)}
+                className="rounded px-2.5 py-1 text-xs capitalize transition"
+                style={{
+                  background: iconTrayPosition === pos ? 'var(--accent)' : 'var(--surface-2)',
+                  color: iconTrayPosition === pos ? '#fff' : 'var(--text-secondary)',
+                  border: '1px solid var(--border-light)',
+                }}
+              >
+                {pos}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
+        <SectionLabel>Keyboard layout</SectionLabel>
+        <KeyboardLayoutPicker />
+      </section>
+    </div>
+  );
+}
+
 const icons: Record<SettingsTab, ReactNode> = {
   account: (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -54,6 +319,12 @@ const icons: Record<SettingsTab, ReactNode> = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 2a10 10 0 1 0 0 20c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.39-.61-.39-1 0-.83.67-1.5 1.5-1.5H16a6 6 0 0 0 6-6c0-5.52-4.48-9-10-9z" />
     </svg>
   ),
+  interface: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path strokeLinecap="round" d="M3 9h18M8 9v11" />
+    </svg>
+  ),
   support: (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
       <circle cx="12" cy="12" r="9" />
@@ -66,6 +337,7 @@ const icons: Record<SettingsTab, ReactNode> = {
 const tabTitles: Record<SettingsTab, string> = {
   account: 'Account',
   appearance: 'Appearance',
+  interface: 'Interface',
   support: 'Help',
 };
 
@@ -93,7 +365,7 @@ export function SettingsModal({ open, onClose, initialTab = 'account' }: Setting
   const [deleteError, setDeleteError] = useState('');
   const deletePhrase = username?.trim() || 'DELETE';
 
-  const order: SettingsTab[] = ['account', 'appearance', 'support'];
+  const order: SettingsTab[] = ['account', 'appearance', 'interface', 'support'];
 
   useEffect(() => {
     if (open) setTab(initialTab);
@@ -220,6 +492,8 @@ export function SettingsModal({ open, onClose, initialTab = 'account' }: Setting
                 showInstall={!isLocalMode}
               />
             )}
+
+            {tab === 'interface' && <InterfaceTab />}
 
             {tab === 'support' && <SupportTab />}
           </div>
