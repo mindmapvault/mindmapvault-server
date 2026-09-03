@@ -156,7 +156,15 @@ export function DesktopMindMapEditor({
   // ── UI toggles ─────────────────────────────────────────────────────────────
   const [showShortcuts, setShowShortcuts] = useState(() => Boolean(initialShowShortcuts));
   const [shortcutsPos, setShortcutsPos] = useState<{ x: number; y: number } | null>(null);
-  const scDragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
+  const scDragRef = useRef<{
+    /** Grab point inside the panel. */
+    offsetX: number; offsetY: number;
+    /** Offset-parent origin, so viewport coords can be converted to the
+     *  `left`/`top` the absolutely-positioned panel actually needs. */
+    originX: number; originY: number;
+    /** Bounds to keep the panel inside its (overflow-hidden) parent. */
+    maxX: number; maxY: number;
+  } | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
   const [showDateDialog, setShowDateDialog] = useState(false);
@@ -176,6 +184,35 @@ export function DesktopMindMapEditor({
 
   // ── Export menu ────────────────────────────────────────────────────────────
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [exportMenuMaxH, setExportMenuMaxH] = useState<number | null>(null);
+  const [exportMenuAlign, setExportMenuAlign] = useState<'left' | 'right'>('right');
+
+  // Where the Export button lands moves with the density — the Large ribbon
+  // puts it low and hard against the left edge, the Lean icon row high and to
+  // the right — so both the room below it and the side it can open towards
+  // have to be measured rather than guessed at in CSS.
+  useLayoutEffect(() => {
+    if (!showExportMenu) { setExportMenuMaxH(null); setExportMenuAlign('right'); return; }
+    const measure = () => {
+      const el = exportMenuRef.current;
+      const anchor = el?.parentElement;
+      if (!el || !anchor) return;
+      const MARGIN = 8;
+      setExportMenuMaxH(Math.max(120, window.innerHeight - el.getBoundingClientRect().top - 12));
+      // Right-aligned by default so it tucks under the toolbar's edge; flip to
+      // left-aligned only when that would hang the menu off the left of the
+      // window and opening rightwards actually fits.
+      const anchorRect = anchor.getBoundingClientRect();
+      const width = el.offsetWidth;
+      const overflowsLeft = anchorRect.right - width < MARGIN;
+      const rightwardsFits = anchorRect.left + width <= window.innerWidth - MARGIN;
+      setExportMenuAlign(overflowsLeft && rightwardsFits ? 'left' : 'right');
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [showExportMenu]);
 
   // ── Tag dialog ─────────────────────────────────────────────────────────────
   const [showTagDialog, setShowTagDialog] = useState(false);
@@ -203,6 +240,25 @@ export function DesktopMindMapEditor({
 
   // ── Context menu ───────────────────────────────────────────────────────────
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const [contextMenuPos, setContextMenuPos] = useState<{ left: number; top: number } | null>(null);
+
+  // The menu is long and the right-click can land anywhere, so the raw click
+  // point routinely pushes its bottom half past the window edge. Measure it
+  // once it is up and pull it back inside — shifting it up or left rather than
+  // letting the entries fall off; a menu taller than the window itself is
+  // capped by `max-height` in the CSS and scrolls.
+  useLayoutEffect(() => {
+    if (!contextMenu) { setContextMenuPos(null); return; }
+    const el = contextMenuRef.current;
+    if (!el) return;
+    const MARGIN = 8;
+    const { width, height } = el.getBoundingClientRect();
+    setContextMenuPos({
+      left: Math.max(MARGIN, Math.min(contextMenu.x, window.innerWidth - width - MARGIN)),
+      top: Math.max(MARGIN, Math.min(contextMenu.y, window.innerHeight - height - MARGIN)),
+    });
+  }, [contextMenu]);
 
   // ── Drag-and-drop ──────────────────────────────────────────────────────────
   const [isDragging, setIsDragging] = useState(false);
@@ -2642,7 +2698,8 @@ export function DesktopMindMapEditor({
               </button>
               {showExportMenu && (
                 <div
-                  style={{ position: 'absolute', right: 0, top: '100%', zIndex: 300, background: 'var(--mm-node-fill, #1e293b)', border: '1px solid var(--mm-node-stroke, #334155)', borderRadius: 8, padding: '4px 0', minWidth: 150, boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}
+                  ref={exportMenuRef}
+                  style={{ position: 'absolute', ...(exportMenuAlign === 'left' ? { left: 0 } : { right: 0 }), top: '100%', zIndex: 300, background: 'var(--mm-node-fill, #1e293b)', border: '1px solid var(--mm-node-stroke, #334155)', borderRadius: 8, padding: '4px 0', minWidth: 150, maxHeight: exportMenuMaxH ?? undefined, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   {onExportMarkdown && (
@@ -3140,7 +3197,11 @@ export function DesktopMindMapEditor({
         const cmHasCheckbox = cmNode.checked != null;
         return (<>
           <div className="mm-context-overlay" onClick={() => setContextMenu(null)} />
-          <div className="mm-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <div
+            ref={contextMenuRef}
+            className="mm-context-menu"
+            style={{ left: contextMenuPos?.left ?? contextMenu.x, top: contextMenuPos?.top ?? contextMenu.y }}
+          >
             <div className="mm-context-header">{cmNode.text.substring(0, 30) || 'Node'}</div>
             <button className="mm-context-item" onClick={() => { const f = findNode(root, contextMenu.nodeId); if (f) startEditing(f.node); setContextMenu(null); }}>Rename <kbd>F2</kbd></button>
             <button className="mm-context-item" onClick={() => { addChild(contextMenu.nodeId); setContextMenu(null); }}>Add Child <kbd>Tab</kbd></button>
@@ -3412,10 +3473,28 @@ export function DesktopMindMapEditor({
             onMouseDown={(e) => {
               const el = (e.currentTarget.parentElement as HTMLDivElement);
               const rect = el.getBoundingClientRect();
-              scDragRef.current = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+              // The panel is positioned against its offset parent, not the
+              // viewport, so the pointer's client coords have to be rebased
+              // onto that parent or the panel jumps by the parent's offset
+              // the moment it is grabbed.
+              const parent = (el.offsetParent as HTMLElement | null);
+              const pRect = parent?.getBoundingClientRect();
+              const MARGIN = 8;
+              scDragRef.current = {
+                offsetX: e.clientX - rect.left,
+                offsetY: e.clientY - rect.top,
+                originX: pRect?.left ?? 0,
+                originY: pRect?.top ?? 0,
+                maxX: (pRect?.width ?? window.innerWidth) - rect.width - MARGIN,
+                maxY: (pRect?.height ?? window.innerHeight) - rect.height - MARGIN,
+              };
               const onMove = (me: MouseEvent) => {
-                if (!scDragRef.current) return;
-                setShortcutsPos({ x: me.clientX - scDragRef.current.offsetX, y: me.clientY - scDragRef.current.offsetY });
+                const d = scDragRef.current;
+                if (!d) return;
+                setShortcutsPos({
+                  x: Math.max(MARGIN, Math.min(me.clientX - d.offsetX - d.originX, d.maxX)),
+                  y: Math.max(MARGIN, Math.min(me.clientY - d.offsetY - d.originY, d.maxY)),
+                });
               };
               const onUp = () => { scDragRef.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
               window.addEventListener('mousemove', onMove);

@@ -586,12 +586,16 @@
   z-index: 300;
   min-width: 200px;
   max-width: 280px;
+  /* Last-resort cap for a window shorter than the menu — the JS that places
+     the menu keeps it inside the viewport, and this makes the remainder
+     scroll instead of spilling off the bottom. */
+  max-height: calc(100vh - 16px);
   border-radius: 10px;
   background: var(--mm-notes-bg);
   border: 1px solid var(--mm-notes-border);
   box-shadow: 0 8px 30px rgba(0,0,0,0.35);
   padding: 4px 0;
-  overflow: hidden;
+  overflow: hidden auto;
   animation: mm-ctx-in 0.1s ease;
 }
 @keyframes mm-ctx-in {
