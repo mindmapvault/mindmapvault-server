@@ -131,13 +131,13 @@ importers (FreeMind, XMind, WiseMapping) put hrefs into `node.urls`. Removed
 from the geometry and from both node types. A node that had one is now 18px
 shorter, which is the height it should always have been.
 
-**`duplicateNode` inserts into the tree it started with.** Copying a node's
-attachments is asynchronous and can take a while; the insert afterwards reads
-`root` from the closure captured before the awaits. So a duplicate started
-before another edit lands will insert into the older tree and discard that
-edit. This predates the refactor — the original re-cloned the same stale value
-— and the fix is to take the tree as of insertion time, which is a change to
-behaviour rather than to structure.
+~~**`duplicateNode` inserts into the tree it started with.**~~ — fixed, and it
+was not just `duplicateNode`. Six async callbacks rebuilt the tree from a
+closure captured before an upload: `duplicateNode`, `uploadFilesIntoNotes`,
+`deleteNotesAttachment`, `attachNodeImage`, `onDropSvg` and
+`attachFilesToSelectedNode`. Any edit made while a file was uploading was
+discarded when the upload finished. All six now read `rootRef.current`, which
+`mutate` sets in the same tick rather than waiting for a re-render.
 
 **The two stylesheets have diverged.** See "Why step 7 is not being done". This
 one blocks the other repo, not this one.

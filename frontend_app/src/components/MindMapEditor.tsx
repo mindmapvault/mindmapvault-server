@@ -400,8 +400,20 @@ export function DesktopMindMapEditor({
     toastTimer.current = setTimeout(() => setShortcutToast(null), 1600);
   }, []);
 
+  /**
+   * The newest tree, for the callbacks that read it *after* an await.
+   *
+   * Uploading a file takes as long as it takes, and an edit made while it is in
+   * flight has to survive it. Reading `root` from the closure after the await
+   * rebuilds the tree as it was when the upload started, throwing that edit
+   * away. Every post-await read goes through this instead.
+   */
+  const rootRef = useRef(root);
+  useEffect(() => { rootRef.current = root; }, [root]);
+
   // ── History (undo/redo) ────────────────────────────────────────────────────
   const restoreFromHistory = useCallback((restored: MindMapTreeNode) => {
+    rootRef.current = restored;
     setRoot(restored);
     setIsDirty(true);
   }, []);
@@ -642,6 +654,9 @@ export function DesktopMindMapEditor({
 
   // ── History helpers ───────────────────────────────────────────────────────
   const mutate = useCallback((newRoot: MindMapTreeNode) => {
+    // Set here as well as in the effect, so a second async callback finishing
+    // in the same tick sees this edit rather than the render's stale copy.
+    rootRef.current = newRoot;
     setRoot(newRoot);
     history.push(newRoot);
     setIsDirty(true);
@@ -827,10 +842,9 @@ export function DesktopMindMapEditor({
       }
     }
 
-    // `root` here is the closure's, captured before the awaits above — so an
-    // edit that lands while the files are being copied is discarded by this
-    // insert. Longstanding, and it needs a fix that reads the tree as of now.
-    const next = ops.insertAfter(root, nodeId, clone);
+    // The tree as it is now, not as it was before the copying: an edit made
+    // while the files were in flight has to survive this insert.
+    const next = ops.insertAfter(rootRef.current, nodeId, clone);
     if (!next) return;
     mutate(next);
     setSelectedId(clone.id);
@@ -1077,7 +1091,7 @@ export function DesktopMindMapEditor({
         }
       }
 
-      const newRoot = cloneTree(root);
+      const newRoot = cloneTree(rootRef.current);
       const found = findNode(newRoot, selectedId);
       if (found) {
         found.node.attachments = [...(found.node.attachments ?? []), ...refs];
@@ -1117,7 +1131,7 @@ export function DesktopMindMapEditor({
     if (!onDeleteNodeAttachment) return;
     try {
       await onDeleteNodeAttachment(attachment);
-      const newRoot = cloneTree(root);
+      const newRoot = cloneTree(rootRef.current);
       const found = findNode(newRoot, notesNodeId);
       if (found) {
         const filtered = (found.node.attachments ?? []).filter((item) => item.attachment_id !== attachment.attachment_id);
@@ -1609,7 +1623,7 @@ export function DesktopMindMapEditor({
     if (!onNodeFileDrop) {
       // Local-only editors still get the picture; there is nothing to upload to
       // and nothing to click through to.
-      const newRoot = cloneTree(root);
+      const newRoot = cloneTree(rootRef.current);
       const found = findNode(newRoot, nodeId);
       if (!found) return;
       found.node.image = { ...glyph, name: file.name };
@@ -1621,7 +1635,7 @@ export function DesktopMindMapEditor({
     setNodeImageBusy(true);
     try {
       const refs = await onNodeFileDrop(nodeId, [file]);
-      const newRoot = cloneTree(root);
+      const newRoot = cloneTree(rootRef.current);
       const found = findNode(newRoot, nodeId);
       if (!found) return;
       found.node.image = {
@@ -1713,7 +1727,7 @@ export function DesktopMindMapEditor({
       const refs = await onNodeFileDrop(nodeId, Array.from(e.dataTransfer.files));
       if (refs.length === 0) return;
 
-      const newRoot = cloneTree(root);
+      const newRoot = cloneTree(rootRef.current);
       const found = findNode(newRoot, nodeId);
       if (found) {
         found.node.attachments = [...(found.node.attachments ?? []), ...refs];
@@ -1739,7 +1753,7 @@ export function DesktopMindMapEditor({
         return;
       }
 
-      const newRoot = cloneTree(root);
+      const newRoot = cloneTree(rootRef.current);
       const found = findNode(newRoot, selectedId);
       if (found) {
         found.node.attachments = [...(found.node.attachments ?? []), ...refs];
