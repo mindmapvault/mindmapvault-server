@@ -827,8 +827,9 @@ export function DesktopMindMapEditor({
       }
     }
 
-    // Built from the tree as it stands, not from a clone taken before the
-    // awaits — copying the files can take a while.
+    // `root` here is the closure's, captured before the awaits above — so an
+    // edit that lands while the files are being copied is discarded by this
+    // insert. Longstanding, and it needs a fix that reads the tree as of now.
     const next = ops.insertAfter(root, nodeId, clone);
     if (!next) return;
     mutate(next);

@@ -118,6 +118,38 @@ than doing seven and taxing the port.
 
 Do it *after* the two stylesheets are reconciled, not before.
 
+## Open questions
+
+Three things this work found and deliberately did not decide, because each one
+moves pixels or data and the call is the user's. Written down here because
+otherwise they exist only in the heads of whoever did the refactor.
+
+**The footer strip nothing fills, for a field nothing sets.** `describeNode`
+counts `node.link` as a footer strip, so a node carrying one reserves 18px at
+its bottom that nothing draws into — only `node.urls` is rendered.
+
+And `node.link` is never populated. The only writes in the codebase are
+`link: null` (`MindMapHelpers.defaultRoot`, `VaultsPage`); `xmindImport` puts
+imported hrefs into `node.urls`, not here. The field is read in exactly one
+place, the measurement, which reserves space for it.
+
+So this is very likely dead weight rather than a real feature, and the answer
+is probably to drop `link` from the measurement and then from the type. The
+reason it was not just deleted: maps are persisted JSON, so a map saved by an
+older build could still carry a link, and dropping it would reflow those nodes
+by 18px. Worth confirming against real saved maps before removing.
+
+**`duplicateNode` inserts into the tree it started with.** Copying a node's
+attachments is asynchronous and can take a while; the insert afterwards reads
+`root` from the closure captured before the awaits. So a duplicate started
+before another edit lands will insert into the older tree and discard that
+edit. This predates the refactor — the original re-cloned the same stale value
+— and the fix is to take the tree as of insertion time, which is a change to
+behaviour rather than to structure.
+
+**The two stylesheets have diverged.** See "Why step 7 is not being done". This
+one blocks the other repo, not this one.
+
 ## What not to do
 
 - **Do not port Live's editor back.** Live carries a fraction of what this does
@@ -134,7 +166,7 @@ Do it *after* the two stylesheets are reconciled, not before.
 ## Done when
 
 - ~~`npm test` runs in `frontend_app` and covers layout, geometry and the tree
-  operations~~ — done: 74 tests over the geometry, layout, tree operations,
+  operations~~ — done: 84 tests over the geometry, layout, tree operations,
   history, viewport and the drag/marquee geometry. The selection and drag
   *state* has none, because it stays in the component on purpose — see above.
 - ~~The band arithmetic exists once~~ — done. It was in three places and one of
@@ -148,7 +180,7 @@ Do it *after* the two stylesheets are reconciled, not before.
 
 ### On the 300-line bar
 
-`MindMapEditor.tsx` went 3,794 → 3,349, which is not the number this bar was
+`MindMapEditor.tsx` went 3,794 → 3,337, which is not the number this bar was
 imagining. The bar was wrong in two ways.
 
 It counted the wrong thing. What made the file hard to work on was not its
