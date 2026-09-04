@@ -37,6 +37,7 @@ import { SettingsButton } from './SettingsButton';
 import { MindMapIconPicker } from './MindMapIconPicker.tsx';
 import { MindMapColorPicker } from './MindMapColorPicker';
 import { MindMapDateDialog } from './MindMapDateDialog';
+import { MindMapVaultLinkDialog, type LinkableVault } from './MindMapVaultLinkDialog';
 import {
   BodyBand,
   CollapseControls,
@@ -101,6 +102,7 @@ export function DesktopMindMapEditor({
   onDeleteNodeAttachment,
   onCopyNodeAttachment,
   onLoadNodeAttachmentPreview,
+  vaultId, linkableVaults, linkableVaultsLoading, onRequestLinkableVaults, onOpenVaultLink,
 }: MindMapEditorProps) {
   const autosaveMode = useThemeStore((s) => s.autosaveMode);
   const themeMode = useThemeStore((s) => s.mode);
@@ -116,6 +118,8 @@ export function DesktopMindMapEditor({
   const { statusBarVisible, toolbarLabels, buttonShortcuts: buttonShortcutsVisible, toolbarMode } = useResolvedDensity();
   const [activeRibbonTab, setActiveRibbonTab] = useState<'home' | 'insert' | 'view' | 'export'>('home');
   const [showToolbarOverflow, setShowToolbarOverflow] = useState(false);
+  /** The node whose vault link is being picked, or null when the dialog is shut. */
+  const [linkTargetNodeId, setLinkTargetNodeId] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
   );
@@ -878,6 +882,25 @@ export function DesktopMindMapEditor({
     const next = ops.resetPositions(root, nodeId);
     if (next) mutate(next);
   }, [root, mutate]);
+
+  // ── Vault link ────────────────────────────────────────────────────────────
+  /**
+   * The vault's title is stored on the node alongside its id. Titles are
+   * encrypted, so a node that kept only an id could not draw its own strip
+   * without the vault list to hand — and that list is not available offline,
+   * in a share, or once the linked vault is gone.
+   */
+  const setNodeLink = useCallback((nodeId: string, vault: LinkableVault | null) => {
+    const next = ops.editNode(root, nodeId, (node) => {
+      node.link = vault ? { type: 'vault', id: vault.id, label: vault.title } : null;
+    });
+    if (next) mutate(next);
+  }, [root, mutate]);
+
+  const openVaultLinkPicker = useCallback((nodeId: string) => {
+    onRequestLinkableVaults?.();
+    setLinkTargetNodeId(nodeId);
+  }, [onRequestLinkableVaults]);
 
   // ── Tags ──────────────────────────────────────────────────────────────────
   const setNodeTags = useCallback((nodeId: string, tags: string[]) => {
@@ -2049,7 +2072,8 @@ export function DesktopMindMapEditor({
           editor={editor}
           checkedInfo={(node.children.length > 0 && node.checked != null) ? countChecked(node) : null}
         />
-        <FooterBand box={box} geom={geom} parts={parts} visual={visual} urls={node.urls ?? []} />
+        <FooterBand box={box} geom={geom} parts={parts} visual={visual} urls={node.urls ?? []}
+          onOpenLink={onOpenVaultLink} />
         <CollapseControls
           box={box}
           node={node}
@@ -2993,6 +3017,14 @@ export function DesktopMindMapEditor({
             <div className="mm-context-divider" />
             {cmHasChildren && <button className="mm-context-item" onClick={() => { toggleCollapse(contextMenu.nodeId); setContextMenu(null); }}>{cmNode.collapsed ? 'Expand' : 'Collapse'} <kbd>Space</kbd></button>}
             <button className="mm-context-item" onClick={() => { openNotes(contextMenu.nodeId); setContextMenu(null); }}>Notes <kbd>F3</kbd></button>
+            {onOpenVaultLink && (
+              <button className="mm-context-item" data-testid="context-link-vault" onClick={() => { openVaultLinkPicker(contextMenu.nodeId); setContextMenu(null); }}>
+                {cmNode.link?.id ? 'Change Vault Link…' : 'Link to Vault…'}
+              </button>
+            )}
+            {cmNode.link?.id && (
+              <button className="mm-context-item" onClick={() => { setNodeLink(contextMenu.nodeId, null); setContextMenu(null); }}>Remove Vault Link</button>
+            )}
             <button className="mm-context-item" data-testid="context-add-image" onClick={() => {
               nodeImageTargetRef.current = contextMenu.nodeId;
               nodeImageInputRef.current?.click();
@@ -3315,6 +3347,17 @@ export function DesktopMindMapEditor({
       {/* ── Date dialog ─────────────────────────────────────────────── */}
       <MindMapDateDialog open={showDateDialog} startDate={selNode?.startDate ?? null} endDate={selNode?.endDate ?? null}
         onSave={(s, e) => setNodeDates(selectedId, s, e)} onClose={() => setShowDateDialog(false)} />
+
+      <MindMapVaultLinkDialog
+        open={linkTargetNodeId !== null}
+        currentVaultId={vaultId}
+        vaults={linkableVaults ?? []}
+        loading={linkableVaultsLoading}
+        linkedVaultId={linkTargetNodeId ? findNode(root, linkTargetNodeId)?.node.link?.id ?? null : null}
+        onPick={(vault) => { if (linkTargetNodeId) setNodeLink(linkTargetNodeId, vault); setLinkTargetNodeId(null); }}
+        onRemove={() => { if (linkTargetNodeId) setNodeLink(linkTargetNodeId, null); setLinkTargetNodeId(null); }}
+        onClose={() => setLinkTargetNodeId(null)}
+      />
 
       {/* ── URL dialog ──────────────────────────────────────────────── */}
       {showUrlDialog && (<>

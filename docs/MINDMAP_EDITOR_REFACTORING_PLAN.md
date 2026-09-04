@@ -124,12 +124,12 @@ Three things this work found and deliberately did not decide, because each one
 moves pixels or data and the call is the user's. Written down here because
 otherwise they exist only in the heads of whoever did the refactor.
 
-~~**The footer strip nothing fills, for a field nothing sets.**~~ — fixed.
-`node.link` was counted as a footer strip by the measurement and drawn by
-nothing, and it was never set: the only writes were `link: null`, and all three
-importers (FreeMind, XMind, WiseMapping) put hrefs into `node.urls`. Removed
-from the geometry and from both node types. A node that had one is now 18px
-shorter, which is the height it should always have been.
+~~**The footer strip nothing fills, for a field nothing sets.**~~ — resolved by
+building the feature. `node.link` had been unset and undrawn since the initial
+import, reserving 18px for nothing. It now links a node to another vault:
+picked from a searchable dialog, drawn as the first footer strip, and clicked
+to open that vault. The vault's title is stored on the node beside its id,
+because titles are encrypted and a node cannot resolve one on its own.
 
 ~~**`duplicateNode` inserts into the tree it started with.**~~ — fixed, and it
 was not just `duplicateNode`. Six async callbacks rebuilt the tree from a

@@ -19,6 +19,8 @@ import {
 } from '../crypto/encryptedVault';
 import { hybridDecap, hybridEncap } from '../crypto/kem';
 import { decryptTitle, decryptTree, encryptTitle, encryptTree } from '../crypto/vault';
+import { BOARD_LABEL } from '../utils/vaultLabels';
+import type { LinkableVault } from '../components/MindMapVaultLinkDialog';
 import { getOfflineStorage, getStorage, isPwa, OfflineStorageAdapter, type SyncStatus } from '../storage';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { fromBase64, toBase64 } from '../crypto/utils';
@@ -471,6 +473,48 @@ export function EditorPage() {
       setLoadingVersionId(null);
     }
   }, [load]);
+
+  // ── Vault links ─────────────────────────────────────────────────────────────
+  /**
+   * The list a node's "link to vault" picker chooses from.
+   *
+   * Loaded on demand rather than with the map: most editing sessions never open
+   * the picker, and every title in the list costs a decryption. Titles are
+   * encrypted at rest, so this is the only place that can produce them.
+   */
+  const [linkableVaults, setLinkableVaults] = useState<LinkableVault[]>([]);
+  const [linkableVaultsLoading, setLinkableVaultsLoading] = useState(false);
+
+  const loadLinkableVaults = useCallback(async () => {
+    if (!sessionKeys) return;
+    setLinkableVaultsLoading(true);
+    try {
+      const items = await storage.listVaults();
+      const titles = await Promise.all(
+        items.map(async (m) => {
+          try {
+            return await decryptTitle(m.title_encrypted, sessionKeys.masterKey);
+          } catch {
+            // A vault this account cannot read is still a vault; it just has
+            // no name to show, and linking to it would be a link to nothing.
+            return null;
+          }
+        }),
+      );
+      setLinkableVaults(
+        items
+          .map((m, i) => ({ id: m.id, title: titles[i] ?? '' }))
+          // Boards are a different editor; a mind map link into one would open
+          // a page this link cannot round-trip through.
+          .filter((v, i) => v.title !== '' && !(items[i].vault_labels ?? []).includes(BOARD_LABEL))
+          .sort((a, b) => a.title.localeCompare(b.title)),
+      );
+    } catch {
+      setLinkableVaults([]);
+    } finally {
+      setLinkableVaultsLoading(false);
+    }
+  }, [sessionKeys, storage]);
 
   // ── Save ────────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async (tree: MindMapTree, currentTitle: string) => {
@@ -1151,6 +1195,11 @@ export function EditorPage() {
       )}
       <DesktopMindMapEditor
         key={editorKey}
+        vaultId={id}
+        linkableVaults={linkableVaults}
+        linkableVaultsLoading={linkableVaultsLoading}
+        onRequestLinkableVaults={() => { void loadLinkableVaults(); }}
+        onOpenVaultLink={(linkedId) => navigate(`/vaults/${linkedId}`)}
         initialTree={initialTree}
         externalNodeAttachments={externalNodeAttachments}
         title={title}

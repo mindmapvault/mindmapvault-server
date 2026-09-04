@@ -1,3 +1,6 @@
+import type { NodeLink } from '@mindmapvault/mindmap-core';
+export type { NodeLink };
+
 // ── Shared API/backend types ──────────────────────────────────────────────────
 
 export interface Argon2Params {
@@ -424,6 +427,8 @@ export interface MindMapTreeNode {
   startDate?: string | null;
   /** ISO datetime-local for end-date planning. */
   endDate?: string | null;
+  /** A link to another vault, drawn as the first footer strip. */
+  link?: NodeLink | null;
   /** Custom URL links rendered as footer strips. */
   urls?: UrlEntry[];
   /** Encrypted attachment references stored inside the encrypted tree payload. */

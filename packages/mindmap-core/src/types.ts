@@ -16,12 +16,26 @@ export interface LayoutImage {
   h: number;
 }
 
+/** A link from a node to another vault. */
+export interface NodeLink {
+  type: 'vault';
+  id: string;
+  /**
+   * The vault's title when the link was made. Kept on the node so the strip
+   * renders without resolving anything — titles are encrypted, so the editor
+   * cannot look one up on its own, and a linked vault may since have been
+   * deleted or be one this account can no longer read.
+   */
+  label?: string;
+}
+
 export interface LayoutNode<Self> {
   id: string;
   text: string;
   children: Self[];
   notes?: string;
   collapsed?: boolean;
+  link?: NodeLink | null;
   icons?: string[];
   checked?: boolean | null;
   progress?: number | null;
@@ -53,6 +67,8 @@ export interface NodeParts {
    *  draws them reads these so it need not go back to the node. */
   tags: string[];
   tagCount: number;
+  /** The vault this node links to, with the text the strip draws. */
+  link: { id: string; label: string } | null;
   hasCheckbox: boolean;
   hasProgress: boolean;
   hasNote: boolean;

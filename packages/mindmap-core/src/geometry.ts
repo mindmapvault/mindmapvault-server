@@ -75,6 +75,9 @@ export const describeNode = <N extends LayoutNode<N>>(
   const iconCount = node.icons?.length ?? 0;
   const urlCount = node.urls?.length ?? 0;
   const tags = node.tags ?? [];
+  // The label falls back to the id: a link made before labels were stored, or
+  // one whose vault has been renamed away, still has something to draw.
+  const link = node.link?.id ? { id: node.link.id, label: node.link.label || node.link.id } : null;
 
   const hasCheckbox = node.checked != null;
   const hasProgress = node.progress != null;
@@ -91,6 +94,7 @@ export const describeNode = <N extends LayoutNode<N>>(
     urlCount,
     tags,
     tagCount: tags.length,
+    link,
     hasCheckbox,
     hasProgress,
     hasNote,
@@ -104,7 +108,7 @@ export const describeNode = <N extends LayoutNode<N>>(
     topMetaH: hasNote || attachmentCount > 0 ? TOP_META_STRIP_H : 0,
     topTagH: tags.length > 0 ? TAG_STRIP_H : 0,
     imageBandH: image ? image.h + NODE_IMAGE_PAD : 0,
-    footerH: urlCount * LINK_STRIP_H,
+    footerH: ((link ? 1 : 0) + urlCount) * LINK_STRIP_H,
     visualTopExtra: hasDate ? DATE_BADGE_OFFSET_H : 0,
   };
 };
@@ -117,7 +121,8 @@ export const measureNodeSize = <N extends LayoutNode<N>>(
   parts: NodeParts = describeNode(node),
 ): NodeSize => {
   const urlW = parts.urlCount > 0 ? 120 : 0;
-  const maxW = Math.max(...parts.lines.map((line) => measureText(line || ' ')), urlW);
+  const linkW = parts.link ? measureText(parts.link.label, 10) + 24 : 0;
+  const maxW = Math.max(...parts.lines.map((line) => measureText(line || ' ')), linkW, urlW);
 
   const textW = Math.max(MIN_W, maxW + NODE_PAD_X * 2 + parts.leftPad);
   const imageW = parts.image ? parts.image.w + NODE_PAD_X * 2 : 0;

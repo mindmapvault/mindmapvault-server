@@ -84,6 +84,27 @@ describe('measureNodeSize', () => {
     expect(measure({ text: 'x', notes: '   \n ' }).h).toBe(base);
   });
 
+  it('adds a strip for a vault link, above the URLs', () => {
+    const base = measure({ text: 'x' }).h;
+    const url = (u: string) => ({ url: u, label: u }) as never;
+    const link = { type: 'vault' as const, id: 'v1', label: 'Roadmap' };
+    expect(measure({ text: 'x', link }).h).toBe(base + 18);
+    expect(measure({ text: 'x', link, urls: [url('a'), url('b')] }).h).toBe(base + 54);
+  });
+
+  it('widens for the link label, not for its id', () => {
+    // The strip draws the label, so that is what has to fit: 'a'.repeat(40) at
+    // 7px a character plus the glyph's 24px is wider than the id ever is.
+    const narrow = measure({ text: 'x', link: { type: 'vault' as const, id: 'v1', label: 'R' } });
+    const wide = measure({ text: 'x', link: { type: 'vault' as const, id: 'v1', label: 'a'.repeat(40) } });
+    expect(wide.w).toBeGreaterThan(narrow.w);
+  });
+
+  it('falls back to the id when a link has no label', () => {
+    const parts = layout.describeNode(node({ link: { type: 'vault' as const, id: 'v1' } }));
+    expect(parts.link).toEqual({ id: 'v1', label: 'v1' });
+  });
+
   it('adds a strip per URL, and one for tags', () => {
     const base = measure({ text: 'x' }).h;
     const url = (u: string) => ({ url: u, label: u }) as never;

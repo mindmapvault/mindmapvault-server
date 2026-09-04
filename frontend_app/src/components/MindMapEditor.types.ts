@@ -1,4 +1,5 @@
 import type { MindMapTree, NodeAttachmentRef } from '../types';
+import type { LinkableVault } from './MindMapVaultLinkDialog';
 
 export interface NodeAttachmentViewerAsset {
   url: string;
@@ -49,4 +50,13 @@ export interface MindMapEditorProps {
   onCopyNodeAttachment?: (attachment: NodeAttachmentRef, nodeId: string) => Promise<NodeAttachmentRef | null>;
   onLoadNodeAttachmentPreview?: (attachment: NodeAttachmentRef) => Promise<string | null>;
   onLoadNodeAttachmentViewer?: (attachment: NodeAttachmentRef) => Promise<NodeAttachmentViewerAsset | null>;
+  /** This vault's own id, so it can be kept out of the link picker. */
+  vaultId?: string;
+  /** Vaults this map can link a node to, titles already decrypted. */
+  linkableVaults?: LinkableVault[];
+  linkableVaultsLoading?: boolean;
+  /** Asked for when the picker opens, so the list is not fetched on every edit. */
+  onRequestLinkableVaults?: () => void;
+  /** Follows a node's vault link. Navigation belongs to the page. */
+  onOpenVaultLink?: (vaultId: string) => void;
 }

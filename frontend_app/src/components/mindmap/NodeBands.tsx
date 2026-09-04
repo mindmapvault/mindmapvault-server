@@ -411,12 +411,49 @@ export function BodyBand({
 
 // ── Footer: one strip per link ──────────────────────────────────
 
-export function FooterBand({ box, geom, parts, visual, urls }: BandProps & { urls: UrlEntry[] }): JSX.Element | null {
+export function FooterBand({
+  box,
+  geom,
+  parts,
+  visual,
+  urls,
+  onOpenLink,
+}: BandProps & {
+  urls: UrlEntry[];
+  /** Opening a vault link is the page's business, not the canvas's. */
+  onOpenLink?: (vaultId: string) => void;
+}): JSX.Element | null {
   if (parts.footerH === 0) return null;
+  const link = parts.link;
+  // The vault link takes the first strip; the URLs follow it.
+  const urlOffset = link ? 1 : 0;
   return (
     <>
+      {link && (
+        <g key="vault-link">
+          <BandDivider box={box} y={geom.footerTopY} ownColor={visual.ownColor} inset={4} />
+          <g
+            className="mm-vault-link"
+            style={{ cursor: onOpenLink ? 'pointer' : 'default' }}
+            onMouseDown={(e) => { e.stopPropagation(); }}
+            onClick={(e) => { e.stopPropagation(); onOpenLink?.(link.id); }}
+          >
+            <VaultGlyph x={box.x + 8} y={geom.footerTopY + LINK_STRIP_H / 2} colour={visual.ownColor ? '#ffffff' : 'var(--accent)'} />
+            <text
+              x={box.x + 20}
+              y={geom.footerTopY + LINK_STRIP_H / 2 + 1.5}
+              fontSize={10}
+              fontWeight={600}
+              fill={visual.ownColor ? '#ffffff' : 'var(--accent)'}
+              dominantBaseline="middle"
+            >
+              {link.label}
+            </text>
+          </g>
+        </g>
+      )}
       {urls.map((urlItem, ui) => {
-        const fy = geom.footerTopY + ui * LINK_STRIP_H;
+        const fy = geom.footerTopY + (ui + urlOffset) * LINK_STRIP_H;
         const rawUrl = (urlItem.url ?? '').trim();
         const openUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
         return (
@@ -440,6 +477,22 @@ export function FooterBand({ box, geom, parts, visual, urls }: BandProps & { url
         );
       })}
     </>
+  );
+}
+
+/** The little map glyph that marks a strip as a link to another vault. */
+function VaultGlyph({ x, y, colour }: { x: number; y: number; colour: string }): JSX.Element {
+  return (
+    <g transform={`translate(${x - 4}, ${y - 4})`} pointerEvents="none">
+      <path
+        d="M 0 1 L 3 0 L 6 1.5 L 9 0 L 9 7 L 6 8.5 L 3 7 L 0 8 Z"
+        fill="none"
+        stroke={colour}
+        strokeWidth={1.1}
+        strokeLinejoin="round"
+      />
+      <path d="M 3 0 L 3 7 M 6 1.5 L 6 8.5" fill="none" stroke={colour} strokeWidth={1.1} />
+    </g>
   );
 }
 
