@@ -124,20 +124,12 @@ Three things this work found and deliberately did not decide, because each one
 moves pixels or data and the call is the user's. Written down here because
 otherwise they exist only in the heads of whoever did the refactor.
 
-**The footer strip nothing fills, for a field nothing sets.** `describeNode`
-counts `node.link` as a footer strip, so a node carrying one reserves 18px at
-its bottom that nothing draws into — only `node.urls` is rendered.
-
-And `node.link` is never populated. The only writes in the codebase are
-`link: null` (`MindMapHelpers.defaultRoot`, `VaultsPage`); `xmindImport` puts
-imported hrefs into `node.urls`, not here. The field is read in exactly one
-place, the measurement, which reserves space for it.
-
-So this is very likely dead weight rather than a real feature, and the answer
-is probably to drop `link` from the measurement and then from the type. The
-reason it was not just deleted: maps are persisted JSON, so a map saved by an
-older build could still carry a link, and dropping it would reflow those nodes
-by 18px. Worth confirming against real saved maps before removing.
+~~**The footer strip nothing fills, for a field nothing sets.**~~ — fixed.
+`node.link` was counted as a footer strip by the measurement and drawn by
+nothing, and it was never set: the only writes were `link: null`, and all three
+importers (FreeMind, XMind, WiseMapping) put hrefs into `node.urls`. Removed
+from the geometry and from both node types. A node that had one is now 18px
+shorter, which is the height it should always have been.
 
 **`duplicateNode` inserts into the tree it started with.** Copying a node's
 attachments is asynchronous and can take a while; the insert afterwards reads

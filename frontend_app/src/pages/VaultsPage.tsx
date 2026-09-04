@@ -1302,7 +1302,6 @@ export function VaultsPage() {
           progress: null,
           startDate: null,
           endDate: null,
-          link: null,
           urls: [],
           children: [],
         },

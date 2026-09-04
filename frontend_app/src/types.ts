@@ -413,7 +413,6 @@ export interface MindMapTreeNode {
   notes?: string;
   collapsed?: boolean;
   color?: string | null;
-  link?: { type: string; id: string } | null;
   children: MindMapTreeNode[];
   /** Lucide icon names rendered inside the node (multi-select). */
   icons?: string[];

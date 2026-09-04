@@ -148,7 +148,6 @@ export const defaultRoot = (): MindMapTreeNode => ({
   progress: null,
   startDate: null,
   endDate: null,
-  link: null,
   urls: [],
   children: [],
 });

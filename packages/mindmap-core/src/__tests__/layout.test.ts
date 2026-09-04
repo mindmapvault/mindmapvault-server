@@ -84,13 +84,11 @@ describe('measureNodeSize', () => {
     expect(measure({ text: 'x', notes: '   \n ' }).h).toBe(base);
   });
 
-  it('adds a strip per footer link, and one for tags', () => {
+  it('adds a strip per URL, and one for tags', () => {
     const base = measure({ text: 'x' }).h;
     const url = (u: string) => ({ url: u, label: u }) as never;
-    expect(measure({ text: 'x', link: { type: 'vault', id: 'lnk' } }).h).toBe(base + 18);
+    expect(measure({ text: 'x', urls: [url('a')] }).h).toBe(base + 18);
     expect(measure({ text: 'x', urls: [url('a'), url('b')] }).h).toBe(base + 36);
-    expect(measure({ text: 'x', link: { type: 'vault', id: 'lnk' }, urls: [url('a'), url('b')] }).h)
-      .toBe(base + 54);
     expect(measure({ text: 'x', tags: ['w', 'x', 'y', 'z'] }).h).toBe(base + 18);
   });
 

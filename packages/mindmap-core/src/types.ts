@@ -22,7 +22,6 @@ export interface LayoutNode<Self> {
   children: Self[];
   notes?: string;
   collapsed?: boolean;
-  link?: { type: string; id: string } | null;
   icons?: string[];
   checked?: boolean | null;
   progress?: number | null;
@@ -54,7 +53,6 @@ export interface NodeParts {
    *  draws them reads these so it need not go back to the node. */
   tags: string[];
   tagCount: number;
-  linkId: string | null;
   hasCheckbox: boolean;
   hasProgress: boolean;
   hasNote: boolean;
