@@ -27,7 +27,12 @@ export function buildExportFileBaseName({
   fallback,
   versionLabel,
 }: ExportFileNameInput): string {
-  const normalizedTitle = (baseTitle || title || fallback).trim();
+  // Trim before choosing, not after: a title of only spaces is truthy, so it
+  // used to win over the fallback and then trim away to nothing, naming the
+  // download ".md".
+  const normalizedTitle = [baseTitle, title, fallback]
+    .map((value) => (value ?? '').trim())
+    .find((value) => value !== '') ?? fallback;
   const safeTitle = normalizedTitle
     .replace(UNSAFE_FILENAME_CHARS, '-')
     .replace(/\s+/g, ' ')

@@ -77,12 +77,17 @@ async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Prom
 /**
  * Labels this device holds for a local-mode vault.
  *
- * The `JSON.parse` is unguarded, exactly as it was inline: a corrupt entry
- * throws and fails the whole vault list, not just this row. Preserved rather
- * than fixed here — see the plan's open questions.
+ * A corrupt entry costs this vault its labels, not the whole list: the read
+ * happens while mapping every vault, so an unguarded parse failed the entire
+ * page over one bad key.
  */
 function readLocalVaultLabels(vaultId: string): string[] {
-  return JSON.parse(localStorage.getItem(vaultLabelsStorageKey(vaultId)) ?? '[]') as string[];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(vaultLabelsStorageKey(vaultId)) ?? '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function getLocalVaultColor(vaultId: string, fallback?: string): string {

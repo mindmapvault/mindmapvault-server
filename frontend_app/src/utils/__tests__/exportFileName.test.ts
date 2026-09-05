@@ -11,14 +11,11 @@ describe('buildExportFileBaseName', () => {
     expect(name({})).toBe('vault');
   });
 
-  /**
-   * Known defect, preserved rather than fixed inside a refactor: a title that
-   * is only whitespace is truthy, so it wins over the fallback and then trims
-   * to nothing — the export is called ".md". See the plan's open questions.
-   */
-  it('yields an empty name for a whitespace-only title', () => {
-    expect(name({ baseTitle: '  ', title: '' })).toBe('');
-    expect(name({ title: '   ' })).toBe('');
+  /** A title of only spaces is no title; the export must still have a name. */
+  it('falls through a whitespace-only title to the next candidate', () => {
+    expect(name({ baseTitle: '  ', title: 'Real' })).toBe('Real');
+    expect(name({ baseTitle: '  ', title: '' })).toBe('vault');
+    expect(name({ title: '   ' })).toBe('vault');
   });
 
   it('replaces characters a filesystem will not take', () => {

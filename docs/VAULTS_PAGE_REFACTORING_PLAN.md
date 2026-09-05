@@ -92,19 +92,19 @@ Steps 1 and 2 are worth doing even if nothing else happens.
 
 ## Open questions this surfaced
 
-**An export can be named nothing.** `buildExportFileBaseName` takes the first
+~~**An export can be named nothing.**~~ — fixed. `buildExportFileBaseName` takes the first
 truthy of `baseTitle`, `title`, `fallback` and *then* trims — so a title that is
 only whitespace wins over the fallback and trims to `''`, and the download is
-called `.md`. There is a test pinning the current behaviour rather than fixing
-it, because the fix is a behaviour change: either trim before choosing, or treat
-a blank title as absent. Reachable by titling a vault with a space.
+called `.md`. It now trims before choosing, so a blank title falls
+through to the next candidate.
 
-**One corrupt label list fails the whole vault list.** Local mode keeps a
+~~**One corrupt label list fails the whole vault list.**~~ — fixed. Local mode keeps a
 vault's labels in `localStorage`, read with an unguarded `JSON.parse` inside
 the row builder. A single malformed entry throws, and because the read happens
 while mapping every vault, the entire list fails to load rather than that one
-row. Preserved as it was and moved into `readLocalVaultLabels`, so the fix is
-now one `try`.
+row. `readLocalVaultLabels` now returns an empty list
+for an unparseable or non-array value, costing that vault its labels rather
+than the page.
 
 ## Done when
 
