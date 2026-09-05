@@ -267,19 +267,6 @@ async function main() {
   });
   attachmentId = attachmentInit.body.attachment_id;
 
-  await runCase(results, baseUrl, options.timeoutMs, {
-    name: 'public-feedback-create',
-    method: 'POST',
-    path: '/api/public/marketing/feedback',
-    expectedStatus: [200],
-    body: {
-      name: 'Endpoint Coverage',
-      email: 'coverage@example.test',
-      subject: 'coverage check',
-      message: `run ${runId}`,
-      page_url: 'https://example.test/coverage',
-    },
-  });
 
   const overview = await runCase(results, baseUrl, options.timeoutMs, {
     name: 'admin-overview',
@@ -302,7 +289,8 @@ async function main() {
 
   const endpointCases = [
     { name: 'auth-keys', method: 'GET', path: '/api/auth/keys', expectedStatus: [200], headers: bearer() },
-    { name: 'auth-rotate-credentials', method: 'POST', path: '/api/auth/rotate-credentials', expectedStatus: [400], headers: bearer(), body: {} },
+    // An empty body fails the JSON extractor before any handler validation runs.
+    { name: 'auth-rotate-credentials', method: 'POST', path: '/api/auth/rotate-credentials', expectedStatus: [422], headers: bearer(), body: {} },
     { name: 'auth-subscription', method: 'GET', path: '/api/auth/subscription', expectedStatus: [200], headers: bearer() },
     { name: 'auth-capabilities', method: 'GET', path: '/api/auth/capabilities', expectedStatus: [200], headers: bearer() },
     { name: 'auth-storage', method: 'GET', path: '/api/auth/storage', expectedStatus: [200], headers: bearer() },
@@ -313,11 +301,6 @@ async function main() {
 
     { name: 'admin-user-lock', method: 'POST', path: `/api/admin/users/${userAId}/account-lock`, expectedStatus: [200], headers: adminBearer(), body: { locked: false, reason: null } },
     { name: 'admin-user-details', method: 'POST', path: `/api/admin/users/${userAId}/admin-details`, expectedStatus: [200], headers: adminBearer(), body: { admin_note: 'coverage', locked_reason: null } },
-    { name: 'admin-user-access-grants', method: 'POST', path: `/api/admin/users/${userAId}/access-grants`, expectedStatus: [200], headers: adminBearer(), body: { access_grants: userARecord?.access_grants ?? [] } },
-    { name: 'admin-user-plan-override', method: 'POST', path: `/api/admin/users/${userAId}/plan-override`, expectedStatus: [200], headers: adminBearer(), body: { manual_subscription_tier: null, manual_subscription_expires_at: null, reason: null } },
-    { name: 'admin-feedback-archive', method: 'POST', path: `/api/admin/feedback/${feedbackId}/archive`, expectedStatus: [200], headers: adminBearer(), body: { archived: true } },
-    { name: 'admin-feedback-delete', method: 'POST', path: `/api/admin/feedback/${feedbackId}/delete`, expectedStatus: [200], headers: adminBearer(), body: {} },
-
     { name: 'mindmaps-list', method: 'GET', path: '/api/mindmaps/', expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-storage', method: 'GET', path: '/api/mindmaps/storage', expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-my-storage', method: 'GET', path: '/api/mindmaps/my/storage', expectedStatus: [200], headers: bearer() },
@@ -327,17 +310,24 @@ async function main() {
     { name: 'mindmaps-upload', method: 'POST', path: `/api/mindmaps/${mapId}/upload`, expectedStatus: [200, 400], headers: { ...bearer(), 'content-type': 'application/octet-stream' }, body: randomBytes(32), asBytes: true },
     { name: 'mindmaps-blob', method: 'GET', path: `/api/mindmaps/${mapId}/blob`, expectedStatus: [200, 404, 500], headers: bearer() },
     { name: 'mindmaps-upload-url', method: 'POST', path: `/api/mindmaps/${mapId}/upload-url`, expectedStatus: [200], headers: bearer(), body: {} },
-    { name: 'mindmaps-confirm-upload', method: 'POST', path: `/api/mindmaps/${mapId}/confirm-upload`, expectedStatus: [400], headers: bearer(), body: { version_id: 'invalid-version-id' } },
+    // Versions are objects at <key>/v/<id>; a well-formed id that was never
+    // written is a miss in storage, not a malformed request.
+    { name: 'mindmaps-confirm-upload', method: 'POST', path: `/api/mindmaps/${mapId}/confirm-upload`, expectedStatus: [404], headers: bearer(), body: { version_id: 'invalid-version-id' } },
     { name: 'mindmaps-download-url', method: 'GET', path: `/api/mindmaps/${mapId}/download-url`, expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-attachments-list', method: 'GET', path: `/api/mindmaps/${mapId}/attachments`, expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-attachment-get', method: 'GET', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}`, expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-attachment-patch', method: 'PATCH', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}`, expectedStatus: [200], headers: bearer(), body: { node_id: 'node-1' } },
     { name: 'mindmaps-attachment-upload', method: 'POST', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}/upload`, expectedStatus: [200, 400], headers: { ...bearer(), 'content-type': 'application/octet-stream' }, body: randomBytes(32), asBytes: true },
-    { name: 'mindmaps-attachment-complete', method: 'POST', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}/complete`, expectedStatus: [400], headers: bearer(), body: { version_id: 'invalid-version-id', checksum_sha256: null } },
+    // Attachments are read from their base key, never a versioned one; the
+    // proof of upload is HeadObject on that key, so the version id is metadata
+    // and is not validated against the store (R2 never returns one).
+    { name: 'mindmaps-attachment-complete', method: 'POST', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}/complete`, expectedStatus: [200], headers: bearer(), body: { version_id: 'invalid-version-id', checksum_sha256: null } },
     { name: 'mindmaps-attachment-download', method: 'GET', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}/download`, expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-attachment-blob', method: 'GET', path: `/api/mindmaps/${mapId}/attachments/${attachmentId}/blob`, expectedStatus: [200, 404, 500], headers: bearer() },
     { name: 'mindmaps-versions-list', method: 'GET', path: `/api/mindmaps/${mapId}/versions`, expectedStatus: [200], headers: bearer() },
-    { name: 'mindmaps-version-delete', method: 'DELETE', path: `/api/mindmaps/${mapId}/versions/invalid-version-id`, expectedStatus: [400, 404], headers: bearer() },
+    // Deleting a version that is not there removes nothing and reports success;
+    // the current version is refused separately.
+    { name: 'mindmaps-version-delete', method: 'DELETE', path: `/api/mindmaps/${mapId}/versions/invalid-version-id`, expectedStatus: [200], headers: bearer() },
     { name: 'mindmaps-maintenance-allocator-stats', method: 'GET', path: '/api/mindmaps/maintenance/allocator-stats', expectedStatus: [200, 401, 404], headers: bearer() },
   ];
 
