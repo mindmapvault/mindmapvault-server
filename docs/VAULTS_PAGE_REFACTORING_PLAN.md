@@ -60,12 +60,16 @@ Each step is a commit that leaves the app working.
 
 | # | Step | Why here |
 |---|---|---|
-| 1 | Extract the vault helpers and derivations into a tested module | Nothing else is safe without it, and it is the duplication that can drift silently |
-| 2 | Collapse the four import handlers onto one helper | The biggest single reduction, and the tests from step 1 cover the part that matters |
-| 3 | Do the same for `EditorPage`'s five export handlers | Same shape, other half of the same feature |
-| 4 | Share the `memo` comparator's rename rule | Written twice, subtle, and a re-render bug is invisible until it is slow |
-| 5 | Break up `loadMaps` | Fetch, decrypt, normalise and draft-build are four jobs |
-| 6 | Move `VaultCard` and `VaultTableRow` into their own files | Lowest risk, do it whenever |
+| 1 | ~~Extract the vault helpers and derivations into a tested module~~ | Done |
+| 2 | ~~Collapse the four import handlers onto one helper~~ | Done |
+| 3 | ~~Do the same for `EditorPage`'s five export handlers~~ | Done — and it was bigger than this row: the tree snapshot was written seven times, and the filename builder twice |
+| 4 | ~~Share the `memo` comparator's rename rule~~ | Done as part of step 1 |
+| 5 | ~~Break up `loadMaps`~~ | Done: 263 lines to 60 |
+| 6 | ~~Move `VaultCard` and `VaultTableRow` into their own files~~ | Done |
+
+**All six are done.** `VaultsPage.tsx` is 2,259 → 1,408 and `EditorPage.tsx`
+1,272 → 1,234, with 44 new tests. What is left in `VaultsPage` is the page
+itself: its state, its handlers and its layout.
 
 Steps 1 and 2 are worth doing even if nothing else happens.
 
@@ -104,9 +108,10 @@ now one `try`.
 
 ## Done when
 
-- The four import paths are one, and adding a format is one entry
-- A vault's state is derived in one place, with tests
-- `npm test` covers the vault helpers as well as the mindmap ones
-- No behaviour has changed — this is a refactor, and the two open questions it
-  is likely to surface (there will be some) get written down rather than fixed
-  in passing
+- ~~The four import paths are one, and adding a format is one entry~~ — done,
+  and the five export paths with them.
+- ~~A vault's state is derived in one place, with tests~~ — done.
+- ~~`npm test` covers the vault helpers as well as the mindmap ones~~ — done:
+  131 tests, 44 of them new here.
+- ~~No behaviour has changed~~ — held. Two defects were found and deliberately
+  left alone, both recorded above with tests pinning what they do today.
