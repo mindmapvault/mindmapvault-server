@@ -161,6 +161,29 @@ fn admin_dist_dir() -> String {
     std::env::var("SERVER_ADMIN_DIST_DIR").unwrap_or_else(|_| "/app/frontend_admin_dist".to_string())
 }
 
+/// Refuses to start on a secret that is published in the repository.
+///
+/// The installer's template ships `replace_with_...` placeholders, and a bug in
+/// it once carried them into a live `.env.deploy`. A JWT secret anyone can read
+/// lets anyone mint a token for any account, so this is a hard stop rather than
+/// a warning: an instance that boots with it is not secured, and a warning in a
+/// log nobody reads is not a defence.
+fn refuse_placeholder_secrets(cfg: &config::AppConfig) -> anyhow::Result<()> {
+    let checks = [
+        ("JWT_SECRET", cfg.jwt_secret.as_str()),
+        ("ADMIN_API_TOKEN", cfg.admin_api_token.as_str()),
+    ];
+    for (name, value) in checks {
+        if value.starts_with("replace_with_") {
+            anyhow::bail!(
+                "{name} is still the installer's placeholder value. Anyone who has read the \
+                 repository knows it. Set a random value in .env.deploy and restart."
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ── Logging ───────────────────────────────────────────────────────────────
@@ -209,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
     // ── Config ────────────────────────────────────────────────────────────────
     let cfg = AppConfig::from_env()?;
     tracing::info!("Starting MindMapVault backend on {}", cfg.listen_addr());
+    refuse_placeholder_secrets(&cfg)?;
 
     // ── Infra connections ─────────────────────────────────────────────────────
     let storage = S3Store::connect(&cfg).await?;

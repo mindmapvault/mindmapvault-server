@@ -1,0 +1,18 @@
+# Local-only port remap. Not for deployment.
+#
+# audio2-postgres-1 already holds 0.0.0.0:5432 on this machine, which the
+# compose file wants for this stack's database. The server reaches postgres
+# over the compose network, so this only moves the host-side port used for
+# poking at the database directly.
+#
+# `!override` replaces the port list; without it compose merges the two and
+# still tries to bind 5432.
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5442:5432"
+  server:
+    # audio2-music-metadata-1 holds 0.0.0.0:8090; this stack has always been
+    # reachable on 8091 locally.
+    ports: !override
+      - "127.0.0.1:8091:8090"

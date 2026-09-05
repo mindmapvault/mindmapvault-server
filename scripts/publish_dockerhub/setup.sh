@@ -231,6 +231,24 @@ ask_secret_or_generate() {
   fi
 }
 
+# The template ships `replace_with_...` placeholders and step 2 copies it to
+# .env.deploy before we get here. Treating those as an existing secret is how a
+# fresh install ended up keeping a value that is published in the repository.
+is_placeholder_secret() {
+  [[ "$1" == replace_with_* ]]
+}
+
+# An existing secret, or empty when there is nothing real to keep.
+existing_secret() {
+  local value
+  value="$(get_env_value "$1" "${ENV_FILE}")"
+  if is_placeholder_secret "${value}"; then
+    echo ""
+  else
+    echo "${value}"
+  fi
+}
+
 ask_secret_with_existing() {
   local name="$1"
   local generated_value="$2"
@@ -398,11 +416,11 @@ if ! is_valid_docker_image_ref "${SERVER_IMAGE}"; then
   SERVER_IMAGE="${DEFAULT_SERVER_IMAGE}"
 fi
 
-EXISTING_POSTGRES_PASSWORD="$(get_env_value "POSTGRES_PASSWORD" "${ENV_FILE}")"
-EXISTING_S3_ACCESS_KEY="$(get_env_value "S3_ACCESS_KEY" "${ENV_FILE}")"
-EXISTING_S3_SECRET_KEY="$(get_env_value "S3_SECRET_KEY" "${ENV_FILE}")"
-EXISTING_JWT_SECRET="$(get_env_value "JWT_SECRET" "${ENV_FILE}")"
-EXISTING_ADMIN_API_TOKEN="$(get_env_value "ADMIN_API_TOKEN" "${ENV_FILE}")"
+EXISTING_POSTGRES_PASSWORD="$(existing_secret "POSTGRES_PASSWORD")"
+EXISTING_S3_ACCESS_KEY="$(existing_secret "S3_ACCESS_KEY")"
+EXISTING_S3_SECRET_KEY="$(existing_secret "S3_SECRET_KEY")"
+EXISTING_JWT_SECRET="$(existing_secret "JWT_SECRET")"
+EXISTING_ADMIN_API_TOKEN="$(existing_secret "ADMIN_API_TOKEN")"
 
 POSTGRES_PASSWORD_VALUE="$(ask_secret_with_existing "POSTGRES_PASSWORD" "$(random_alnum 40)" "${EXISTING_POSTGRES_PASSWORD}")"
 S3_ACCESS_KEY_VALUE="$(ask_secret_with_existing "S3_ACCESS_KEY" "$(random_uppernum 20)" "${EXISTING_S3_ACCESS_KEY}")"
