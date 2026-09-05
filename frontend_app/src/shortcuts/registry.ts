@@ -44,6 +44,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'node.notesOpen', label: 'Edit notes', group: 'Nodes', freemind: ['Mod+E'], mac: ['Mod+E'] },
   { id: 'node.addImage', label: 'Add image', group: 'Nodes', freemind: ['Alt+KeyK'], mac: ['Alt+KeyK'] },
   { id: 'node.attachFile', label: 'Attach encrypted file', group: 'Nodes', freemind: ['F6'], mac: ['Mod+O'] },
+  { id: 'node.linkVault', label: 'Link to a vault', group: 'Nodes', freemind: ['Mod+Shift+L'], mac: ['Mod+Shift+L'] },
   { id: 'node.fold', label: 'Fold / Unfold', group: 'Nodes', freemind: ['Space'], mac: ['Space'] },
   { id: 'node.resetPosition', label: 'Reset position', group: 'Nodes', freemind: ['R'], mac: ['R'] },
   { id: 'node.resetAllPositions', label: 'Reset all positions', group: 'Nodes', freemind: ['Mod+Shift+R'], mac: ['Mod+Shift+R'] },

@@ -1368,6 +1368,7 @@ export function DesktopMindMapEditor({
       'node.dates': () => setShowDateDialog((v) => !v),
       'node.url': () => setShowUrlDialog((v) => !v),
       'node.labels': () => setShowTagDialog((v) => !v),
+      'node.linkVault': () => { if (onOpenVaultLink) openVaultLinkPicker(selectedId); },
       'view.root': () => setSelectedId('root'),
       'view.focusMode': () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); },
       'view.zoomIn': () => viewport.zoomBy(0.15),
@@ -2340,6 +2341,19 @@ export function DesktopMindMapEditor({
           </button>
           <button className="mm-btn" onClick={() => setShowDateDialog(true)} data-label="Dates" data-shortcut={formatButtonShortcut('node.dates', keyboardLayout)} title="Dates (D)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></button>
           <button className={`mm-btn${showTagDialog ? ' mm-btn--active' : ''}`} onClick={() => setShowTagDialog((v) => !v)} data-label="Tags" data-shortcut={formatButtonShortcut('node.labels', keyboardLayout)} title="Tags (T)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg></button>
+          {onOpenVaultLink && (
+            <button
+              className={`mm-btn${selNode?.link?.id ? ' mm-btn--active' : ''}`}
+              data-label="Link"
+              data-shortcut={formatButtonShortcut('node.linkVault', keyboardLayout)}
+              onClick={() => openVaultLinkPicker(selectedId)}
+              title={selNode?.link?.label
+                ? `Linked to ${selNode.link.label} (${formatShortcut('node.linkVault', keyboardLayout)})`
+                : `Link this node to another vault (${formatShortcut('node.linkVault', keyboardLayout)})`}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="round"><path d="M 3 5 L 9 3 L 15 6 L 21 4 L 21 19 L 15 21 L 9 18 L 3 20 Z"/><path d="M 9 3 L 9 18 M 15 6 L 15 21"/></svg>
+            </button>
+          )}
               </div>
             </div>
           )}
@@ -2506,6 +2520,7 @@ export function DesktopMindMapEditor({
                     ['node.labels', 'Tags', () => setShowTagDialog((v) => !v)],
                     ['node.addImage', 'Image', () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }],
                     ['node.attachFile', 'Attach file', () => openAttachFiles()],
+                    ['node.linkVault', 'Link to vault', () => openVaultLinkPicker(selectedId)],
                     ['view.zoomIn', 'Zoom in', () => viewport.zoomBy(0.15)],
                     ['view.zoomOut', 'Zoom out', () => viewport.zoomBy(-0.15)],
                     ['view.zoomFit', 'Fit view', fitView],
