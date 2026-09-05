@@ -41,12 +41,38 @@ Each step is a commit that leaves `cargo test` green (52 tests today).
 
 | # | Step | Why here |
 |---|---|---|
-| 1 | Move `ensure_schema` into `db/schema.rs` | Independent of everything else, and the schema is not a query |
-| 2 | Split `SqlStore` into domain traits, `SqlStore` a supertrait of them | The change that stops the lockstep editing |
-| 3 | Move each domain's impl into `db/postgres/<domain>.rs` | Follows from 2 and is mechanical once it is done |
-| 4 | Split `routes/mindmaps_sql.rs` by resource | Independent; do it whenever |
+| 1 | ~~Move `ensure_schema` into `db/schema.rs`~~ | Done |
+| 2 | ~~Split `SqlStore` into domain traits~~ | Done: `SqlStore` is now a supertrait of five |
+| 3 | ~~Move each domain's impl into `db/postgres/<domain>.rs`~~ | Done |
+| 4 | ~~Split `routes/mindmaps_sql.rs` by resource~~ | **Not doing it — see below** |
 
-Step 1 is worth doing even if nothing else happens.
+`db/postgres.rs` was 1,943 lines. It is now the connection (96), five query
+modules (56–628), the row mappers (210) and the schema (221), and `cargo test`
+still passes the same 52 tests, none edited.
+
+## Why step 4 is not being done
+
+Splitting the routes looked like the same job as splitting the store. It is
+not, and the two reasons the store split was worth its risk are both absent.
+
+**There is no lockstep.** The store split fixed a trait and an impl that had to
+be edited together across two files that neither fit on a screen. A route
+handler is one function in one file.
+
+**There is no duplication.** The handlers that look like copies are not: 
+`upload_attachment_blob` against `upload_share_attachment_blob` differs in 13
+lines of 21, `complete_attachment_upload` against its share twin in 35 of 45,
+`init_attachment` against `init_share_attachment` in 47 of 61. The vault and
+share paths genuinely differ. Merging them would produce one function with two
+disjoint bodies.
+
+What the file *does* have is helpers shared across every resource —
+`find_owned` called 29 times, `find_attachment` 12, `resolve_blob_key` 10,
+`normalize_optional` 9. Splitting by resource would put most of them in a
+`common.rs` that every module imports from, to buy shorter files and nothing
+else. The router would also stop being the single readable index of the API.
+
+Worth revisiting if one resource grows its own logic. Not worth it today.
 
 ## What not to do
 
