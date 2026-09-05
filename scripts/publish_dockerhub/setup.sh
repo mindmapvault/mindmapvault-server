@@ -270,9 +270,28 @@ ask_secret_with_existing() {
   echo "$(ask_secret_or_generate "${name}" "${generated_value}")"
 }
 
+# Keeps a copy of a file we are about to replace, when the operator has changed
+# it. An update used to overwrite docker-compose.yml and garage.toml silently,
+# so a port change, a TLS front end or a memory limit vanished on every update
+# with nothing to restore from.
+backup_if_modified() {
+  local target_path="$1"
+  local source_url="$2"
+  local backup_path="${target_path}.bak"
+
+  [[ -f "${target_path}" ]] || return 0
+  if curl -fsSL "${source_url}" 2>/dev/null | diff -q - "${target_path}" >/dev/null 2>&1; then
+    return 0   # unchanged from what we last shipped; nothing worth keeping
+  fi
+  cp "${target_path}" "${backup_path}"
+  log_warn "${target_path} differs from the published version; your copy is saved as ${backup_path}"
+}
+
 download_file() {
   local source_url="$1"
   local target_path="$2"
+
+  backup_if_modified "${target_path}" "${source_url}"
 
   curl -fsSL "${source_url}" -o "${target_path}"
 }
