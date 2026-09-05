@@ -54,3 +54,8 @@ frontend_app_exp4/
 
 # Internal UX proposal drafts
 docs/toolbar-ux-proposal.html
+
+# Local compose overrides. Machine-specific — port remaps to dodge collisions
+# with whatever else is running, a different image tag while testing a build.
+# Committing one would push someone else's port choices onto every operator.
+docker-compose.override.yml
