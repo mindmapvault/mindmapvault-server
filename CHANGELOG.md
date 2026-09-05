@@ -4,6 +4,47 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.5.2] - 2026-09-05
+
+A security fix in the guided installer, a node-to-vault link, and four bug
+fixes. Release notes: `docs/RELEASE_0.5.2.md`.
+
+### Security
+- **The installer could leave an instance running on secrets published in this
+  repository.** It copied `.env.deploy.example` to `.env.deploy` before
+  prompting, then offered those placeholders as the value to keep, so an install
+  where the operator accepted the defaults kept `JWT_SECRET` and
+  `ADMIN_API_TOKEN` values anyone can read. Placeholders now count as absent and
+  the generated secret is used. **Check `.env.deploy` for values starting
+  `replace_with_` and rotate them** — see the release notes.
+- **The server refuses to start on a placeholder secret**, rather than booting
+  unprotected. This will stop an affected instance on upgrade, which is the
+  intent.
+
+### Added
+- **Link a node to another vault.** Right-click → Link to Vault…, the Link
+  button in the toolbar's Content group, or Ctrl+K / ⌘K. The node draws a strip
+  naming the target, and clicking it opens that vault.
+
+### Fixed
+- **Edits made while a file uploads are no longer discarded.** Six async paths
+  rebuilt the map from a copy taken before the upload began.
+- **An update no longer silently discards local Compose edits.** Modified
+  `docker-compose.yml` and `garage.toml` are backed up to `.bak` first.
+- **Nodes carrying a vault link are no longer 18px too tall**, from a footer
+  strip the layout reserved and nothing drew.
+- **An export with a blank title is no longer named `.md`** with no stem.
+- **One corrupt local label entry no longer empties the whole vault list.**
+
+### Changed
+- The node measurement, layout, tree operations, history, viewport and drag
+  geometry moved into `packages/mindmap-core` and `components/mindmap/`, with
+  136 frontend tests where there were none. The Postgres store split by domain
+  behind five traits. No behaviour change intended; the fixes above are the
+  drift these splits exposed.
+- Dropped `@xyflow/react` and the orphaned `MindMapNode.tsx`, which nothing
+  imported.
+
 ## [0.5.1] - 2026-09-03
 
 A reworked toolbar with three densities, and a fix for version history, which did
