@@ -43,10 +43,11 @@ import {
   labelsEqual,
   normalizeEncryptionMode,
   normalizeHexColor,
-  normalizeSharingMode,
   normalizeVaultLabels,
   sameRenameContext,
   vaultColorStorageKey,
+  vaultLabelsStorageKey,
+  buildVaultDrafts,
 } from './vaults/vaultState';
 import {
   getVaultPreviewStats,
@@ -100,6 +101,17 @@ function fmtBytes(n: number): string {
 
 function formatDateShort(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/**
+ * Labels this device holds for a local-mode vault.
+ *
+ * The `JSON.parse` is unguarded, exactly as it was inline: a corrupt entry
+ * throws and fails the whole vault list, not just this row. Preserved rather
+ * than fixed here — see the plan's open questions.
+ */
+function readLocalVaultLabels(vaultId: string): string[] {
+  return JSON.parse(localStorage.getItem(vaultLabelsStorageKey(vaultId)) ?? '[]') as string[];
 }
 
 function getLocalVaultColor(vaultId: string, fallback?: string): string {
@@ -902,6 +914,30 @@ export function VaultsPage() {
     }
   }, [storage]);
 
+  /**
+   * One vault record as a list row. Built the same way whether or not the
+   * titles could be decrypted — only the title and note differ.
+   */
+  const toVaultRow = useCallback((
+    m: MindMapListItem,
+    title: string | null,
+    note: string,
+  ): MapWithTitle => {
+    const color = isLocalMode
+      ? getLocalVaultColor(m.id, m.vault_color)
+      : normalizeHexColor(m.vault_color);
+    return {
+      ...m,
+      vault_color: color,
+      ...buildVaultDrafts(m, {
+        title,
+        note,
+        color,
+        localLabels: isLocalMode ? readLocalVaultLabels(m.id) : undefined,
+      }),
+    };
+  }, [isLocalMode]);
+
   const loadMaps = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -950,53 +986,9 @@ export function VaultsPage() {
           }),
         );
 
-        setMaps(
-          items.map((m, i) => {
-            const color = isLocalMode
-              ? getLocalVaultColor(m.id, m.vault_color)
-              : normalizeHexColor(m.vault_color);
-            const maxVersions = Math.max(1, m.max_versions ?? 50);
-            const note = decryptedNotes[i] ?? '';
-            return {
-              ...m,
-              vault_color: color,
-              title: decryptedTitles[i],
-              vaultNote: note,
-              draftNote: note,
-              draftLabels: normalizeVaultLabels(
-                m.vault_labels ?? (isLocalMode ? (JSON.parse(localStorage.getItem(`vault-labels-${m.id}`) ?? '[]') as string[]) : []),
-              ),
-              draftColor: color,
-              draftSharingMode: normalizeSharingMode(m.vault_sharing_mode),
-              draftEncryptionMode: normalizeEncryptionMode(m.vault_encryption_mode),
-              draftMaxVersions: maxVersions,
-              metaSaving: false,
-            };
-          }),
-        );
+        setMaps(items.map((m, i) => toVaultRow(m, decryptedTitles[i], decryptedNotes[i] ?? '')));
       } else {
-        setMaps(
-          items.map((m) => {
-            const color = isLocalMode
-              ? getLocalVaultColor(m.id, m.vault_color)
-              : normalizeHexColor(m.vault_color);
-            return {
-              ...m,
-              vault_color: color,
-              title: null,
-              vaultNote: '',
-              draftNote: '',
-              draftLabels: normalizeVaultLabels(
-                m.vault_labels ?? (isLocalMode ? (JSON.parse(localStorage.getItem(`vault-labels-${m.id}`) ?? '[]') as string[]) : []),
-              ),
-              draftColor: color,
-              draftSharingMode: normalizeSharingMode(m.vault_sharing_mode),
-              draftEncryptionMode: normalizeEncryptionMode(m.vault_encryption_mode),
-              draftMaxVersions: Math.max(1, m.max_versions ?? 50),
-              metaSaving: false,
-            };
-          }),
-        );
+        setMaps(items.map((m) => toVaultRow(m, null, '')));
       }
       setActiveSharesByVault({});
       setPreviewStates({});
@@ -1005,7 +997,7 @@ export function VaultsPage() {
     } finally {
       setLoading(false);
     }
-  }, [isLocalMode, sessionKeys, storage]);
+  }, [isLocalMode, sessionKeys, storage, toVaultRow]);
 
   const mapIdsKey = useMemo(() => maps.map((map) => map.id).join('|'), [maps]);
   // Only changes when vault identity or server-side updated_at changes — not on draft edits.
@@ -1459,7 +1451,7 @@ export function VaultsPage() {
   const setDraftLabels = (id: string, labels: string[]) => {
     const normalized = normalizeVaultLabels(labels);
     if (isLocalMode) {
-      localStorage.setItem(`vault-labels-${id}`, JSON.stringify(normalized));
+      localStorage.setItem(vaultLabelsStorageKey(id), JSON.stringify(normalized));
     }
     setMaps((prev) => prev.map((m) => (m.id === id ? { ...m, draftLabels: normalized } : m)));
   };

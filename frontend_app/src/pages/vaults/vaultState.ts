@@ -63,6 +63,73 @@ export function vaultColorStorageKey(vaultId: string): string {
   return `vault-color-${vaultId}`;
 }
 
+/**
+ * Where a local-mode vault's labels live. Local mode has no server to hold
+ * them, so they sit in `localStorage` under this key — persisted data, like
+ * the colour key above.
+ */
+export function vaultLabelsStorageKey(vaultId: string): string {
+  return `vault-labels-${vaultId}`;
+}
+
+// ── The row a vault becomes in the list ─────────────────────────
+
+/**
+ * The draft fields every vault row carries.
+ *
+ * Each card and row edits its vault's settings in place, so the row holds both
+ * what the server said and the draft the user is editing. This was built twice
+ * inside `loadMaps` — once for the signed-in case and once without keys — and
+ * the two copies differed only in the title and the note.
+ */
+export interface VaultDrafts {
+  title: string | null;
+  vaultNote: string;
+  draftNote: string;
+  draftLabels: string[];
+  draftColor: string;
+  draftSharingMode: VaultSharingMode;
+  draftEncryptionMode: VaultEncryptionMode;
+  draftMaxVersions: number;
+  metaSaving: boolean;
+}
+
+/** The default a vault falls back to when the server names no limit. */
+export const DEFAULT_MAX_VERSIONS = 50;
+
+export interface VaultDraftsInput {
+  vault_labels?: string[] | null;
+  vault_sharing_mode?: string;
+  vault_encryption_mode?: string;
+  max_versions?: number | null;
+}
+
+export function buildVaultDrafts(
+  record: VaultDraftsInput,
+  options: {
+    /** Decrypted, or null when there are no keys to decrypt with. */
+    title: string | null;
+    /** Decrypted, or empty. */
+    note: string;
+    /** Labels held on this device, for local mode. */
+    localLabels?: string[];
+    color: string;
+  },
+): VaultDrafts {
+  return {
+    title: options.title,
+    vaultNote: options.note,
+    draftNote: options.note,
+    draftLabels: normalizeVaultLabels(record.vault_labels ?? options.localLabels ?? []),
+    draftColor: options.color,
+    draftSharingMode: normalizeSharingMode(record.vault_sharing_mode),
+    draftEncryptionMode: normalizeEncryptionMode(record.vault_encryption_mode),
+    // A vault that reports zero or a negative limit still keeps one version.
+    draftMaxVersions: Math.max(1, record.max_versions ?? DEFAULT_MAX_VERSIONS),
+    metaSaving: false,
+  };
+}
+
 // ── The derivation both views need ──────────────────────────────
 
 /** Only the fields the derivation reads, so tests need not build a whole vault. */

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_MAX_VERSIONS,
+  buildVaultDrafts,
   deriveVaultState,
   labelsEqual,
   normalizeEncryptionMode,
@@ -8,6 +10,7 @@ import {
   normalizeVaultLabels,
   sameRenameContext,
   vaultColorStorageKey,
+  vaultLabelsStorageKey,
 } from '../vaultState';
 import { BOARD_LABEL } from '../../../utils/vaultLabels';
 
@@ -143,5 +146,55 @@ describe('sameRenameContext', () => {
     const prev = ctx({ renamingId: 'v1', renaming: false });
     const next = ctx({ renamingId: 'v1', renaming: true });
     expect(sameRenameContext(prev, next)).toBe(false);
+  });
+});
+
+describe('vaultLabelsStorageKey', () => {
+  /** Persisted in localStorage, like the colour key. */
+  it('is the key existing local-mode installs already hold', () => {
+    expect(vaultLabelsStorageKey('abc')).toBe('vault-labels-abc');
+  });
+});
+
+describe('buildVaultDrafts', () => {
+  const drafts = (record = {}, options = {}) =>
+    buildVaultDrafts(record, { title: 'T', note: '', color: '#334155', ...options });
+
+  it('seeds the draft note from the saved note, so an edit has something to revert to', () => {
+    const d = drafts({}, { note: 'hello' });
+    expect(d.vaultNote).toBe('hello');
+    expect(d.draftNote).toBe('hello');
+  });
+
+  it('carries the title through, including the no-keys case', () => {
+    expect(drafts({}, { title: 'Roadmap' }).title).toBe('Roadmap');
+    expect(drafts({}, { title: null }).title).toBeNull();
+  });
+
+  it('normalises the labels it was given', () => {
+    expect(drafts({ vault_labels: [' Work ', 'work'] }).draftLabels).toEqual(['work']);
+  });
+
+  it('falls back to this device\'s labels only when the record has none', () => {
+    expect(drafts({ vault_labels: ['server'] }, { localLabels: ['local'] }).draftLabels).toEqual(['server']);
+    expect(drafts({}, { localLabels: ['local'] }).draftLabels).toEqual(['local']);
+    expect(drafts({}).draftLabels).toEqual([]);
+  });
+
+  it('normalises the modes the record reports', () => {
+    expect(drafts({ vault_sharing_mode: 'shared' }).draftSharingMode).toBe('shared');
+    expect(drafts({ vault_sharing_mode: 'nonsense' }).draftSharingMode).toBe('private');
+    expect(drafts({ vault_encryption_mode: 're-encrypted' }).draftEncryptionMode).toBe('re-encrypted');
+  });
+
+  it('keeps at least one version, whatever the record says', () => {
+    expect(drafts({ max_versions: 12 }).draftMaxVersions).toBe(12);
+    expect(drafts({}).draftMaxVersions).toBe(DEFAULT_MAX_VERSIONS);
+    expect(drafts({ max_versions: 0 }).draftMaxVersions).toBe(1);
+    expect(drafts({ max_versions: -5 }).draftMaxVersions).toBe(1);
+  });
+
+  it('starts with no save in flight', () => {
+    expect(drafts().metaSaving).toBe(false);
   });
 });

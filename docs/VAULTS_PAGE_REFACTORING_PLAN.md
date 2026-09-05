@@ -95,6 +95,13 @@ called `.md`. There is a test pinning the current behaviour rather than fixing
 it, because the fix is a behaviour change: either trim before choosing, or treat
 a blank title as absent. Reachable by titling a vault with a space.
 
+**One corrupt label list fails the whole vault list.** Local mode keeps a
+vault's labels in `localStorage`, read with an unguarded `JSON.parse` inside
+the row builder. A single malformed entry throws, and because the read happens
+while mapping every vault, the entire list fails to load rather than that one
+row. Preserved as it was and moved into `readLocalVaultLabels`, so the fix is
+now one `try`.
+
 ## Done when
 
 - The four import paths are one, and adding a format is one entry
