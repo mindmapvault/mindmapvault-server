@@ -31,6 +31,16 @@ import type {
 } from '../types';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { BOARD_LABEL, IMPORTED_SHARE_LABEL, visibleLabels } from '../utils/vaultLabels';
+import {
+  deriveVaultState,
+  labelsEqual,
+  normalizeEncryptionMode,
+  normalizeHexColor,
+  normalizeSharingMode,
+  normalizeVaultLabels,
+  sameRenameContext,
+  vaultColorStorageKey,
+} from './vaults/vaultState';
 import { obsidianMarkdownToTree } from '../utils/markdownImport';
 import { freemindToTree } from '../utils/freemindImport';
 import { wisemappingToTree } from '../utils/wisemappingImport';
@@ -88,16 +98,6 @@ function formatDateShort(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function normalizeHexColor(input?: string): string {
-  const fallback = '#334155';
-  if (!input) return fallback;
-  return /^#[0-9a-fA-F]{6}$/.test(input) ? input : fallback;
-}
-
-function vaultColorStorageKey(vaultId: string): string {
-  return `vault-color-${vaultId}`;
-}
-
 function getLocalVaultColor(vaultId: string, fallback?: string): string {
   const stored = localStorage.getItem(vaultColorStorageKey(vaultId)) ?? undefined;
   return normalizeHexColor(stored ?? fallback);
@@ -105,33 +105,6 @@ function getLocalVaultColor(vaultId: string, fallback?: string): string {
 
 function setLocalVaultColor(vaultId: string, color: string): void {
   localStorage.setItem(vaultColorStorageKey(vaultId), normalizeHexColor(color));
-}
-
-function normalizeSharingMode(input?: string): VaultSharingMode {
-  return input === 'shared' ? 'shared' : 'private';
-}
-
-function normalizeEncryptionMode(input?: string): VaultEncryptionMode {
-  return input === 're-encrypted' ? 're-encrypted' : 'standard';
-}
-
-function normalizeVaultLabels(input?: string[]): string[] {
-  if (!Array.isArray(input)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of input) {
-    if (typeof raw !== 'string') continue;
-    const label = raw.trim().toLowerCase();
-    if (!label || seen.has(label)) continue;
-    seen.add(label);
-    out.push(label);
-  }
-  return out;
-}
-
-function labelsEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  return a.every((label, idx) => label === b[idx]);
 }
 
 function VaultLabelInput({ draftLabels, onAdd }: { draftLabels: string[]; onAdd: (label: string, color?: string) => void }) {
@@ -240,12 +213,9 @@ const VaultCard = memo(function VaultCard({
 }: VaultCardProps) {
   const persistedColor = normalizeHexColor(map.vault_color);
   const persistedMax = Math.max(1, map.max_versions ?? 50);
-  const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
+  const { path: vaultPath, isShared: isSharedVault } = deriveVaultState(map, activeShareCount);
   const persistedEncryptionMode = normalizeEncryptionMode(map.vault_encryption_mode);
   const persistedLabels = normalizeVaultLabels(map.vault_labels);
-  const isBoard = map.vault_labels?.includes(BOARD_LABEL) ?? false;
-  const vaultPath = isBoard ? `/boards/${map.id}` : `/vaults/${map.id}`;
-  const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
   const blurPreview = isSharedVault;
   const dirty =
     map.draftNote !== map.vaultNote ||
@@ -514,13 +484,10 @@ const VaultCard = memo(function VaultCard({
     </article>
   );
 }, (prev, next) => {
-  const sameRenameContext = prev.renamingId !== prev.map.id
-    ? prev.renamingId === next.renamingId
-    : prev.renamingId === next.renamingId && prev.renameValue === next.renameValue && prev.renaming === next.renaming;
-  return prev.map === next.map
+  return sameRenameContext(prev, next)
+    && prev.map === next.map
     && prev.usage === next.usage
     && prev.isLocalMode === next.isLocalMode
-    && sameRenameContext
     && prev.activeShareCount === next.activeShareCount
     && prev.previewState === next.previewState
     && prev.userLabels === next.userLabels
@@ -570,10 +537,7 @@ const VaultTableRow = memo(function VaultTableRow({
   onOpenShares,
   onDeleteRequest,
 }: VaultTableRowProps) {
-  const persistedSharingMode = normalizeSharingMode(map.vault_sharing_mode);
-  const isBoard = map.vault_labels?.includes(BOARD_LABEL) ?? false;
-  const vaultPath = isBoard ? `/boards/${map.id}` : `/vaults/${map.id}`;
-  const isSharedVault = activeShareCount > 0 || persistedSharingMode === 'shared';
+  const { path: vaultPath, isShared: isSharedVault } = deriveVaultState(map, activeShareCount);
   const shownLabels = visibleLabels(map.draftLabels);
   const hasTooltip = (shownLabels.length > 0 || !!map.draftNote) && renamingId !== map.id;
   const [tooltipVisible, setTooltipVisible] = useState(false);
@@ -773,14 +737,11 @@ const VaultTableRow = memo(function VaultTableRow({
     </>
   );
 }, (prev, next) => {
-  const sameRenameContext = prev.renamingId !== prev.map.id
-    ? prev.renamingId === next.renamingId
-    : prev.renamingId === next.renamingId && prev.renameValue === next.renameValue && prev.renaming === next.renaming;
   return (
+    sameRenameContext(prev, next) &&
     prev.map === next.map &&
     prev.usage === next.usage &&
     prev.isLocalMode === next.isLocalMode &&
-    sameRenameContext &&
     prev.activeShareCount === next.activeShareCount &&
     prev.previewState === next.previewState &&
     prev.userLabels === next.userLabels
