@@ -207,6 +207,34 @@ function buildConnectorMap(
 // ---------------------------------------------------------------------------
 // Synchronous SVG tree renderer — icons injected asynchronously via separate pass.
 // ---------------------------------------------------------------------------
+
+/**
+ * Fits a scene's bounding box inside the preview frame.
+ *
+ * The mind map preview and the board preview find their bounds differently —
+ * laid-out node boxes against graph node positions — but scale and centre them
+ * identically. That arithmetic was written out twice, so a change to the
+ * padding or the centring would have moved one preview and not the other.
+ */
+export function fitToFrame(
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  width: number,
+  height: number,
+): { scale: number; offsetX: number; offsetY: number } {
+  // At least 1, so a single node — where max equals min — cannot divide by zero.
+  const sceneWidth = Math.max(1, bounds.maxX - bounds.minX);
+  const sceneHeight = Math.max(1, bounds.maxY - bounds.minY);
+  const scale = Math.min(
+    (width - FRAME_PADDING * 2) / sceneWidth,
+    (height - FRAME_PADDING * 2) / sceneHeight,
+  );
+  return {
+    scale,
+    offsetX: (width - sceneWidth * scale) / 2 - bounds.minX * scale,
+    offsetY: (height - sceneHeight * scale) / 2 - bounds.minY * scale,
+  };
+}
+
 function renderTreeSvgSync(
   tree: MindMapTree,
   theme: ThemeMode,
@@ -220,14 +248,7 @@ function renderTreeSvgSync(
   const minY = Math.min(...entries.map((e) => e.y));
   const maxX = Math.max(...entries.map((e) => e.x + e.w));
   const maxY = Math.max(...entries.map((e) => e.y + e.h));
-  const sceneWidth = Math.max(1, maxX - minX);
-  const sceneHeight = Math.max(1, maxY - minY);
-  const scale = Math.min(
-    (width - FRAME_PADDING * 2) / sceneWidth,
-    (height - FRAME_PADDING * 2) / sceneHeight,
-  );
-  const offsetX = (width - sceneWidth * scale) / 2 - minX * scale;
-  const offsetY = (height - sceneHeight * scale) / 2 - minY * scale;
+  const { scale, offsetX, offsetY } = fitToFrame({ minX, minY, maxX, maxY }, width, height);
 
   // Build connector color map.
   const connectorColorMap = new Map<string, string>();
@@ -442,14 +463,7 @@ function renderGraphSvg(graph: MindMapGraph, theme: ThemeMode, width = PREVIEW_W
   const minY = Math.min(...graph.nodes.map((node) => node.position.y));
   const maxX = Math.max(...graph.nodes.map((node) => node.position.x + nodeWidth));
   const maxY = Math.max(...graph.nodes.map((node) => node.position.y + nodeHeight));
-  const sceneWidth = Math.max(1, maxX - minX);
-  const sceneHeight = Math.max(1, maxY - minY);
-  const scale = Math.min(
-    (width - FRAME_PADDING * 2) / sceneWidth,
-    (height - FRAME_PADDING * 2) / sceneHeight,
-  );
-  const offsetX = (width - sceneWidth * scale) / 2 - minX * scale;
-  const offsetY = (height - sceneHeight * scale) / 2 - minY * scale;
+  const { scale, offsetX, offsetY } = fitToFrame({ minX, minY, maxX, maxY }, width, height);
   const nodeMap = new Map(graph.nodes.map((node) => [node.id, node]));
 
   const edges = graph.edges.map((edge) => {
