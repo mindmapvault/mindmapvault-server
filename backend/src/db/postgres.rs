@@ -9,13 +9,13 @@ use tokio_postgres::{types::Json, Client, NoTls, Row};
 use crate::{
     config::AppConfig,
     db::sql_store::{
+        AdminAuditStore, InviteStore, MindMapStore, SystemStore, UserStore,
         AdminUserAdminUpdate, AdminUserRecord,
         MindMapAttachmentUploadUpdate, MindMapContentUpdate, MindMapMetaUpdate,
         MindMapShareAttachmentUploadUpdate, MindMapShareUploadUpdate,
         NewMindMap,
         NewMindMapAttachment, NewMindMapShare, NewMindMapShareAttachment, NewUser,
         RotateCredentialsUpdate, RotationAttachmentRecord,
-        SqlStore,
         StoredMindMap, StoredMindMapAttachment, StoredMindMapShare, StoredMindMapShareAttachment,
         StoredUser,
         UserProfileUpdate,
@@ -111,45 +111,7 @@ impl PostgresDb {
 }
 
 #[async_trait]
-impl SqlStore for PostgresDb {
-    async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError> {
-        let rows = self
-            .client
-            .query(
-                "SELECT id, entity_type, entity_id, action_type, summary, detail, actor, created_at
-                 FROM admin_audit_events
-                 ORDER BY created_at DESC
-                 LIMIT $1",
-                &[&(limit as i64)],
-            )
-            .await?;
-
-        rows.into_iter().map(admin_audit_from_row).collect()
-    }
-
-    async fn create_admin_audit_event(&self, event: AdminAuditEvent) -> Result<(), AppError> {
-        self.client
-            .execute(
-                "INSERT INTO admin_audit_events (
-                    id, entity_type, entity_id, action_type, summary, detail, actor, created_at
-                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8
-                 )",
-                &[
-                    &event.public_id,
-                    &event.entity_type,
-                    &event.entity_id,
-                    &event.action_type,
-                    &event.summary,
-                    &event.detail,
-                    &event.actor,
-                    &event.created_at,
-                ],
-            )
-            .await?;
-
-        Ok(())
-    }
+impl SystemStore for PostgresDb {
 
     async fn try_lock_migration(&self, key: i64) -> Result<bool, AppError> {
         // A session-level advisory lock on the shared connection: held for as
@@ -170,6 +132,126 @@ impl SqlStore for PostgresDb {
             .map_err(AppError::Database)?;
         Ok(())
     }
+
+    async fn load_instance_settings(&self) -> Result<Option<InstanceSettings>, AppError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
+                        auth_rate_limit_per_minute, failed_login_threshold,
+                        failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                 FROM instance_settings
+                 WHERE id = 1",
+                &[],
+            )
+            .await?;
+
+        Ok(row.map(|row| InstanceSettings {
+            registration_enabled: row.get(0),
+            user_storage_limit_bytes: row.get(1),
+            max_attachment_size_bytes: row.get(2),
+            auth_rate_limit_per_minute: row.get(3),
+            failed_login_threshold: row.get(4),
+            failed_login_lockout_minutes: row.get(5),
+            trust_proxy_headers: row.get(6),
+            updated_at: row.get(7),
+        }))
+    }
+
+    async fn seed_instance_settings(
+        &self,
+        seed: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError> {
+        self.client
+            .execute(
+                "INSERT INTO instance_settings (
+                    id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
+                    auth_rate_limit_per_minute, failed_login_threshold,
+                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO NOTHING",
+                &[
+                    &seed.registration_enabled,
+                    &seed.user_storage_limit_bytes,
+                    &seed.max_attachment_size_bytes,
+                    &seed.auth_rate_limit_per_minute,
+                    &seed.failed_login_threshold,
+                    &seed.failed_login_lockout_minutes,
+                    &seed.trust_proxy_headers,
+                    &seed.updated_at,
+                ],
+            )
+            .await?;
+
+        self.load_instance_settings()
+            .await?
+            .ok_or_else(|| AppError::Internal("instance settings row missing after seed".to_string()))
+    }
+
+    async fn save_instance_settings(
+        &self,
+        settings: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError> {
+        self.client
+            .execute(
+                "INSERT INTO instance_settings (
+                    id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
+                    auth_rate_limit_per_minute, failed_login_threshold,
+                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO UPDATE SET
+                    registration_enabled = EXCLUDED.registration_enabled,
+                    user_storage_limit_bytes = EXCLUDED.user_storage_limit_bytes,
+                    max_attachment_size_bytes = EXCLUDED.max_attachment_size_bytes,
+                    auth_rate_limit_per_minute = EXCLUDED.auth_rate_limit_per_minute,
+                    failed_login_threshold = EXCLUDED.failed_login_threshold,
+                    failed_login_lockout_minutes = EXCLUDED.failed_login_lockout_minutes,
+                    trust_proxy_headers = EXCLUDED.trust_proxy_headers,
+                    updated_at = EXCLUDED.updated_at",
+                &[
+                    &settings.registration_enabled,
+                    &settings.user_storage_limit_bytes,
+                    &settings.max_attachment_size_bytes,
+                    &settings.auth_rate_limit_per_minute,
+                    &settings.failed_login_threshold,
+                    &settings.failed_login_lockout_minutes,
+                    &settings.trust_proxy_headers,
+                    &settings.updated_at,
+                ],
+            )
+            .await?;
+
+        self.load_instance_settings()
+            .await?
+            .ok_or_else(|| AppError::Internal("instance settings row missing after save".to_string()))
+    }
+
+    async fn health_check(&self) -> Result<(), AppError> {
+        self.client.query_one("SELECT 1", &[]).await?;
+        Ok(())
+    }
+
+    async fn database_stats(&self) -> Result<DatabaseStats, AppError> {
+        // `server_version` is the short form ("16.4"); `version()` would return
+        // a sentence naming the build and platform, which is more than the
+        // status page needs and more than is worth showing.
+        let row = self
+            .client
+            .query_one(
+                "SELECT current_setting('server_version'), pg_database_size(current_database())",
+                &[],
+            )
+            .await?;
+
+        Ok(DatabaseStats {
+            version: row.get::<_, Option<String>>(0),
+            size_bytes: row.get::<_, Option<i64>>(1),
+        })
+    }
+}
+
+#[async_trait]
+impl UserStore for PostgresDb {
 
     async fn list_admin_users(&self) -> Result<Vec<AdminUserRecord>, AppError> {
         let rows = self
@@ -707,99 +789,6 @@ impl SqlStore for PostgresDb {
         Ok(())
     }
 
-    async fn load_instance_settings(&self) -> Result<Option<InstanceSettings>, AppError> {
-        let row = self
-            .client
-            .query_opt(
-                "SELECT registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
-                        auth_rate_limit_per_minute, failed_login_threshold,
-                        failed_login_lockout_minutes, trust_proxy_headers, updated_at
-                 FROM instance_settings
-                 WHERE id = 1",
-                &[],
-            )
-            .await?;
-
-        Ok(row.map(|row| InstanceSettings {
-            registration_enabled: row.get(0),
-            user_storage_limit_bytes: row.get(1),
-            max_attachment_size_bytes: row.get(2),
-            auth_rate_limit_per_minute: row.get(3),
-            failed_login_threshold: row.get(4),
-            failed_login_lockout_minutes: row.get(5),
-            trust_proxy_headers: row.get(6),
-            updated_at: row.get(7),
-        }))
-    }
-
-    async fn seed_instance_settings(
-        &self,
-        seed: &InstanceSettings,
-    ) -> Result<InstanceSettings, AppError> {
-        self.client
-            .execute(
-                "INSERT INTO instance_settings (
-                    id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
-                    auth_rate_limit_per_minute, failed_login_threshold,
-                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
-                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
-                 ON CONFLICT (id) DO NOTHING",
-                &[
-                    &seed.registration_enabled,
-                    &seed.user_storage_limit_bytes,
-                    &seed.max_attachment_size_bytes,
-                    &seed.auth_rate_limit_per_minute,
-                    &seed.failed_login_threshold,
-                    &seed.failed_login_lockout_minutes,
-                    &seed.trust_proxy_headers,
-                    &seed.updated_at,
-                ],
-            )
-            .await?;
-
-        self.load_instance_settings()
-            .await?
-            .ok_or_else(|| AppError::Internal("instance settings row missing after seed".to_string()))
-    }
-
-    async fn save_instance_settings(
-        &self,
-        settings: &InstanceSettings,
-    ) -> Result<InstanceSettings, AppError> {
-        self.client
-            .execute(
-                "INSERT INTO instance_settings (
-                    id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
-                    auth_rate_limit_per_minute, failed_login_threshold,
-                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
-                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
-                 ON CONFLICT (id) DO UPDATE SET
-                    registration_enabled = EXCLUDED.registration_enabled,
-                    user_storage_limit_bytes = EXCLUDED.user_storage_limit_bytes,
-                    max_attachment_size_bytes = EXCLUDED.max_attachment_size_bytes,
-                    auth_rate_limit_per_minute = EXCLUDED.auth_rate_limit_per_minute,
-                    failed_login_threshold = EXCLUDED.failed_login_threshold,
-                    failed_login_lockout_minutes = EXCLUDED.failed_login_lockout_minutes,
-                    trust_proxy_headers = EXCLUDED.trust_proxy_headers,
-                    updated_at = EXCLUDED.updated_at",
-                &[
-                    &settings.registration_enabled,
-                    &settings.user_storage_limit_bytes,
-                    &settings.max_attachment_size_bytes,
-                    &settings.auth_rate_limit_per_minute,
-                    &settings.failed_login_threshold,
-                    &settings.failed_login_lockout_minutes,
-                    &settings.trust_proxy_headers,
-                    &settings.updated_at,
-                ],
-            )
-            .await?;
-
-        self.load_instance_settings()
-            .await?
-            .ok_or_else(|| AppError::Internal("instance settings row missing after save".to_string()))
-    }
-
     async fn sum_user_stored_bytes(&self, user_id: &str) -> Result<i64, AppError> {
         // Everything a user can grow without bound and whose size the database
         // knows. Map blobs live only in object storage and their sizes are not
@@ -837,29 +826,10 @@ impl SqlStore for PostgresDb {
 
         Ok(row.get::<_, i64>(0))
     }
+}
 
-    async fn health_check(&self) -> Result<(), AppError> {
-        self.client.query_one("SELECT 1", &[]).await?;
-        Ok(())
-    }
-
-    async fn database_stats(&self) -> Result<DatabaseStats, AppError> {
-        // `server_version` is the short form ("16.4"); `version()` would return
-        // a sentence naming the build and platform, which is more than the
-        // status page needs and more than is worth showing.
-        let row = self
-            .client
-            .query_one(
-                "SELECT current_setting('server_version'), pg_database_size(current_database())",
-                &[],
-            )
-            .await?;
-
-        Ok(DatabaseStats {
-            version: row.get::<_, Option<String>>(0),
-            size_bytes: row.get::<_, Option<i64>>(1),
-        })
-    }
+#[async_trait]
+impl InviteStore for PostgresDb {
 
     async fn list_registration_invites(&self) -> Result<Vec<RegistrationInvite>, AppError> {
         let rows = self
@@ -940,6 +910,53 @@ impl SqlStore for PostgresDb {
 
         Ok(())
     }
+}
+
+#[async_trait]
+impl AdminAuditStore for PostgresDb {
+
+    async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT id, entity_type, entity_id, action_type, summary, detail, actor, created_at
+                 FROM admin_audit_events
+                 ORDER BY created_at DESC
+                 LIMIT $1",
+                &[&(limit as i64)],
+            )
+            .await?;
+
+        rows.into_iter().map(admin_audit_from_row).collect()
+    }
+
+    async fn create_admin_audit_event(&self, event: AdminAuditEvent) -> Result<(), AppError> {
+        self.client
+            .execute(
+                "INSERT INTO admin_audit_events (
+                    id, entity_type, entity_id, action_type, summary, detail, actor, created_at
+                 ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8
+                 )",
+                &[
+                    &event.public_id,
+                    &event.entity_type,
+                    &event.entity_id,
+                    &event.action_type,
+                    &event.summary,
+                    &event.detail,
+                    &event.actor,
+                    &event.created_at,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MindMapStore for PostgresDb {
 
     async fn list_mind_maps(&self, user_id: &str) -> Result<Vec<StoredMindMap>, AppError> {
         let rows = self
@@ -1543,6 +1560,7 @@ impl SqlStore for PostgresDb {
         Ok(())
     }
 }
+
 
 fn stored_mind_map_share_from_row(row: Row) -> Result<StoredMindMapShare, AppError> {
     Ok(StoredMindMapShare {

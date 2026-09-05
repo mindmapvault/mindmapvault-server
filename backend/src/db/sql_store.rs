@@ -453,8 +453,10 @@ impl AdminUserRecord {
     }
 }
 
+/// The instance itself: health, settings, stats and the migration lock.
 #[async_trait]
-pub trait SqlStore: Send + Sync {
+pub trait SystemStore: Send + Sync {
+
     /// Cheapest round trip that proves the database is answering.
     async fn health_check(&self) -> Result<(), AppError>;
 
@@ -471,8 +473,24 @@ pub trait SqlStore: Send + Sync {
     /// Server version and on-disk size, for the status page.
     async fn database_stats(&self) -> Result<DatabaseStats, AppError>;
 
-    async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError>;
-    async fn create_admin_audit_event(&self, event: AdminAuditEvent) -> Result<(), AppError>;
+    /// Reads the instance settings row, or `None` before it has been seeded.
+    async fn load_instance_settings(&self) -> Result<Option<InstanceSettings>, AppError>;
+    /// Writes the row only if it is missing, and returns whatever is stored
+    /// afterwards. Seeding is a no-op on every start after the first, which is
+    /// what keeps the admin console the authority over the environment.
+    async fn seed_instance_settings(
+        &self,
+        seed: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError>;
+    async fn save_instance_settings(
+        &self,
+        settings: &InstanceSettings,
+    ) -> Result<InstanceSettings, AppError>;
+}
+
+/// Accounts, their keys and their per-account settings.
+#[async_trait]
+pub trait UserStore: Send + Sync {
     async fn list_admin_users(&self) -> Result<Vec<AdminUserRecord>, AppError>;
     async fn load_user_by_username(&self, username: &str) -> Result<Option<StoredUser>, AppError>;
     async fn load_user_by_id(&self, id: &str) -> Result<Option<StoredUser>, AppError>;
@@ -520,23 +538,14 @@ pub trait SqlStore: Send + Sync {
         settings: UserAccountSettings,
     ) -> Result<(), AppError>;
 
-    /// Reads the instance settings row, or `None` before it has been seeded.
-    async fn load_instance_settings(&self) -> Result<Option<InstanceSettings>, AppError>;
-    /// Writes the row only if it is missing, and returns whatever is stored
-    /// afterwards. Seeding is a no-op on every start after the first, which is
-    /// what keeps the admin console the authority over the environment.
-    async fn seed_instance_settings(
-        &self,
-        seed: &InstanceSettings,
-    ) -> Result<InstanceSettings, AppError>;
-    async fn save_instance_settings(
-        &self,
-        settings: &InstanceSettings,
-    ) -> Result<InstanceSettings, AppError>;
-
     /// Bytes this user holds in attachments, share blobs and share
     /// attachments — everything whose size the database records.
     async fn sum_user_stored_bytes(&self, user_id: &str) -> Result<i64, AppError>;
+}
+
+/// Registration invites, for instances that are not open to sign-ups.
+#[async_trait]
+pub trait InviteStore: Send + Sync {
 
     async fn list_registration_invites(&self) -> Result<Vec<RegistrationInvite>, AppError>;
     async fn create_registration_invite(
@@ -559,6 +568,20 @@ pub trait SqlStore: Send + Sync {
     /// Puts a claimed invite back, used when the sign-up it was claimed for
     /// then failed. Without it a taken username would burn someone's invite.
     async fn release_registration_invite(&self, id: &str) -> Result<(), AppError>;
+}
+
+/// The admin audit trail.
+#[async_trait]
+pub trait AdminAuditStore: Send + Sync {
+
+    async fn list_admin_audit_events(&self, limit: usize) -> Result<Vec<AdminAuditEvent>, AppError>;
+    async fn create_admin_audit_event(&self, event: AdminAuditEvent) -> Result<(), AppError>;
+}
+
+/// Vaults and everything filed under one: attachments, shares, and the
+/// attachments a share carries.
+#[async_trait]
+pub trait MindMapStore: Send + Sync {
 
     async fn list_mind_maps(&self, user_id: &str) -> Result<Vec<StoredMindMap>, AppError>;
     async fn create_mind_map(&self, map: NewMindMap) -> Result<(), AppError>;
@@ -668,5 +691,17 @@ pub trait SqlStore: Send + Sync {
         update: MindMapShareAttachmentUploadUpdate,
     ) -> Result<(), AppError>;
 }
+
+/// Everything the app needs from a database.
+///
+/// Split into the traits above because one trait of 55 methods meant every
+/// new query edited two files that neither fit on a screen, and Rust will
+/// not let a single impl block span files. `SqlStore` itself adds nothing:
+/// it is the name the rest of the app depends on, and a trait object still
+/// reaches every method through these supertraits.
+pub trait SqlStore: SystemStore + UserStore + InviteStore + AdminAuditStore + MindMapStore {}
+
+impl<T: SystemStore + UserStore + InviteStore + AdminAuditStore + MindMapStore> SqlStore for T {}
+
 
 pub type DynSqlStore = Arc<dyn SqlStore>;
