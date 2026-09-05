@@ -29,10 +29,8 @@ import { useModeStore } from '../store/mode';
 import type { AttachmentMetadata, MapShareOwnerSummary, MindMapTree, NodeAttachmentRef, VersionDetail } from '../types';
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { createEncryptedFilePreview } from '../utils/filePreview';
-import { treeToMarkdown } from '../utils/markdownExport';
-import { treeToFreemind } from '../utils/freemindExport';
-import { treeToFreeplane } from '../utils/freeplaneExport';
-import { treeToWisemapping } from '../utils/wisemappingExport';
+import { buildExportFileBaseName } from '../utils/exportFileName';
+import { EXPORT_FORMATS, type ExportFormat } from '../utils/exportFormats';
 import { downloadBlob } from '../utils/download';
 import {
   createCloudTreeVaultPreview,
@@ -599,52 +597,19 @@ export function EditorPage() {
     }
   }, [id, shownVersionId, applyVersionLabel]);
 
-  const buildExportFileBaseName = useCallback((baseTitle?: string) => {
-    const normalizedTitle = (baseTitle || title || 'vault').trim();
-    const safeTitle = normalizedTitle
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim();
-    // Anchored: a date fallback label ("v 6. 8. 2026") must not contribute a
-    // version token; only a real sequential label ("v12") does.
-    const versionMatch = (versionLabel ?? '').trim().match(/^v\s*(\d+)$/i);
-    const versionToken = versionMatch ? `v${versionMatch[1]}` : null;
-    const alreadyEndsWithVersion =
-      versionToken != null && new RegExp(`[-_ ]${versionToken}$`, 'i').test(safeTitle);
-    return (versionToken && !alreadyEndsWithVersion) ? `${safeTitle}-${versionToken}` : safeTitle;
-  }, [title, versionLabel]);
 
   // ── Export ───────────────────────────────────────────────────────────────────────
 
-  const handleExportMarkdown = useCallback((tree: MindMapTree, currentTitle: string) => {
-    const md = treeToMarkdown(tree.root, currentTitle);
-    const blob = new Blob([md], { type: 'text/markdown' });
-    void downloadBlob(blob, `${buildExportFileBaseName(currentTitle)}.md`);
-  }, [buildExportFileBaseName]);
-
-  const handleExportFreemind = useCallback((tree: MindMapTree, currentTitle: string) => {
-    const xml = treeToFreemind(tree.root);
-    const blob = new Blob([xml], { type: 'application/xml' });
-    void downloadBlob(blob, `${currentTitle}.mm`);
-  }, []);
-
-  const handleExportFreeplane = useCallback((tree: MindMapTree, currentTitle: string) => {
-    const xml = treeToFreeplane(tree.root);
-    const blob = new Blob([xml], { type: 'application/xml' });
-    void downloadBlob(blob, `${currentTitle}.mm`);
-  }, []);
-
-  const handleExportWisemapping = useCallback((tree: MindMapTree, currentTitle: string) => {
-    const xml = treeToWisemapping(tree.root);
-    const blob = new Blob([xml], { type: 'application/xml' });
-    void downloadBlob(blob, `${currentTitle}.wxml`);
-  }, []);
-
-  const handleExportXmind = useCallback(async (tree: MindMapTree, currentTitle: string) => {
-    const { treeToXmind } = await import('../utils/xmindExport');
-    const blob = treeToXmind(tree.root, currentTitle);
-    void downloadBlob(blob, `${currentTitle}.xmind`);
-  }, []);
+  /**
+   * `baseName` arrives already built by the editor, which knows the version
+   * label; it is only rebuilt here as a guard for callers that pass a raw
+   * title. The builder is idempotent, so doing so twice is harmless.
+   */
+  const handleExport = useCallback(async (format: ExportFormat, tree: MindMapTree, baseName: string) => {
+    const blob = await format.serialize(tree.root, baseName);
+    const fileName = buildExportFileBaseName({ baseTitle: baseName, title, fallback: 'vault', versionLabel });
+    void downloadBlob(blob, `${fileName}${format.extension}`);
+  }, [title, versionLabel]);
 
   const handleUploadFiles = useCallback(async (files: FileList) => {
     if (!id || !sessionKeys || isLocalMode) return;
@@ -1213,11 +1178,8 @@ export function EditorPage() {
         renamingTitle={renamingTitle}
         onBack={() => navigate('/vaults')}
         onShowHistory={isLocalMode ? undefined : () => setShowHistory(true)}
-        onExportMarkdown={handleExportMarkdown}
-        onExportFreemind={handleExportFreemind}
-        onExportFreeplane={handleExportFreeplane}
-        onExportWisemapping={handleExportWisemapping}
-        onExportXmind={handleExportXmind}
+        exportFormats={EXPORT_FORMATS}
+        onExport={handleExport}
         versionLabel={versionLabel}
         versionTooltip={versionTooltip}
         onTreeChange={setCurrentTree}

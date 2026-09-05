@@ -77,6 +77,7 @@ import { dragDelta, findDropTarget, nodesInMarquee, passedDragThreshold } from '
 import { useMindMapHistory } from './mindmap/useMindMapHistory';
 import { useViewport } from './mindmap/useViewport';
 import { readViewState } from './mindmap/viewport';
+import { buildExportFileBaseName as buildExportName } from '../utils/exportFileName';
 import { createNodeImageGlyph, type NodeImageGlyph } from '../utils/filePreview';
 import './MindMapEditor.css';
 
@@ -95,7 +96,7 @@ interface DragState {
 // ── Component ─────────────────────────────────────────────────────────────────
 export function DesktopMindMapEditor({
   initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
-  onExportMarkdown, onExportFreemind, onExportFreeplane, onExportWisemapping, onExportXmind, titleChanged, onRenameTitle, renamingTitle,
+  exportFormats, onExport, titleChanged, onRenameTitle, renamingTitle,
   versionLabel, versionTooltip,
   onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onShowHistory, onOpenNodeAttachment,
   onFetchNodeAttachmentContent,
@@ -489,19 +490,7 @@ export function DesktopMindMapEditor({
 
   useEffect(() => {
     if (!onTreeChange) return;
-    const tree: MindMapTree = {
-      version: 'tree',
-      root: cloneTree(root),
-      view_state: {
-        pan_x: Math.round(pan.x),
-        pan_y: Math.round(pan.y),
-        zoom: Number(zoom.toFixed(3)),
-        focus_mode: focusMode,
-        focus_anchor_id: focusAnchorId,
-        selected_node_id: selectedId,
-      },
-    };
-    onTreeChange(tree);
+    onTreeChange(currentTreeSnapshot());
   }, [onTreeChange, root]);
 
   useEffect(() => {
@@ -1228,42 +1217,38 @@ export function DesktopMindMapEditor({
   }, [disableAutoPanToSelection, selectedId, layout]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Save handler ──────────────────────────────────────────────────────────
+  /**
+   * The document as it stands, for saving and for every export.
+   *
+   * This object was written out seven times — twice on the save paths and once
+   * per export format — and every one of them had to agree about what the view
+   * state contains.
+   */
+  const currentTreeSnapshot = useCallback((): MindMapTree => ({
+    version: 'tree',
+    root: cloneTree(root),
+    view_state: {
+      pan_x: Math.round(pan.x),
+      pan_y: Math.round(pan.y),
+      zoom: Number(zoom.toFixed(3)),
+      focus_mode: focusMode,
+      focus_anchor_id: focusAnchorId,
+      selected_node_id: selectedId,
+    },
+  }), [root, pan, zoom, focusMode, focusAnchorId, selectedId]);
+
   const handleSave = useCallback(() => {
     if (saving) return;
-    onSave({
-      version: 'tree',
-      root: cloneTree(root),
-      view_state: {
-        pan_x: Math.round(pan.x),
-        pan_y: Math.round(pan.y),
-        zoom: Number(zoom.toFixed(3)),
-        focus_mode: focusMode,
-        focus_anchor_id: focusAnchorId,
-        selected_node_id: selectedId,
-      },
-    }, title);
+    onSave(currentTreeSnapshot(), title);
     setIsDirty(false);
   }, [focusAnchorId, focusMode, onSave, pan.x, pan.y, root, saving, selectedId, title, zoom]);
 
-  const buildExportFileBaseName = useCallback((baseTitle?: string) => {
-    const normalizedTitle = (baseTitle || title || 'mindmap').trim();
-    const safeTitle = normalizedTitle
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim();
-    // Only a real sequential version label ("v12") becomes a filename token.
-    // Anchored deliberately: local mode has no server-side version history and
-    // falls back to a date label ("v 6. 8. 2026"), which an unanchored match
-    // would read as version 6 — stamping the day of the month onto every
-    // export as "-v6".
-    const versionMatch = (versionLabel ?? '').trim().match(/^v\s*(\d+)$/i);
-    const versionToken = versionMatch ? `v${versionMatch[1]}` : null;
-    // Don't append the version token when the title already ends with it
-    // (e.g. title "guide-v3" + versionLabel "v3" → "guide-v3", not "guide-v3-v3")
-    const alreadyEndsWithVersion =
-      versionToken != null && new RegExp(`[-_ ]${versionToken}$`, 'i').test(safeTitle);
-    return (versionToken && !alreadyEndsWithVersion) ? `${safeTitle}-${versionToken}` : safeTitle;
-  }, [title, versionLabel]);
+  /** Shared with the page, which needs the same name for the same export. */
+  const buildExportFileBaseName = useCallback(
+    (baseTitle?: string) =>
+      buildExportName({ baseTitle, title, fallback: 'mindmap', versionLabel }),
+    [title, versionLabel],
+  );
 
   // ── PNG export ────────────────────────────────────────────────────────────
   const exportPng = useCallback(async () => {
@@ -2455,7 +2440,7 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="export">
               <span className="mm-toolbar-group-label">Output</span>
               <div className="mm-toolbar-group-btns">
-          {onExportMarkdown && (
+          {onExport && (exportFormats ?? []).length > 0 && (
             <div style={{ position: 'relative' }}>
               <button className="mm-btn" onClick={() => setShowExportMenu((v) => !v)} data-label="Export" title="Export">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
@@ -2466,31 +2451,15 @@ export function DesktopMindMapEditor({
                   style={{ position: 'absolute', ...(exportMenuAlign === 'left' ? { left: 0 } : { right: 0 }), top: '100%', zIndex: 300, background: 'var(--mm-node-fill, #1e293b)', border: '1px solid var(--mm-node-stroke, #334155)', borderRadius: 8, padding: '4px 0', minWidth: 150, maxHeight: exportMenuMaxH ?? undefined, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
-                  {onExportMarkdown && (
-                    <button className="mm-context-item" onClick={() => { onExportMarkdown({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
-                      Markdown (.md)
+                  {(exportFormats ?? []).map((format) => (
+                    <button
+                      key={format.id}
+                      className="mm-context-item"
+                      onClick={() => { void onExport?.(format, currentTreeSnapshot(), buildExportFileBaseName(title)); setShowExportMenu(false); }}
+                    >
+                      {format.label}
                     </button>
-                  )}
-                  {onExportFreemind && (
-                    <button className="mm-context-item" onClick={() => { onExportFreemind({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
-                      FreeMind (.mm)
-                    </button>
-                  )}
-                  {onExportFreeplane && (
-                    <button className="mm-context-item" onClick={() => { onExportFreeplane({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
-                      FreePlane (.mm)
-                    </button>
-                  )}
-                  {onExportWisemapping && (
-                    <button className="mm-context-item" onClick={() => { onExportWisemapping({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
-                      WiseMapping (.wxml)
-                    </button>
-                  )}
-                  {onExportXmind && (
-                    <button className="mm-context-item" onClick={() => { onExportXmind({ version: 'tree', root: cloneTree(root), view_state: { pan_x: Math.round(pan.x), pan_y: Math.round(pan.y), zoom: Number(zoom.toFixed(3)), focus_mode: focusMode, focus_anchor_id: focusAnchorId, selected_node_id: selectedId } }, buildExportFileBaseName(title)); setShowExportMenu(false); }}>
-                      XMind (.xmind)
-                    </button>
-                  )}
+                  ))}
                   <button className="mm-context-item" onClick={() => { exportPng(); setShowExportMenu(false); }}>
                     PNG image
                   </button>

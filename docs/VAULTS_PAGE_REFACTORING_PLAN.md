@@ -86,6 +86,15 @@ Steps 1 and 2 are worth doing even if nothing else happens.
 - **Do not start with step 6.** Moving components between files is the change
   that feels like progress while the duplication is untouched.
 
+## Open questions this surfaced
+
+**An export can be named nothing.** `buildExportFileBaseName` takes the first
+truthy of `baseTitle`, `title`, `fallback` and *then* trims — so a title that is
+only whitespace wins over the fallback and trims to `''`, and the download is
+called `.md`. There is a test pinning the current behaviour rather than fixing
+it, because the fix is a behaviour change: either trim before choosing, or treat
+a blank title as absent. Reachable by titling a vault with a space.
+
 ## Done when
 
 - The four import paths are one, and adding a format is one entry

@@ -1,5 +1,6 @@
 import type { MindMapTree, NodeAttachmentRef } from '../types';
 import type { LinkableVault } from './MindMapVaultLinkDialog';
+import type { ExportFormat } from '../utils/exportFormats';
 
 export interface NodeAttachmentViewerAsset {
   url: string;
@@ -25,11 +26,10 @@ export interface MindMapEditorProps {
   onShowHistory?: () => void;
   onDownloadEncrypted?: (fileBaseName?: string) => void;
   onDownloadJson?: (tree: MindMapTree, title: string) => void;
-  onExportMarkdown?: (tree: MindMapTree, title: string) => void;
-  onExportFreemind?: (tree: MindMapTree, title: string) => void;
-  onExportFreeplane?: (tree: MindMapTree, title: string) => void;
-  onExportWisemapping?: (tree: MindMapTree, title: string) => void;
-  onExportXmind?: (tree: MindMapTree, title: string) => void;
+  /** The formats the export menu offers, in order. */
+  exportFormats?: ExportFormat[];
+  /** Writes one export. `baseName` is the file name without its extension. */
+  onExport?: (format: ExportFormat, tree: MindMapTree, baseName: string) => void | Promise<void>;
   titleChanged?: boolean;
   onRenameTitle?: () => void;
   renamingTitle?: boolean;
