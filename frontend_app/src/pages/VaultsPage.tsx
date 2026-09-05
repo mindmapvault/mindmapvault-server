@@ -32,6 +32,13 @@ import type {
 import { getPlanErrorPrompt, type PlanErrorPrompt } from '../utils/planErrors';
 import { BOARD_LABEL, IMPORTED_SHARE_LABEL, visibleLabels } from '../utils/vaultLabels';
 import {
+  IMPORT_FORMATS,
+  IMPORT_MENU_ITEMS,
+  vaultTitleFromFileName,
+  type ImportFormat,
+  type ImportFormatId,
+} from './vaults/importFormats';
+import {
   deriveVaultState,
   labelsEqual,
   normalizeEncryptionMode,
@@ -41,9 +48,6 @@ import {
   sameRenameContext,
   vaultColorStorageKey,
 } from './vaults/vaultState';
-import { obsidianMarkdownToTree } from '../utils/markdownImport';
-import { freemindToTree } from '../utils/freemindImport';
-import { wisemappingToTree } from '../utils/wisemappingImport';
 import {
   getVaultPreviewStats,
   getVaultPreviewTheme,
@@ -776,20 +780,16 @@ export function VaultsPage() {
   const [creatingBoard, setCreatingBoard] = useState(false);
   const [createBoardError, setCreateBoardError] = useState('');
 
-  const [importing, setImporting] = useState(false);
-  const [importError, setImportError] = useState('');
+  /** Which format is importing right now, or null. */
+  const [importBusy, setImportBusy] = useState<ImportFormatId | null>(null);
+  /** Kept per format: each format shows its own failure, in its own wording. */
+  const [importErrors, setImportErrors] = useState<Partial<Record<ImportFormatId, string>>>({});
   const mdImportRef = useRef<HTMLInputElement>(null);
 
-  const [mmImporting, setMmImporting] = useState(false);
-  const [mmImportError, setMmImportError] = useState('');
   const mmImportRef = useRef<HTMLInputElement>(null);
 
-  const [wxmlImporting, setWxmlImporting] = useState(false);
-  const [wxmlImportError, setWxmlImportError] = useState('');
   const wxmlImportRef = useRef<HTMLInputElement>(null);
 
-  const [xmindImporting, setXmindImporting] = useState(false);
-  const [xmindImportError, setXmindImportError] = useState('');
   const xmindImportRef = useRef<HTMLInputElement>(null);
 
   const [showImportMenu, setShowImportMenu] = useState(false);
@@ -1325,14 +1325,27 @@ export function VaultsPage() {
     }
   };
 
-  const handleImportMarkdown = async (file: File) => {
+  const importRefs: Record<ImportFormatId, React.RefObject<HTMLInputElement>> = {
+    md: mdImportRef,
+    mm: mmImportRef,
+    wxml: wxmlImportRef,
+    xmind: xmindImportRef,
+  };
+
+  /**
+   * Imports one file as a new vault.
+   *
+   * Everything after parsing is identical for every format — encrypt the
+   * title, wrap a fresh DEK, upload the blob, cache a preview, open it — and
+   * was written out once per format before. Only `format.parse` differs.
+   */
+  const handleImport = async (format: ImportFormat, file: File) => {
     if (!sessionKeys) return;
-    setImporting(true);
-    setImportError('');
+    setImportBusy(format.id);
+    setImportErrors((prev) => ({ ...prev, [format.id]: undefined }));
     try {
-      const text = await file.text();
-      const vaultTitle = file.name.replace(/\.md$/i, '') || 'Imported vault';
-      const parsedRoot = obsidianMarkdownToTree(text, vaultTitle);
+      const vaultTitle = vaultTitleFromFileName(file.name, format.extensions);
+      const parsedRoot = await format.parse(file, vaultTitle);
       parsedRoot.id = 'root';
 
       const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
@@ -1357,127 +1370,18 @@ export function VaultsPage() {
 
       navigate(`/vaults/${created.id}`);
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Import failed');
+      setImportErrors((prev) => ({
+        ...prev,
+        [format.id]: err instanceof Error ? err.message : 'Import failed',
+      }));
     } finally {
-      setImporting(false);
-      if (mdImportRef.current) mdImportRef.current.value = '';
+      setImportBusy(null);
+      // Cleared so picking the same file again still fires a change event.
+      const input = importRefs[format.id].current;
+      if (input) input.value = '';
     }
   };
 
-  const handleImportFreemind = async (file: File) => {
-    if (!sessionKeys) return;
-    setMmImporting(true);
-    setMmImportError('');
-    try {
-      const text = await file.text();
-      const vaultTitle = file.name.replace(/\.mm$/i, '') || 'Imported vault';
-      const parsedRoot = freemindToTree(text, vaultTitle);
-
-      const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
-
-      const titleEnc = await encryptTitle(vaultTitle, sessionKeys.masterKey);
-      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
-        sessionKeys.classicalPubKey,
-        sessionKeys.pqPubKey,
-      );
-      const encBlob = await encryptTree(importedTree, dek);
-
-      const created = await storage.createVault({
-        title_encrypted: titleEnc,
-        eph_classical_public: toBase64(ephClassicalPublic),
-        eph_pq_ciphertext: toBase64(ephPqCiphertext),
-        wrapped_dek: toBase64(wrappedDek),
-      });
-
-      await storage.uploadBlob(created.id, encBlob);
-      const createdDetail = await storage.getVault(created.id);
-      void saveTreeVaultPreview(created.id, createdDetail.updated_at, importedTree);
-
-      navigate(`/vaults/${created.id}`);
-    } catch (err) {
-      setMmImportError(err instanceof Error ? err.message : 'Import failed');
-    } finally {
-      setMmImporting(false);
-      if (mmImportRef.current) mmImportRef.current.value = '';
-    }
-  };
-
-  const handleImportWisemapping = async (file: File) => {
-    if (!sessionKeys) return;
-    setWxmlImporting(true);
-    setWxmlImportError('');
-    try {
-      const text = await file.text();
-      const vaultTitle = file.name.replace(/\.(wxml|xml)$/i, '') || 'Imported vault';
-      const parsedRoot = wisemappingToTree(text, vaultTitle);
-
-      const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
-
-      const titleEnc = await encryptTitle(vaultTitle, sessionKeys.masterKey);
-      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
-        sessionKeys.classicalPubKey,
-        sessionKeys.pqPubKey,
-      );
-      const encBlob = await encryptTree(importedTree, dek);
-
-      const created = await storage.createVault({
-        title_encrypted: titleEnc,
-        eph_classical_public: toBase64(ephClassicalPublic),
-        eph_pq_ciphertext: toBase64(ephPqCiphertext),
-        wrapped_dek: toBase64(wrappedDek),
-      });
-
-      await storage.uploadBlob(created.id, encBlob);
-      const createdDetail = await storage.getVault(created.id);
-      void saveTreeVaultPreview(created.id, createdDetail.updated_at, importedTree);
-
-      navigate(`/vaults/${created.id}`);
-    } catch (err) {
-      setWxmlImportError(err instanceof Error ? err.message : 'Import failed');
-    } finally {
-      setWxmlImporting(false);
-      if (wxmlImportRef.current) wxmlImportRef.current.value = '';
-    }
-  };
-
-  const handleImportXmind = async (file: File) => {
-    if (!sessionKeys) return;
-    setXmindImporting(true);
-    setXmindImportError('');
-    try {
-      const fileData = await file.arrayBuffer();
-      const vaultTitle = file.name.replace(/\.xmind$/i, '') || 'Imported vault';
-      const { xmindToTree } = await import('../utils/xmindImport');
-      const parsedRoot = xmindToTree(fileData, vaultTitle);
-
-      const importedTree: MindMapTree = { version: 'tree', root: parsedRoot };
-
-      const titleEnc = await encryptTitle(vaultTitle, sessionKeys.masterKey);
-      const { ephClassicalPublic, ephPqCiphertext, wrappedDek, dek } = await hybridEncap(
-        sessionKeys.classicalPubKey,
-        sessionKeys.pqPubKey,
-      );
-      const encBlob = await encryptTree(importedTree, dek);
-
-      const created = await storage.createVault({
-        title_encrypted: titleEnc,
-        eph_classical_public: toBase64(ephClassicalPublic),
-        eph_pq_ciphertext: toBase64(ephPqCiphertext),
-        wrapped_dek: toBase64(wrappedDek),
-      });
-
-      await storage.uploadBlob(created.id, encBlob);
-      const createdDetail = await storage.getVault(created.id);
-      void saveTreeVaultPreview(created.id, createdDetail.updated_at, importedTree);
-
-      navigate(`/vaults/${created.id}`);
-    } catch (err) {
-      setXmindImportError(err instanceof Error ? err.message : 'Import failed');
-    } finally {
-      setXmindImporting(false);
-      if (xmindImportRef.current) xmindImportRef.current.value = '';
-    }
-  };
 
   const handleDelete = async (id: string) => {
     setDeletingVaultId(id);
@@ -1663,68 +1567,45 @@ export function VaultsPage() {
             <h1 className="text-xl font-semibold text-white">Your Vaults</h1>
             <div className="flex items-center gap-2">
               {/* Hidden file inputs */}
-              <input ref={mdImportRef} type="file" accept=".md" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportMarkdown(f); }} />
-              <input ref={mmImportRef} type="file" accept=".mm" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportFreemind(f); }} />
-              <input ref={wxmlImportRef} type="file" accept=".wxml,.xml" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportWisemapping(f); }} />
-              <input ref={xmindImportRef} type="file" accept=".xmind" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImportXmind(f); }} />
+              {IMPORT_FORMATS.map((format) => (
+                <input
+                  key={format.id}
+                  ref={importRefs[format.id]}
+                  type="file"
+                  accept={format.accept}
+                  style={{ display: 'none' }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleImport(format, f); }}
+                />
+              ))}
 
               {/* Import dropdown */}
               <div ref={importMenuRef} style={{ position: 'relative' }}>
                 <button
                   onClick={() => setShowImportMenu((v) => !v)}
-                  disabled={!hasKeys || importing || mmImporting || wxmlImporting || xmindImporting}
+                  disabled={!hasKeys || importBusy !== null}
                   title="Import a vault from a file"
                   className="flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                   </svg>
-                  {(importing || mmImporting || wxmlImporting || xmindImporting) ? 'Importing…' : 'Import'}
+                  {importBusy !== null ? 'Importing…' : 'Import'}
                   <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 {showImportMenu && (
                   <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--color-surface-1, #1e293b)', border: '1px solid var(--color-border, #334155)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
-                    <button
-                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
-                      onClick={() => { mdImportRef.current?.click(); setShowImportMenu(false); }}
-                    >
-                      <span className="font-medium">Markdown</span>
-                      <span className="ml-2 text-xs text-slate-500">.md</span>
-                    </button>
-                    <button
-                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
-                      onClick={() => { mmImportRef.current?.click(); setShowImportMenu(false); }}
-                    >
-                      <span className="font-medium">FreeMind</span>
-                      <span className="ml-2 text-xs text-slate-500">.mm</span>
-                    </button>
-                    <button
-                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
-                      onClick={() => { mmImportRef.current?.click(); setShowImportMenu(false); }}
-                    >
-                      <span className="font-medium">FreePlane</span>
-                      <span className="ml-2 text-xs text-slate-500">.mm</span>
-                    </button>
-                    <button
-                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
-                      onClick={() => { wxmlImportRef.current?.click(); setShowImportMenu(false); }}
-                    >
-                      <span className="font-medium">WiseMapping</span>
-                      <span className="ml-2 text-xs text-slate-500">.wxml</span>
-                    </button>
-                    <button
-                      className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
-                      onClick={() => { xmindImportRef.current?.click(); setShowImportMenu(false); }}
-                    >
-                      <span className="font-medium">XMind</span>
-                      <span className="ml-2 text-xs text-slate-500">.xmind</span>
-                    </button>
+                    {IMPORT_MENU_ITEMS.map((item) => (
+                      <button
+                        key={`${item.format}-${item.label}`}
+                        className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
+                        onClick={() => { importRefs[item.format].current?.click(); setShowImportMenu(false); }}
+                      >
+                        <span className="font-medium">{item.label}</span>
+                        <span className="ml-2 text-xs text-slate-500">{item.extension}</span>
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1776,26 +1657,11 @@ export function VaultsPage() {
               </div>
             </div>
           </div>
-          {importError && (
-            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
-              Import failed: {importError}
+          {IMPORT_FORMATS.map((format) => importErrors[format.id] && (
+            <div key={format.id} className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {format.errorLabel}: {importErrors[format.id]}
             </div>
-          )}
-          {mmImportError && (
-            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
-              .mm import failed: {mmImportError}
-            </div>
-          )}
-          {wxmlImportError && (
-            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
-              WiseMapping import failed: {wxmlImportError}
-            </div>
-          )}
-          {xmindImportError && (
-            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-400">
-              XMind import failed: {xmindImportError}
-            </div>
-          )}
+          ))}
 
           {isLocalMode && (
             <div className="mb-6 rounded-xl border border-slate-700 bg-surface-1 p-4">
