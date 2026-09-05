@@ -1368,7 +1368,7 @@ export function DesktopMindMapEditor({
       'node.dates': () => setShowDateDialog((v) => !v),
       'node.url': () => setShowUrlDialog((v) => !v),
       'node.labels': () => setShowTagDialog((v) => !v),
-      'node.linkVault': () => { if (onOpenVaultLink) openVaultLinkPicker(selectedId); },
+      'node.linkVault': () => openVaultLinkPicker(selectedId),
       'view.root': () => setSelectedId('root'),
       'view.focusMode': () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); },
       'view.zoomIn': () => viewport.zoomBy(0.15),
@@ -1400,6 +1400,7 @@ export function DesktopMindMapEditor({
       if (actionId === 'vault.files' && !onOpenSecurePanel) return;
       if (actionId === 'vault.shares' && !onOpenSecurePanel) return;
       if (actionId === 'vault.history' && !onShowHistory) return;
+      if (actionId === 'node.linkVault' && !onOpenVaultLink) return;
       e.preventDefault();
       actionHandlers[actionId]();
       const def = SHORTCUTS.find((sc) => sc.id === actionId);
