@@ -1069,3 +1069,34 @@ code {
     grid-auto-columns: auto;
   }
 }
+
+/* ── Password field with a reveal toggle ─────────────────────────────────
+   The wrapper inherits the flex sizing the bare input used to carry, so a
+   field inside a row keeps the width it had. */
+.password-field {
+  position: relative;
+  display: flex;
+  flex: 1 1 300px;
+  min-width: 220px;
+}
+.password-field > input {
+  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 42px;
+}
+.password-reveal {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  display: flex;
+  width: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+}
+.password-reveal:hover,
+.password-reveal:focus-visible { color: var(--text-main); }

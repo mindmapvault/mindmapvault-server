@@ -1,4 +1,5 @@
 import { FormEvent, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { PasswordInput } from './PasswordInput';
 
 // This console is for someone running MindMapVault on their own hardware — a
 // box in a cupboard, a VPS, a NAS — usually for themselves and a handful of
@@ -872,8 +873,7 @@ export default function App() {
             </div>
 
             <form className="auth-form" onSubmit={handleAuthSubmit}>
-              <input
-                type="password"
+              <PasswordInput
                 value={tokenInput}
                 onChange={(event) => setTokenInput(event.target.value)}
                 placeholder="Admin bearer token"
