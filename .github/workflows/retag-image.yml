@@ -1,0 +1,83 @@
+name: Retag Published Image
+
+# Points an existing release tag at a digest that is already published, without
+# rebuilding. The build workflow can only publish what it just built, so a tag
+# applied to the wrong image cannot be corrected there: republishing it would
+# produce different bytes under a version that shipped as something else.
+#
+# Written for exactly that — v0.5.2 was retagged onto the 0.5.3 image when a
+# release went out with backend/Cargo.toml still on the previous version.
+#
+# This moves a release tag. Anyone pinned to it gets different bytes on their
+# next pull, so it is manual-only and takes the digest in full.
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: 'Digest to point at, e.g. sha256:f1917eeb… (must already be published)'
+        required: true
+      tag:
+        description: 'Release tag to move, e.g. v0.5.2'
+        required: true
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Validate inputs
+        env:
+          DIGEST: ${{ inputs.digest }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::digest must be sha256:<64 hex>"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must look like v1.2.3"; exit 1; }
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Is Docker Hub configured?
+        id: hub
+        env:
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
+        run: |
+          if [ -n "$DOCKERHUB_NAMESPACE" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Docker Hub
+        if: steps.hub.outputs.enabled == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Point the tag at the digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+          TAG: ${{ inputs.tag }}
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
+        run: |
+          ghcr="ghcr.io/${GITHUB_REPOSITORY,,}"
+          repos=("$ghcr")
+          if [ -n "$DOCKERHUB_NAMESPACE" ]; then
+            repos+=("${DOCKERHUB_NAMESPACE}/$(basename "${GITHUB_REPOSITORY,,}")")
+          fi
+
+          for repo in "${repos[@]}"; do
+            echo "::group::$repo:$TAG -> $DIGEST"
+            # imagetools copies the manifest list, so a multi-arch image stays
+            # multi-arch and the bytes are the ones already published.
+            docker buildx imagetools create -t "${repo}:${TAG}" "${repo}@${DIGEST}"
+            docker buildx imagetools inspect "${repo}:${TAG}" | head -5
+            echo "::endgroup::"
+          done
