@@ -2320,8 +2320,8 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="home">
               <span className="mm-toolbar-group-label">Edit</span>
               <div className="mm-toolbar-group-btns">
-          <button className="mm-btn" onClick={undo} data-label="Undo" data-shortcut={formatButtonShortcut('edit.undo', keyboardLayout)} title="Undo (F9)" disabled={!history.canUndo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
-          <button className="mm-btn" onClick={redo} data-label="Redo" data-shortcut={formatButtonShortcut('edit.redo', keyboardLayout)} title="Redo (F10)" disabled={!history.canRedo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
+          <button className="mm-btn mm-essential" onClick={undo} data-label="Undo" data-shortcut={formatButtonShortcut('edit.undo', keyboardLayout)} title="Undo (F9)" disabled={!history.canUndo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
+          <button className="mm-btn mm-essential" onClick={redo} data-label="Redo" data-shortcut={formatButtonShortcut('edit.redo', keyboardLayout)} title="Redo (F10)" disabled={!history.canRedo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
               </div>
             </div>
           )}
@@ -2329,9 +2329,9 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="home">
               <span className="mm-toolbar-group-label">Node</span>
               <div className="mm-toolbar-group-btns">
-          <button className="mm-btn" onClick={() => addChild(selectedId)} data-label="Child" data-shortcut={formatButtonShortcut('node.addChild', keyboardLayout)} title="Add child (Tab)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg></button>
-          <button className="mm-btn" onClick={() => addSibling(selectedId)} data-label="Sibling" data-shortcut={formatButtonShortcut('node.addSibling', keyboardLayout)} title="Add sibling (Enter)" disabled={selectedId === 'root'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5H7m0 0v12m0-12l-3 3m3-3l3 3"/></svg></button>
-          <button className="mm-btn mm-btn--danger" onClick={() => hasBulk ? bulkDelete() : deleteNode(selectedId)} data-label="Delete" data-shortcut={formatButtonShortcut('node.delete', keyboardLayout)} title="Delete (Del)" disabled={selectedId === 'root' && !hasBulk}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+          <button className="mm-btn mm-essential" onClick={() => addChild(selectedId)} data-label="Child" data-shortcut={formatButtonShortcut('node.addChild', keyboardLayout)} title="Add child (Tab)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg></button>
+          <button className="mm-btn mm-essential" onClick={() => addSibling(selectedId)} data-label="Sibling" data-shortcut={formatButtonShortcut('node.addSibling', keyboardLayout)} title="Add sibling (Enter)" disabled={selectedId === 'root'}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5H7m0 0v12m0-12l-3 3m3-3l3 3"/></svg></button>
+          <button className="mm-btn mm-btn--danger mm-essential" onClick={() => hasBulk ? bulkDelete() : deleteNode(selectedId)} data-label="Delete" data-shortcut={formatButtonShortcut('node.delete', keyboardLayout)} title="Delete (Del)" disabled={selectedId === 'root' && !hasBulk}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
               </div>
             </div>
           )}
@@ -2359,7 +2359,7 @@ export function DesktopMindMapEditor({
               <span className="mm-toolbar-group-label">Content</span>
               <div className="mm-toolbar-group-btns">
           <button
-            className={`mm-btn mm-btn--notes${selNodeAttachmentCount > 0 ? ' mm-btn--notes-has-files' : ''}`}
+            className={`mm-btn mm-btn--notes mm-essential${selNodeAttachmentCount > 0 ? ' mm-btn--notes-has-files' : ''}`}
             data-label="Notes"
             data-shortcut={formatButtonShortcut('node.notesToggle', keyboardLayout)}
             onClick={() => openNotes(selectedId)}
@@ -2459,7 +2459,7 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="view">
               <span className="mm-toolbar-group-label">Find</span>
               <div className="mm-toolbar-group-btns">
-          <button className="mm-btn" onClick={() => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }} data-label="Search" data-shortcut={formatButtonShortcut('find.search', keyboardLayout)} title="Search (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+          <button className="mm-btn mm-essential" onClick={() => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); }} data-label="Search" data-shortcut={formatButtonShortcut('find.search', keyboardLayout)} title="Search (Ctrl+F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
           <button className="mm-btn" onClick={() => setShowShortcuts((v) => !v)} data-label="Shortcuts" data-shortcut={formatButtonShortcut('find.shortcuts', keyboardLayout)} title="Shortcuts (F1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg></button>
               </div>
             </div>
