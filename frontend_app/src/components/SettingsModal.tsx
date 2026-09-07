@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { authApi } from '../api/auth';
 import type { UserProfile } from '../types';
+import { APP_VERSION, CHANGELOG, type ChangeKind } from '../changelog';
 import { PasswordRotationForm } from './PasswordRotationForm';
 import { PwaInstallButton } from './PwaInstallButton';
 import { VaultIcon } from './Logo';
@@ -18,7 +19,13 @@ import {
 } from '../store/ui';
 import { isMac } from '../platform/isMac';
 
-export type SettingsTab = 'account' | 'appearance' | 'interface' | 'support';
+export type SettingsTab = 'account' | 'appearance' | 'interface' | 'changelog' | 'help';
+
+const changeKindStyle: Record<ChangeKind, { label: string; color: string; bg: string }> = {
+  feature: { label: 'New', color: '#a78bfa', bg: 'rgba(124,58,237,0.14)' },
+  improvement: { label: 'Improved', color: '#38bdf8', bg: 'rgba(56,189,248,0.14)' },
+  fix: { label: 'Fixed', color: '#34d399', bg: 'rgba(16,185,129,0.14)' },
+};
 
 const PRESETS = [
   '#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f97316',
@@ -331,7 +338,14 @@ const icons: Record<SettingsTab, ReactNode> = {
       <path strokeLinecap="round" d="M3 9h18M8 9v11" />
     </svg>
   ),
-  support: (
+  changelog: (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+      <rect x="9" y="3" width="6" height="4" rx="1" />
+      <path strokeLinecap="round" d="M9 12h6M9 16h4" />
+    </svg>
+  ),
+  help: (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
       <circle cx="12" cy="12" r="9" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 9.5a2.5 2.5 0 1 1 3.2 2.4c-.5.2-.7.6-.7 1.1v.5" />
@@ -344,7 +358,8 @@ const tabTitles: Record<SettingsTab, string> = {
   account: 'Account',
   appearance: 'Appearance',
   interface: 'Interface',
-  support: 'Help',
+  changelog: "What's New",
+  help: 'Help',
 };
 
 interface SettingsModalProps {
@@ -371,7 +386,7 @@ export function SettingsModal({ open, onClose, initialTab = 'account' }: Setting
   const [deleteError, setDeleteError] = useState('');
   const deletePhrase = username?.trim() || 'DELETE';
 
-  const order: SettingsTab[] = ['account', 'appearance', 'interface', 'support'];
+  const order: SettingsTab[] = ['account', 'appearance', 'interface', 'changelog', 'help'];
 
   useEffect(() => {
     if (open) setTab(initialTab);
@@ -503,7 +518,8 @@ export function SettingsModal({ open, onClose, initialTab = 'account' }: Setting
 
             {tab === 'interface' && <InterfaceTab />}
 
-            {tab === 'support' && <SupportTab />}
+            {tab === 'changelog' && <ChangelogTab />}
+            {tab === 'help' && <HelpTab />}
           </div>
         </div>
       </div>
@@ -910,7 +926,7 @@ function AppearanceTab({
       </section>
 
       <section className="border-t pt-6" style={{ borderColor: 'var(--border)' }}>
-        <SectionLabel>Editor</SectionLabel>
+        <SectionLabel>Autosave</SectionLabel>
         <label className="mb-2 block text-sm" style={{ color: 'var(--text-primary)' }}>Autosave</label>
         <select
           value={autosaveMode}
@@ -940,7 +956,53 @@ function AppearanceTab({
 
 // ─── Help ────────────────────────────────────────────────────────────────────
 
-function SupportTab() {
+function ChangelogTab() {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>What's new</SectionLabel>
+        <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)' }}>
+          v{APP_VERSION}
+        </span>
+      </div>
+
+      {CHANGELOG.map((entry) => (
+        <section key={entry.version} className="rounded-xl p-4" style={{ background: 'var(--surface-2)' }}>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Version {entry.version}</h3>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {new Date(entry.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+            </span>
+          </div>
+          {entry.highlights && (
+            <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{entry.highlights}</p>
+          )}
+          <ul className="mt-3 space-y-2.5">
+            {entry.items.map((item, i) => {
+              const k = changeKindStyle[item.kind];
+              return (
+                <li key={i} className="flex gap-2.5">
+                  <span
+                    className="mt-0.5 h-fit shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+                    style={{ background: k.bg, color: k.color }}
+                  >
+                    {k.label}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{item.title}</p>
+                    {item.desc && <p className="mt-0.5 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>{item.desc}</p>}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function HelpTab() {
   return (
     <div className="space-y-6">
       <section>
@@ -966,6 +1028,24 @@ function SupportTab() {
           style={{ background: 'var(--surface-2)', color: 'var(--text-secondary)', border: '1px solid var(--border-light)' }}
         >
           Open project repository
+        </a>
+        <a
+          href="https://github.com/mindmapvault/mindmapvault-server/issues"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-3 inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition"
+          style={{ background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-light)' }}
+        >
+          Report an issue
+        </a>
+        <a
+          href="https://github.com/mindmapvault/mindmapvault-server/discussions"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-3 inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition"
+          style={{ background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-light)' }}
+        >
+          Ask in Discussions
         </a>
         <a
           href="https://www.mindmapvault.com/homelab/"
