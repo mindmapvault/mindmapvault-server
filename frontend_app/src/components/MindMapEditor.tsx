@@ -2598,7 +2598,7 @@ export function DesktopMindMapEditor({
               </div>
             </div>
           )}
-          {densityPreset === 'lean' && <SettingsButton className="mm-btn" iconClassName="" />}
+          {densityPreset === 'lean' && <SettingsButton className="mm-btn mm-essential" iconClassName="" />}
         </div>
       </div>}
 
