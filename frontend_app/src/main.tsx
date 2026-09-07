@@ -5,6 +5,7 @@ import App from './App';
 import { ConnectorProvider } from './app-core/connectors/provider';
 import { createConnectorRegistry } from './platform/bootstrap';
 import { startServiceWorker } from './pwa/serviceWorker';
+import { applyCanvasPalette } from './utils/canvasPalette';
 
 const connectorRegistry = createConnectorRegistry();
 
@@ -27,7 +28,7 @@ startServiceWorker();
     }
     // Painted before React mounts so a custom canvas does not flash the
     // theme default first.
-    if (state?.canvasColor) document.documentElement.style.setProperty('--mm-canvas-bg', state.canvasColor);
+    if (state?.canvasColor) applyCanvasPalette(document.documentElement, state.canvasColor);
   } catch { /* ignore */ }
 })();
 
