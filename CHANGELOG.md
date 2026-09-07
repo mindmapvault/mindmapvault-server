@@ -4,6 +4,31 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.5.3] - 2026-09-07
+
+A What's New tab, a canvas colour the rest of the editor follows, and the Lean
+toolbar put back together.
+
+### Added
+- **A "What's New" tab in Settings**, driven by `frontend_app/src/changelog.ts` the way the other two apps already were. Keep `APP_VERSION` equal to `package.json` and to the newest entry on every release.
+- **A canvas background of your choosing**, in Settings → Appearance: ten presets, a colour picker, and "Match theme" to hand it back. Nodes, toolbar, status bar, notes and shortcut panels are all mixed from that colour, so a green canvas no longer leaves slate-blue nodes floating on it. The canvas decides light or dark rather than the app theme, so a pale background gets dark text either way; the accent colour is left alone, and PNG/PDF exports pick the background up automatically.
+- **A URL button in the toolbar.** The Insert tab is now grouped Content / Links / Files, with the vault link and the web link together.
+- **Issues and Discussions links in Settings → Help**, alongside the repository and the self-hosting guide.
+
+### Fixed
+- **Lean density left the toolbar empty.** Lean hides every button not marked essential, and none were — so the row came up with nothing in it but the overflow. Undo, redo, add child, add sibling, delete, notes and search are back, matching the FOSS build.
+- **The settings gear was unreachable at Lean density**, and the theme toggle with it: both sat in a toolbar group that Lean hides, and the gear then needed marking essential to survive the rule that hides everything else.
+- **The theme toggle and settings gear were missing entirely at Large density.** They were rendered only when the density was *not* Large, so switching to the ribbon lost them; they now sit in the nav row.
+- **Task checkboxes could not be ticked in read mode.** The markdown renderer draws GFM task lists as disabled checkboxes. Clicking one now rewrites the note, and the editor is kept in step so switching back to write mode does not show — and then save — the older text.
+- **A bare `[x]` or `[ ]` was not a checkbox.** Only the bulleted form counted; both are now drawn and toggled in the live editor and in read mode, with the note keeping the text as typed. Task syntax inside a fenced code block stays literal.
+- **A reveal toggle on the admin console's token field**, the last password input in the repository without one.
+- The overflow menu listed Notes twice — once in the row, once in the menu — and ordered its entries differently from the other apps.
+
+### Changed
+- **Settings tabs follow one order across the three apps**: Account, Appearance, Interface, What's New, Help. Sections inside them follow too — the Appearance section holding the autosave control is called Autosave rather than "Editor".
+- **Settings → Help points at the repository rather than the maintainer's inbox.** A self-hosted instance's support path is its own operator plus Issues and Discussions, where the next person with the same problem can find the answer. Email support belongs to the hosted product.
+- The `support` settings tab id is now `help`, matching the other apps.
+
 ## [0.5.2] - 2026-09-05
 
 A security fix in the guided installer, a node-to-vault link, and four bug

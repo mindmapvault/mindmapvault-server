@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.5.2';
+export const APP_VERSION = '0.5.3';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,48 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.5.3',
+    date: '2026-09-07',
+    highlights: 'A canvas colour the whole editor follows, the Lean toolbar put back together, and this tab.',
+    items: [
+      {
+        kind: 'feature',
+        title: 'This tab',
+        desc: 'Settings now has a What\u2019s New page, so a release explains itself without going to the repository.',
+      },
+      {
+        kind: 'feature',
+        title: 'Pick your own canvas background',
+        desc: 'Settings \u2192 Appearance. The nodes, toolbar and panels take their colour from it too, so the editor stays of a piece \u2014 and a pale background gets dark text whichever mode you are in. "Match theme" puts it back.',
+      },
+      {
+        kind: 'feature',
+        title: 'A URL button in the toolbar',
+        desc: 'The Insert tab is grouped Content, Links and Files, with the vault link and the web link side by side.',
+      },
+      {
+        kind: 'fix',
+        title: 'The Lean toolbar was empty',
+        desc: 'Undo, redo, add child, add sibling, delete, notes and search are back in the row, with everything else behind More \u2014 and the settings gear no longer disappears with them.',
+      },
+      {
+        kind: 'fix',
+        title: 'Theme and settings vanished at Large density',
+        desc: 'Both were rendered only at the smaller densities. They now sit in the top row, whichever ribbon tab is open.',
+      },
+      {
+        kind: 'fix',
+        title: 'Checkboxes in a note can be ticked while reading',
+        desc: 'They were drawn but did nothing outside the editor. A plain "[x]" on its own line now counts as a checkbox too, not just the list form.',
+      },
+      {
+        kind: 'improvement',
+        title: 'Help points at the repository',
+        desc: 'Issues for defects, Discussions for questions \u2014 both answered in the open, where the next person with the same problem can find them.',
+      },
+    ],
+  },
   {
     version: '0.5.2',
     date: '2026-09-05',
