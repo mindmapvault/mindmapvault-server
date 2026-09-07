@@ -1997,6 +1997,9 @@
   font-size: 12px;
 }
 
+/* Read-mode task boxes are the write-mode ones: same control, same feel,
+   whichever side of the note you are on. */
+.mm-notes-task,
 .mm-cm-task {
   appearance: none;
   width: 15px;
@@ -2009,7 +2012,9 @@
   position: relative;
   background: transparent;
 }
+.mm-notes-task:checked,
 .mm-cm-task:checked { background: var(--accent); border-color: var(--accent); }
+.mm-notes-task:checked::after,
 .mm-cm-task:checked::after {
   content: "";
   position: absolute;
@@ -2091,6 +2096,8 @@
 .mm-notes-preview ol { list-style: decimal; }
 .mm-notes-preview ul { list-style: disc; }
 .mm-notes-preview li { margin: 2px 0; }
+/* A task item carries its own box, so it does not also want a bullet. */
+.mm-notes-preview li.mm-notes-task-item { list-style: none; margin-left: -18px; }
 .mm-notes-preview code {
   font-family: ui-monospace, monospace;
   font-size: 12px;
