@@ -1013,8 +1013,9 @@ function HelpTab() {
           full.
         </p>
         <p className="mt-3 text-sm leading-6" style={{ color: 'var(--text-secondary)' }}>
-          For documentation, bug reports, and pull requests, use the public repository. Product
-          questions and feedback about MindMapVault itself can be emailed to the maintainer.
+          For documentation, bug reports, feature requests and pull requests, use the public
+          repository. Issues are for defects, Discussions for questions — both get answered in
+          the open, where the next person with the same problem can find the answer.
         </p>
       </section>
 
@@ -1055,13 +1056,6 @@ function HelpTab() {
           style={{ background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-light)' }}
         >
           Self-hosting guide
-        </a>
-        <a
-          href="mailto:admin@mindmapvault.com"
-          className="mt-3 inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition"
-          style={{ background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-light)' }}
-        >
-          Email admin@mindmapvault.com
         </a>
       </section>
     </div>
