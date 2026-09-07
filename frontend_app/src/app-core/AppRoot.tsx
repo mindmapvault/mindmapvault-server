@@ -27,7 +27,7 @@ function darken(hex: string, amount = 25): string {
 }
 
 export default function AppRoot() {
-  const { mode, primaryColor, autoLogoutMinutes } = useThemeStore();
+  const { mode, primaryColor, canvasColor, autoLogoutMinutes } = useThemeStore();
   const appMode = useModeStore((s) => s.mode);
   const setAppMode = useModeStore((s) => s.setMode);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -40,7 +40,11 @@ export default function AppRoot() {
     root.classList.toggle('light', mode === 'light');
     root.style.setProperty('--accent', primaryColor);
     root.style.setProperty('--accent-hover', darken(primaryColor));
-  }, [mode, primaryColor]);
+    // Removing the property, rather than writing a default, is what lets the
+    // light/dark stylesheets take the canvas back when the override is cleared.
+    if (canvasColor) root.style.setProperty('--mm-canvas-bg', canvasColor);
+    else root.style.removeProperty('--mm-canvas-bg');
+  }, [mode, primaryColor, canvasColor]);
 
   useEffect(() => {
     if (isDesktop && appMode === null) {

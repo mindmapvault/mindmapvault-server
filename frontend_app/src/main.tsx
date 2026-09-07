@@ -15,7 +15,7 @@ startServiceWorker();
   try {
     const raw = localStorage.getItem('mindmapvault-theme') ?? localStorage.getItem('crypt-mind-theme');
     if (!raw) return;
-    const { state } = JSON.parse(raw) as { state: { mode?: string; primaryColor?: string } };
+    const { state } = JSON.parse(raw) as { state: { mode?: string; primaryColor?: string; canvasColor?: string | null } };
     if (state?.mode === 'light') document.documentElement.classList.add('light');
     if (state?.primaryColor) {
       const hex = state.primaryColor.replace('#', '');
@@ -25,6 +25,9 @@ startServiceWorker();
       document.documentElement.style.setProperty('--accent', state.primaryColor);
       document.documentElement.style.setProperty('--accent-hover', `#${darken(r)}${darken(g)}${darken(b)}`);
     }
+    // Painted before React mounts so a custom canvas does not flash the
+    // theme default first.
+    if (state?.canvasColor) document.documentElement.style.setProperty('--mm-canvas-bg', state.canvasColor);
   } catch { /* ignore */ }
 })();
 
