@@ -2549,19 +2549,18 @@ export function DesktopMindMapEditor({
                     ['node.progress', 'Progress', () => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); }],
                     ['node.colour', 'Colour', () => setShowColorPicker((v) => !v)],
                     ['node.icons', 'Icons', () => setShowIconPicker((v) => !v)],
-                    ['node.notesToggle', 'Notes', () => openNotes(selectedId)],
                     ['node.dates', 'Dates', () => setShowDateDialog(true)],
                     ['node.labels', 'Tags', () => setShowTagDialog((v) => !v)],
-                    ['node.addImage', 'Image', () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }],
-                    ['node.attachFile', 'Attach file', () => openAttachFiles()],
-                    ['node.linkVault', 'Link to vault', () => openVaultLinkPicker(selectedId)],
-                    ['node.url', 'URL', () => setShowUrlDialog((v) => !v)],
                     ['view.zoomIn', 'Zoom in', () => viewport.zoomBy(0.15)],
                     ['view.zoomOut', 'Zoom out', () => viewport.zoomBy(-0.15)],
                     ['view.zoomFit', 'Fit view', fitView],
                     ['node.autoAlign', 'Auto-align', () => autoAlignSubtree(selectedId)],
                     ['view.focusMode', 'Focus mode', () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }],
                     ['find.shortcuts', 'Shortcuts', () => setShowShortcuts((v) => !v)],
+                    ['node.url', 'URL', () => setShowUrlDialog((v) => !v)],
+                    ['node.addImage', 'Image', () => { nodeImageTargetRef.current = selectedId; nodeImageInputRef.current?.click(); }],
+                    ['node.attachFile', 'Attach file', () => openAttachFiles()],
+                    ['node.linkVault', 'Link to vault', () => openVaultLinkPicker(selectedId)],
                     ['vault.files', 'Vault files', () => onOpenSecurePanel?.('attachments')],
                     ['vault.shares', 'Share exports', () => onOpenSecurePanel?.('shares')],
                     ['vault.history', 'Version history', () => onShowHistory?.()],
@@ -2599,6 +2598,7 @@ export function DesktopMindMapEditor({
               </div>
             </div>
           )}
+          {densityPreset === 'lean' && <SettingsButton className="mm-btn" iconClassName="" />}
         </div>
       </div>}
 
