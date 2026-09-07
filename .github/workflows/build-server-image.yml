@@ -184,7 +184,14 @@ jobs:
             echo "tag=$REQUESTED" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+            REF_TAG="${GITHUB_REF#refs/tags/}"
+            if [ "$REF_TAG" != "v${VERSION}" ]; then
+              echo "Tag $REF_TAG but backend/Cargo.toml says v${VERSION}." >&2
+              echo "Bump the crate version to match the tag, or retag." >&2
+              echo "Publishing would put $REF_TAG and v${VERSION} on one image." >&2
+              exit 1
+            fi
+            echo "tag=$REF_TAG" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
