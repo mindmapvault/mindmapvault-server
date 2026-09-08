@@ -33,6 +33,10 @@ function stripHtml(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ')
+    // Numeric character references — FreePlane writes &#160; for a non-breaking
+    // space inside rich text, and they must decode or words glue together.
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -54,12 +58,10 @@ function parseNode(element: Element): MindMapTreeNode {
   const rawText = element.getAttribute('TEXT') ?? '';
   const children = Array.from(element.children);
 
-  // FreePlane can store node text in two ways:
+  // FreePlane can store node text in three ways:
   //   1. TEXT attribute with plain text  → use directly
-  //   2. TEXT attribute with an HTML document string (e.g. "<html><head>…</head><body>…</body></html>")
-  //      → must be stripped to plain text
-  //   3. TEXT attribute absent/empty + <richcontent TYPE="NODE"> child
-  //      → extract and strip from the richcontent element
+  //   2. TEXT attribute holding an HTML document string → strip to plain text
+  //   3. TEXT absent/empty + <richcontent TYPE="NODE"> child → extract and strip
   //
   // When TEXT looks like HTML we still check richcontent first (it's more
   // structured); only fall back to stripping the raw TEXT value if no
@@ -88,7 +90,6 @@ function parseNode(element: Element): MindMapTreeNode {
   const link = element.getAttribute('LINK');
 
   const node = makeNode(text);
-
   // Prefer TEXT colour; fall back to background colour so something is
   // preserved if only BACKGROUND_COLOR is set.
   if (color) {
@@ -96,27 +97,32 @@ function parseNode(element: Element): MindMapTreeNode {
   } else if (bgColor) {
     node.color = bgColor;
   }
-
   node.collapsed = folded;
-
   if (position === 'left' || position === 'right') {
     node.side = position;
   }
-
   if (link) {
     node.urls = [{ url: link, label: '' }];
   }
 
   // Notes from <richcontent TYPE="NOTE">
   for (const child of children) {
-    if (
-      child.tagName.toLowerCase() === 'richcontent' &&
-      child.getAttribute('TYPE') === 'NOTE'
-    ) {
+    if (child.tagName.toLowerCase() === 'richcontent' && child.getAttribute('TYPE') === 'NOTE') {
       const bodyEl = child.querySelector('body');
       node.notes = stripHtml(bodyEl ? bodyEl.innerHTML : child.innerHTML);
       break;
     }
+  }
+
+  // Encrypted nodes (FreeMind/FreePlane password-protected branches) carry
+  // their children in an ENCRYPTED_CONTENT blob, not as <node> elements.
+  // Decryption is out of scope for this app — it is password-based (PBKDF2/
+  // AES-GCM or legacy DES) and the password is not in the file. Rather than
+  // silently dropping the hidden subtree, mark the node so the user can see
+  // content exists but is locked.
+  if (element.getAttribute('ENCRYPTED_CONTENT') != null) {
+    const marker = '🔒 Encrypted branch (password-protected in the source app — not imported)';
+    node.notes = node.notes ? `${node.notes}\n\n${marker}` : marker;
   }
 
   // Recurse into child <node> elements only; skip FreePlane-specific
@@ -134,7 +140,7 @@ function parseNode(element: Element): MindMapTreeNode {
  * FreeMind:  <map version="1.0.1">
  * FreePlane: <map version="freeplane 1.x.x">
  *
- * The vault title replaces the root node text so the map title stays consistent.
+ * The vault title replaces the root node's TEXT so the map title stays consistent.
  */
 export function freemindToTree(xmlString: string, title: string): MindMapTreeNode {
   const parser = new DOMParser();
@@ -157,7 +163,7 @@ export function freemindToTree(xmlString: string, title: string): MindMapTreeNod
   const rootEl = mapEl.querySelector(':scope > node');
   if (!rootEl) {
     throw new Error(
-      `No root node found in ${isFreeplane ? 'FreePlane' : 'FreeMind'} file`
+      `No root node found in ${isFreeplane ? 'FreePlane' : 'FreeMind'} file`,
     );
   }
 

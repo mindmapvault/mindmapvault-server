@@ -132,12 +132,10 @@ export function VaultsPage() {
   /** Kept per format: each format shows its own failure, in its own wording. */
   const [importErrors, setImportErrors] = useState<Partial<Record<ImportFormatId, string>>>({});
   const mdImportRef = useRef<HTMLInputElement>(null);
-
   const mmImportRef = useRef<HTMLInputElement>(null);
-
   const wxmlImportRef = useRef<HTMLInputElement>(null);
-
   const xmindImportRef = useRef<HTMLInputElement>(null);
+  const mmvaultImportRef = useRef<HTMLInputElement>(null);
 
   const [showImportMenu, setShowImportMenu] = useState(false);
   const importMenuRef = useRef<HTMLDivElement>(null);
@@ -653,6 +651,7 @@ export function VaultsPage() {
   };
 
   const importRefs: Record<ImportFormatId, React.RefObject<HTMLInputElement>> = {
+    mmvault: mmvaultImportRef,
     md: mdImportRef,
     mm: mmImportRef,
     wxml: wxmlImportRef,

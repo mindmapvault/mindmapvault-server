@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Concurrency: cancel superseded runs on the same ref so a force-push does not
+# leave stale jobs running.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── App frontend (TypeScript / vitest) ────────────────────────────────────
+  # frontend_app is its own pnpm project (its own lockfile, no workspace root).
+  frontend-app:
+    name: Frontend app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend_app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        # Must precede setup-node: `cache: 'pnpm'` resolves the store by
+        # shelling out to `pnpm store path`, so pnpm has to exist first.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: frontend_app/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit -p tsconfig.json
+
+      - name: Unit tests
+        # The full vitest suite, which includes the import/export round-trip
+        # fidelity and the real-file compatibility suites.
+        run: pnpm test
+
+      - name: Import/export round-trip gate
+        # Fails the build if any format drops a field it claims to carry, or
+        # a real source-software file stops importing. Runs from the repo root.
+        working-directory: .
+        run: node scripts/check_import_export_roundtrip.mjs
+
+  # ── Admin frontend (TypeScript, build-only — it has no test script) ───────
+  frontend-admin:
+    name: Frontend admin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend_admin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          cache-dependency-path: frontend_admin/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (type check + bundle)
+        run: pnpm build
+
+  # ── Backend (Rust) ────────────────────────────────────────────────────────
+  # Unit-level check and test. The full Python regression harness
+  # (scripts/backend_regression_test.py) needs a running backend and is not
+  # wired here.
+  backend:
+    name: Backend (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --locked
+
+      - name: cargo test
+        run: cargo test --locked

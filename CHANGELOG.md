@@ -4,6 +4,30 @@ All notable changes to this repository are documented here.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+A map you export now comes back the way you saved it. This ports the FOSS
+import/export overhaul to the server: a lossless native format, a markdown
+importer that reads its own exporter, byte-compatible FreeMind output, and a
+test gate in CI so the "export loses formatting" class of bug cannot ship
+again.
+
+### Added
+- **A native, lossless map format (`.mmvault`).** Every other export is an interchange with a third-party app and drops fields the editor can set — icons, progress, dates, tags, pictures, attachments. `.mmvault` is the application's own: a versioned JSON envelope (`mindmapvault-tree`, v1) that carries the tree verbatim, so export → re-import loses nothing. It is listed first in both the export and import menus. `utils/mmvaultFormat.ts`.
+- **A round-trip fidelity suite** (`utils/__tests__/roundTrip.test.ts`). A fixture tree sets every field the editor supports; each format is exported and re-imported, then diffed against a per-format fidelity mask that declares what it can carry. A format that silently drops a field it claims to keep now fails the build.
+- **A compatibility suite for real source-software files** (`utils/__tests__/compat.test.ts`). It proves the importers can read files the *actual* applications write — FreeMind's `<font>`/`<attribute>` children, FreePlane's `richcontent` node text and `BACKGROUND_COLOR`, WiseMapping's `order`/`CDATA` notes, both XMind layouts (Zen `content.json` and XMind 8 `content.xml`), and Obsidian tasks/callouts/wiki-links. Eleven real maps from the freeplane.org gallery plus a genuine FreeMind 1.1.0 export are committed fixtures.
+- **A CI workflow** (`.github/workflows/ci.yml`) that runs on every pull request and push to `main`. A frontend-app job type-checks, runs the vitest suite, and runs the import/export round-trip gate; a frontend-admin job builds; a backend job runs `cargo check` and `cargo test`. Previously no workflow ran the frontend tests.
+- **A release gate** (`scripts/check_import_export_roundtrip.mjs`) that runs the round-trip and compatibility suites and blocks on a regression.
+
+### Fixed
+- **The markdown importer could not read its own exporter.** The exporter wrote a rich structured dialect — `[75%]`, `:icon:`, `Tags: #…`, `📅`, `🔗 <url>`, `📎`, `>` notes — but the importer was a generic Obsidian parser that understood none of it, so a map exported to Markdown and re-imported lost its notes, tags, dates, links, and progress, and grew a spurious wrapper node. The importer now reads the dialect back (and unwraps the export's root), while leaving generic Obsidian notes untouched.
+- **FreeMind export was not byte-compatible with FreeMind.** It emitted an XML prolog FreeMind never writes, attributes in insertion order, and UTF-8 text. It now follows the format FreeMind actually writes: no prolog, the fixed FreeMind comment, `<map version="1.1.0">`, attributes in alphabetical order, pure-ASCII escaping with `&#xHH;` numeric entities for non-ASCII, `POSITION` only on the root's direct children, and LF newlines with no indentation.
+- **Rich-text node labels lost word boundaries.** The importer's HTML stripper decoded the named entities but not numeric character references, so a non-breaking space written as `&#160;` — which FreePlane emits inside rich text — survived as literal text and glued words together. Numeric references (`&#xHH;` and `&#NNN;`) are now decoded. Surfaced by the real freeplane.org maps.
+
+### Changed
+- **Encrypted FreeMind/FreePlane branches are explicitly out of scope.** A password-protected branch stores its children encrypted in `ENCRYPTED_CONTENT`, and the password is not in the file — so "importing" it means prompting for a password, which is a feature, not a parser fix. Rather than dropping the locked subtree silently, the importer now marks the node with a `🔒 Encrypted branch` note so the hidden content is visible.
+- Frontend unit tests now stand at 209, including the new round-trip and compatibility suites.
+
 ## [0.5.3] - 2026-09-07
 
 A What's New tab, a canvas colour the rest of the editor follows, and the Lean
@@ -504,3 +528,16 @@ your password, leave. Release notes: `docs/RELEASE_0.4.0.md`.
 - `cargo check` in `desktop/src-tauri`
 
 ## [0.3.19] - prior
+```
+This is the description of what the code block changes:
+<changeDescription>
+State the verified current test count without an unverifiable baseline.
+</changeDescription>
+
+This is the code block that represents the suggested code change:
+```markdown
+- Frontend unit tests now stand at 209, including the new round-trip and compatibility suites.
+```
+<userPrompt>
+Provide the fully rewritten file, incorporating the suggested code change. You must produce the complete file.
+</userPrompt>
