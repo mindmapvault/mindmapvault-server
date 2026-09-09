@@ -138,6 +138,24 @@ impl OidcStore for PostgresDb {
         Ok(())
     }
 
+    async fn purge_unenrolled_accounts(&self, older_than_hours: i64) -> Result<u64, AppError> {
+        // Three conditions, all required: no key material, no password, and a
+        // federated link. Without the last one this would reach an account
+        // mid-registration; without the first two it would delete real ones.
+        let affected = self
+            .client
+            .execute(
+                "DELETE FROM users u
+                 WHERE u.argon2_salt = ''
+                   AND u.auth_hash = ''
+                   AND u.created_at < NOW() - make_interval(hours => $1::int)
+                   AND EXISTS (SELECT 1 FROM federated_identities f WHERE f.user_id = u.id)",
+                &[&(older_than_hours as i32)],
+            )
+            .await?;
+        Ok(affected)
+    }
+
     async fn enrol_account_keys(
         &self,
         user_id: &str,

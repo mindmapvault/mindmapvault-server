@@ -571,6 +571,15 @@ pub trait OidcStore: Send + Sync {
     /// keys once, and letting it run twice would replace the keys every vault
     /// is encrypted under. Changing them afterwards is credential rotation,
     /// which re-wraps the vaults as it goes.
+    /// Deletes federated accounts that never finished enrolling and are older
+    /// than `older_than_hours`.
+    ///
+    /// Somebody who closes the tab at the passphrase screen leaves an account
+    /// with no username of its own and no keys. Signing in again picks it up,
+    /// so this only ever removes shells nobody came back to — and the guard on
+    /// argon2_salt means an enrolled account can never match.
+    async fn purge_unenrolled_accounts(&self, older_than_hours: i64) -> Result<u64, AppError>;
+
     async fn enrol_account_keys(
         &self,
         user_id: &str,

@@ -370,6 +370,116 @@ Treat `/admin/` as an internal surface: restrict it at the proxy layer by
 source address, or behind your own authentication, rather than leaving it
 reachable from the public internet with only the token in front of it.
 
+## Federated sign-in (SSO)
+
+People can sign in with an identity provider instead of a password —
+Authentik, Keycloak, Entra, Google, or anything else that speaks OpenID
+Connect. Both methods work side by side: turning SSO on takes nothing away
+from accounts that already have passwords.
+
+### What SSO does and does not do here
+
+Signing in through a provider proves **who someone is**. It cannot unlock
+their vaults.
+
+Vaults are encrypted with a key derived from a passphrase in the browser, and
+the server never sees it. No claim an identity provider can make will produce
+that key, so a federated user still has one secret of their own:
+
+1. **First sign-in.** They are sent to the provider, come back, and choose a
+   username and a **vault passphrase**. This happens once.
+2. **Later sign-ins.** Straight through the provider. They are asked for the
+   passphrase again only when the browser has no session keys in memory — a new
+   device, or after a full page load.
+
+That is one more prompt than SSO alone, and it is the price of the server not
+being able to read your data. An administrator **cannot reset a vault
+passphrase**; if it is lost, the vaults it protects are lost. Say so when you
+roll this out.
+
+### Setting it up
+
+Register this server at your provider first. It needs one callback URL:
+
+```
+https://your-server.example.com/api/auth/oidc/<id>/callback
+```
+
+`<id>` is the short name shown in the admin console after you save the
+provider — it is derived from the display name, so "Company SSO" becomes
+`company-sso`. Save the provider once to see it, then paste the URL back into
+the provider if it insists on an exact match.
+
+Set `PUBLIC_BASE_URL` to the origin browsers reach this server on:
+
+```
+PUBLIC_BASE_URL=https://your-server.example.com
+```
+
+It cannot be worked out from the request, because the `Host` header is chosen
+by the caller and the redirect URI has to match what the provider has
+registered exactly. Sign-in fails with a clear error if it is unset.
+
+Then, in the admin console under **Settings → Single sign-on**, add the
+provider with its issuer URL, client ID and client secret.
+
+### Provider notes
+
+The **issuer** must match what the provider announces in its own discovery
+document, character for character apart from a trailing slash. A mismatch is
+the most common reason a sign-in is rejected, and this server refuses it
+loudly rather than carrying on.
+
+| Provider | Issuer | Notes |
+|---|---|---|
+| **Authentik** | `https://auth.example.com/application/o/<slug>/` | Create an OAuth2/OIDC provider, then an application pointing at it. Use the "Authorization Code" flow with a confidential client. |
+| **Keycloak** | `https://kc.example.com/realms/<realm>` | Client must be confidential (Client authentication on). Turn on PKCE with method S256. |
+| **Entra ID** | `https://login.microsoftonline.com/<tenant-id>/v2.0` | The `v2.0` suffix matters, and the tenant id is not interchangeable with `common`. Register a Web platform redirect URI, not SPA. |
+| **Google** | `https://accounts.google.com` | Redirect URIs must be registered exactly; Google refuses plain `http://` except for `localhost`. |
+
+Scopes default to `openid email profile`. `openid` is added whether you list it
+or not.
+
+An email address is recorded only when the provider states it is verified, and
+it is **never** used to find an account. Accounts are linked on the provider's
+subject identifier, because an email address can be reassigned to a new
+employee and linking on it would hand them the previous holder's vaults.
+
+### Trying it locally
+
+The compose file carries a Keycloak profile so the flow can be exercised
+without an external provider:
+
+```bash
+docker compose --profile sso up -d keycloak
+```
+
+It comes up at `http://host.docker.internal:8095` with `admin` / `admin`, a
+realm called `mindmapvault`, and one user `ssouser` / `ssouser`. Register it in
+the admin console with:
+
+- **Issuer** `http://host.docker.internal:8095/realms/mindmapvault`
+- **Client ID** `mindmapvault`
+- **Client secret** `mindmapvault-dev-secret`
+
+`host.docker.internal` is used rather than `localhost` because the issuer has
+to resolve to the same thing from your browser *and* from inside the server
+container, and that is the only name both agree on.
+
+> This profile publishes a test identity provider with a published admin
+> password on every interface. It is for a development machine and nowhere
+> else.
+
+### Turning it off
+
+Clearing the **Offer this provider** checkbox hides the button. Accounts made
+through it are untouched but cannot sign in until it is back.
+
+**Removing** a provider deletes the links between it and the accounts it
+created. Those accounts and their vaults still exist, but nothing can reach
+them — there is no password to fall back to. Disable rather than remove unless
+you mean it.
+
 ## Published Images
 
 > Release notes link to [mindmapvault.com/homelab](https://www.mindmapvault.com/homelab/),

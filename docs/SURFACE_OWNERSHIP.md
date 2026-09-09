@@ -21,7 +21,10 @@ MindMapVault Server is the community self-hosted backend + web UI baseline.
 - collaboration protocol foundations or relay logic
 - hosted billing and subscription operations
 - Cloudflare-specific deployment wiring
-- enterprise-only policy, SSO, audit, or compliance overlays
+- enterprise-only policy, audit, or compliance overlays
+- enterprise identity overlays: directory sync, group and role mapping, session
+  policy. Plain OIDC sign-in lives in this repo — see
+  `docs/DEPLOYMENT.md#federated-sign-in-sso`
 
 ## Touch Guide
 

@@ -69,6 +69,13 @@ const SETTINGS_REFRESH_SECS: u64 = 60;
 /// How often the throttle drops entries nobody is waiting on.
 const THROTTLE_PRUNE_SECS: u64 = 5 * 60;
 
+/// How long a federated account that never finished enrolling is kept.
+///
+/// Long enough that somebody who closed the tab can come back the same day and
+/// find their half-made account waiting; short enough that abandoned ones do
+/// not pile up in the admin console looking like real users.
+const UNENROLLED_ACCOUNT_TTL_HOURS: i64 = 24;
+
 /// Deletes the stored ciphertext of shares that are revoked or past expiry.
 ///
 /// A share blob is a second, independently-keyed copy of a map. Once the share
@@ -256,6 +263,7 @@ async fn main() -> anyhow::Result<()> {
     let sql_store: Option<DynSqlStore> = Some(Arc::new(PostgresDb::connect(&cfg).await?));
     let sql_store_for_purge = sql_store.clone();
     let sql_store_for_settings = sql_store.clone();
+    let sql_store_for_sweep = sql_store.clone();
 
     // ── Instance settings ─────────────────────────────────────────────────────
     // Seeded from the environment the first time this database is used and read
@@ -484,6 +492,7 @@ async fn main() -> anyhow::Result<()> {
         // Sign-ins that were started and never came back expire on the same
         // timer, so an abandoned redirect does not sit in memory until restart.
         let oidc_flows = oidc_flows.clone();
+        let sweep_store = sql_store_for_sweep;
         tokio::spawn(async move {
             let mut ticker =
                 tokio::time::interval(std::time::Duration::from_secs(THROTTLE_PRUNE_SECS));
@@ -491,6 +500,15 @@ async fn main() -> anyhow::Result<()> {
                 ticker.tick().await;
                 throttle.prune();
                 oidc_flows.prune();
+                let Some(store) = sweep_store.as_ref() else { continue };
+                match store.purge_unenrolled_accounts(UNENROLLED_ACCOUNT_TTL_HOURS).await {
+                    Ok(0) => {}
+                    Ok(removed) => tracing::info!(
+                        removed,
+                        "removed federated accounts that never finished setting up"
+                    ),
+                    Err(error) => tracing::warn!(?error, "could not sweep unenrolled accounts"),
+                }
             }
         });
     }

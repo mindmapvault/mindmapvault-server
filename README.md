@@ -22,9 +22,10 @@ Interactive demo: https://mindmapvault.github.io/mindmapvault-foss/demo/
 - **Encrypted blob versioning** — the server tracks encrypted versions of each vault without ever seeing plaintext
 - **Encrypted share links** — share a vault by link with a passphrase the server never sees; recipients need no account, and revoking deletes the shared copy
 - **Single Docker image** — one container runs the API, the web UI, and the admin surface together
+- **Single sign-on** — sign in with any OpenID Connect provider (Authentik, Keycloak, Entra, Google) alongside passwords. Federated users still choose a vault passphrase, because an identity provider can say who someone is but cannot decrypt their vaults
 - **AGPL-3 licensed**
 
-What this server does not include: sync, offline client features, team management, enterprise governance, SSO, or audit controls. Those belong to other product lines.
+What this server does not include: sync, offline client features, team management, enterprise governance, or compliance controls. Those belong to other product lines. Plain OIDC sign-in **is** included here; directory sync, group and role mapping, and audit overlays are not.
 
 ## Quick Start
 
