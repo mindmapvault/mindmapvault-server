@@ -58,6 +58,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
 subtle = "2"
 libc = "0.2.189"
+# OIDC discovery, JWKS and the token exchange (which is form-encoded).
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "form", "rustls"] }
+urlencoding = "2.1.3"
 
 [target.'cfg(not(windows))'.dependencies]
 # Profiling (optional at runtime via env)

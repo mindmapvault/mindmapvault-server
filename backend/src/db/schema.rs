@@ -94,6 +94,42 @@ pub async fn ensure_schema(client: &Client) -> anyhow::Result<()> {
             ALTER TABLE instance_settings
                 ADD COLUMN IF NOT EXISTS lookup_rate_limit_per_minute INTEGER NOT NULL DEFAULT 120;
 
+            -- Configured OpenID Connect providers. The client secret is stored
+            -- as given: it is a bearer credential this server must present to
+            -- the provider, so it cannot be hashed.
+            CREATE TABLE IF NOT EXISTS oidc_providers (
+                id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                issuer TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                client_secret TEXT NOT NULL DEFAULT '',
+                scopes TEXT NOT NULL DEFAULT 'openid email profile',
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            -- Links a provider's subject to a local account.
+            --
+            -- The unique key is (provider_id, subject), never the email: an
+            -- address can be reassigned to a new employee, and linking on it
+            -- would hand them the previous holder's vaults.
+            CREATE TABLE IF NOT EXISTS federated_identities (
+                provider_id TEXT NOT NULL REFERENCES oidc_providers(id) ON DELETE CASCADE,
+                subject TEXT NOT NULL,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (provider_id, subject)
+            );
+
+            CREATE INDEX IF NOT EXISTS federated_identities_user_idx
+                ON federated_identities(user_id);
+
+            -- A federated account has no password until it enrols a vault
+            -- passphrase, so these two are empty for the gap between the first
+            -- sign-in and enrolment. Existing rows are unaffected.
+            ALTER TABLE users ALTER COLUMN auth_hash SET DEFAULT '';
+            ALTER TABLE users ALTER COLUMN argon2_salt SET DEFAULT '';
+
             -- One-time codes that allow a sign-up while registration is
             -- closed. See models/invite.rs for why the code is stored as
             -- written rather than hashed.
