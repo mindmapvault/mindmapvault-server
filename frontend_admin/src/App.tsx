@@ -110,6 +110,18 @@ type InstanceSettings = {
   updated_at: string;
 };
 
+/** What the console is told about a provider. Never the client secret. */
+type OidcProviderRow = {
+  id: string;
+  display_name: string;
+  issuer: string;
+  client_id: string;
+  scopes: string;
+  enabled: boolean;
+  has_client_secret: boolean;
+  created_at: string;
+};
+
 type AdminSettingsResponse = {
   settings: InstanceSettings;
   observed_client_address: string;
@@ -428,6 +440,19 @@ export default function App() {
   const [instance, setInstance] = useState<AdminSettingsResponse | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<InstanceSettings | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [providers, setProviders] = useState<OidcProviderRow[] | null>(null);
+  const [providerDraft, setProviderDraft] = useState({
+    id: '',
+    display_name: '',
+    issuer: '',
+    client_id: '',
+    client_secret: '',
+    scopes: 'openid email profile',
+    enabled: true,
+  });
+  const [providerBusy, setProviderBusy] = useState(false);
+  const [providerError, setProviderError] = useState('');
+  const [providerNotice, setProviderNotice] = useState('');
   const [settingsError, setSettingsError] = useState('');
   const [settingsNotice, setSettingsNotice] = useState('');
 
@@ -468,6 +493,9 @@ export default function App() {
   useEffect(() => {
     if (!token) {
       return;
+    }
+    if (activeView === 'settings' && token && providers === null) {
+      void loadProviders(token);
     }
     if (activeView === 'settings' && !instance) {
       void loadInstanceSettings(token);
@@ -634,6 +662,81 @@ export default function App() {
       setSettingsError(err instanceof Error ? err.message : 'Could not save the settings');
     } finally {
       setSettingsSaving(false);
+    }
+  }
+
+  async function loadProviders(activeToken: string) {
+    try {
+      setProviders(await requestAdmin<OidcProviderRow[]>('/admin/oidc/providers', activeToken));
+    } catch (err) {
+      setProviderError(err instanceof Error ? err.message : 'Could not read the providers');
+    }
+  }
+
+  async function saveProvider() {
+    if (!token) return;
+    setProviderBusy(true);
+    setProviderError('');
+    setProviderNotice('');
+    try {
+      await requestAdmin<OidcProviderRow>('/admin/oidc/providers', token, {
+        method: 'POST',
+        body: JSON.stringify(providerDraft),
+      });
+      setProviderNotice('Saved. The sign-in page will offer it now.');
+      setProviderDraft({
+        id: '',
+        display_name: '',
+        issuer: '',
+        client_id: '',
+        client_secret: '',
+        scopes: 'openid email profile',
+        enabled: true,
+      });
+      await loadProviders(token);
+    } catch (err) {
+      setProviderError(err instanceof Error ? err.message : 'Could not save the provider');
+    } finally {
+      setProviderBusy(false);
+    }
+  }
+
+  /** Loads a provider into the form. The secret stays blank — the server never
+   *  sends it back, and an empty one means "keep the stored value". */
+  function editProvider(row: OidcProviderRow) {
+    setProviderNotice('');
+    setProviderError('');
+    setProviderDraft({
+      id: row.id,
+      display_name: row.display_name,
+      issuer: row.issuer,
+      client_id: row.client_id,
+      client_secret: '',
+      scopes: row.scopes,
+      enabled: row.enabled,
+    });
+  }
+
+  async function removeProvider(row: OidcProviderRow) {
+    if (!token) return;
+    const confirmed = window.confirm(
+      `Remove "${row.display_name}"?\n\nAnyone who signed in through it loses the only way back ` +
+        'to their account. Their vaults are not deleted, but nothing can reach them.',
+    );
+    if (!confirmed) return;
+
+    setProviderBusy(true);
+    setProviderError('');
+    try {
+      await requestAdmin(`/admin/oidc/providers/${encodeURIComponent(row.id)}`, token, {
+        method: 'DELETE',
+      });
+      setProviderNotice(`Removed ${row.display_name}.`);
+      await loadProviders(token);
+    } catch (err) {
+      setProviderError(err instanceof Error ? err.message : 'Could not remove the provider');
+    } finally {
+      setProviderBusy(false);
     }
   }
 
@@ -1700,6 +1803,216 @@ export default function App() {
                             that changes nothing.
                           </span>
                         </label>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="panel-header panel-header-tight">
+                        <div>
+                          <p className="panel-label">Sign-in</p>
+                          <h2>Single sign-on</h2>
+                        </div>
+                      </div>
+
+                      <p className="panel-help">
+                        Let people sign in with an identity provider — Authentik, Keycloak, Entra,
+                        Google, anything that speaks OpenID Connect. Register this server there
+                        first, and give it this callback URL:
+                      </p>
+                      <p className="panel-help">
+                        <code>{window.location.origin}/api/auth/oidc/&lt;id&gt;/callback</code>
+                      </p>
+                      <p className="panel-help field-help">
+                        The <em>id</em> is the short name shown in the list below, derived from the
+                        display name when you save. Signing in this way proves who someone is; it
+                        cannot unlock their vaults, so a new user is asked to choose a vault
+                        passphrase once, and to type it again on each new device.
+                      </p>
+
+                      {providers && providers.length > 0 && (
+                        <div className="table-wrap">
+                          <table className="data-table">
+                            <thead>
+                              <tr>
+                                <th>Name</th>
+                                <th>Id</th>
+                                <th>Issuer</th>
+                                <th>Enabled</th>
+                                <th />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {providers.map((row) => (
+                                <tr key={row.id}>
+                                  <td>{row.display_name}</td>
+                                  <td><code>{row.id}</code></td>
+                                  <td className="cell-muted">{row.issuer}</td>
+                                  <td>{row.enabled ? 'Yes' : 'No'}</td>
+                                  <td className="cell-actions">
+                                    <button
+                                      type="button"
+                                      className="ghost-button"
+                                      onClick={() => editProvider(row)}
+                                      disabled={providerBusy}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="ghost-button danger"
+                                      onClick={() => void removeProvider(row)}
+                                      disabled={providerBusy}
+                                    >
+                                      Remove
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {providers && providers.length === 0 && (
+                        <p className="panel-help field-help">
+                          No providers yet. Everyone signs in with a username and password.
+                        </p>
+                      )}
+
+                      <div className="form-grid">
+                        <label>
+                          <span className="detail-label">Display name</span>
+                          <input
+                            type="text"
+                            className="detail-input"
+                            placeholder="Company SSO"
+                            value={providerDraft.display_name}
+                            onChange={(event) =>
+                              setProviderDraft({ ...providerDraft, display_name: event.target.value })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            What the button on the sign-in page says.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Client ID</span>
+                          <input
+                            type="text"
+                            className="detail-input"
+                            value={providerDraft.client_id}
+                            onChange={(event) =>
+                              setProviderDraft({ ...providerDraft, client_id: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label className="form-grid-span">
+                          <span className="detail-label">Issuer URL</span>
+                          <input
+                            type="text"
+                            className="detail-input"
+                            placeholder="https://idp.example.com/realms/main"
+                            value={providerDraft.issuer}
+                            onChange={(event) =>
+                              setProviderDraft({ ...providerDraft, issuer: event.target.value })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            The provider's issuer, exactly as it appears in its own discovery
+                            document. A mismatch here is the most common reason a sign-in is
+                            rejected — Entra in particular differs between its v1.0 and v2.0
+                            endpoints and between tenants.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Client secret</span>
+                          <input
+                            type="password"
+                            className="detail-input"
+                            autoComplete="new-password"
+                            placeholder={
+                              providerDraft.id ? 'leave blank to keep the stored one' : ''
+                            }
+                            value={providerDraft.client_secret}
+                            onChange={(event) =>
+                              setProviderDraft({
+                                ...providerDraft,
+                                client_secret: event.target.value,
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            Stored, never shown again. Editing anything else does not require
+                            retyping it.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Scopes</span>
+                          <input
+                            type="text"
+                            className="detail-input"
+                            value={providerDraft.scopes}
+                            onChange={(event) =>
+                              setProviderDraft({ ...providerDraft, scopes: event.target.value })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            <code>openid</code> is added whether you list it or not.
+                          </span>
+                        </label>
+                        <label className="form-grid-span">
+                          <span className="detail-label switch-label">
+                            <input
+                              type="checkbox"
+                              checked={providerDraft.enabled}
+                              onChange={(event) =>
+                                setProviderDraft({
+                                  ...providerDraft,
+                                  enabled: event.target.checked,
+                                })
+                              }
+                            />{' '}
+                            Offer this provider on the sign-in page
+                          </span>
+                          <span className="panel-help field-help">
+                            Turning it off hides the button. People who already signed in this way
+                            keep their accounts but cannot get back in until it is on again.
+                          </span>
+                        </label>
+                      </div>
+
+                      {providerError && <p className="form-error">{providerError}</p>}
+                      {providerNotice && <p className="form-notice">{providerNotice}</p>}
+
+                      <div className="panel-actions">
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => void saveProvider()}
+                          disabled={providerBusy}
+                        >
+                          {providerDraft.id ? 'Save provider' : 'Add provider'}
+                        </button>
+                        {providerDraft.id && (
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() =>
+                              setProviderDraft({
+                                id: '',
+                                display_name: '',
+                                issuer: '',
+                                client_id: '',
+                                client_secret: '',
+                                scopes: 'openid email profile',
+                                enabled: true,
+                              })
+                            }
+                            disabled={providerBusy}
+                          >
+                            Cancel
+                          </button>
+                        )}
                       </div>
                     </section>
 

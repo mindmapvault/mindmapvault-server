@@ -22,6 +22,7 @@ use crate::{
         attachment::AttachmentStatus,
         instance_settings::{InstanceSettings, InstanceSettingsHandle, UpdateInstanceSettingsRequest},
         invite::{generate_invite_code, CreateInviteRequest, RegistrationInvite},
+        oidc::{OidcProvider, OidcProviderResponse},
         status::{
             disk_usage, process_memory_bytes, BucketStats, DatabaseStats, DependencyHealth,
             DiskUsage, PurgeStatus, PurgeStatusHandle,
@@ -88,6 +89,8 @@ pub fn router(state: AdminState) -> Router {
         .route("/settings", get(get_settings).post(update_settings))
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", delete(revoke_invite))
+        .route("/oidc/providers", get(list_oidc_providers).post(save_oidc_provider))
+        .route("/oidc/providers/{id}", delete(remove_oidc_provider))
         .route("/maintenance/purge-shares", post(run_share_purge))
         .route("/users/{id}/account-lock", post(set_user_lock))
         .route("/users/{id}/admin-details", post(update_user_admin_details))
@@ -1104,5 +1107,233 @@ fn map_admin_audit(event: AdminAuditEvent) -> AdminAuditSummary {
         detail: event.detail,
         actor: event.actor,
         created_at: event.created_at,
+    }
+}
+// ── Federated sign-in providers ──────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct SaveOidcProviderRequest {
+    /// Absent for a new provider; a slug is derived from the display name.
+    id: Option<String>,
+    display_name: String,
+    issuer: String,
+    client_id: String,
+    /// Empty means "keep whatever is stored". The console never reads a secret
+    /// back, so an operator editing anything else sends nothing here.
+    #[serde(default)]
+    client_secret: String,
+    #[serde(default)]
+    scopes: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn list_oidc_providers(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<OidcProviderResponse>>, AppError> {
+    authorize_admin(&state, &headers).await?;
+    let providers = state.db.list_oidc_providers().await?;
+    Ok(Json(
+        providers.iter().map(OidcProviderResponse::from).collect(),
+    ))
+}
+
+async fn save_oidc_provider(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(body): Json<SaveOidcProviderRequest>,
+) -> Result<Json<OidcProviderResponse>, AppError> {
+    authorize_admin(&state, &headers).await?;
+
+    let display_name = normalize_bounded(&body.display_name, "display_name", 64)?;
+    let issuer = normalize_issuer(&body.issuer)?;
+    let client_id = normalize_bounded(&body.client_id, "client_id", 256)?;
+
+    let id = match body.id {
+        Some(id) => normalize_provider_id(&id)?,
+        None => normalize_provider_id(&display_name)?,
+    };
+
+    let existing = state.db.load_oidc_provider(&id).await?;
+    // A brand new provider with no secret cannot work, and the failure would
+    // otherwise surface much later as an opaque rejection from the provider.
+    if existing.is_none() && body.client_secret.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "a client secret is required when adding a provider".to_string(),
+        ));
+    }
+
+    let scopes = match body.scopes.trim() {
+        "" => "openid email profile".to_string(),
+        given => given.to_string(),
+    };
+
+    let provider = OidcProvider {
+        id: id.clone(),
+        display_name,
+        issuer,
+        client_id,
+        client_secret: body.client_secret.trim().to_string(),
+        scopes,
+        enabled: body.enabled,
+        created_at: existing
+            .as_ref()
+            .map(|provider| provider.created_at)
+            .unwrap_or_else(Utc::now),
+    };
+
+    state.db.upsert_oidc_provider(&provider).await?;
+
+    let action = if existing.is_some() {
+        "oidc_provider_updated"
+    } else {
+        "oidc_provider_added"
+    };
+    let verb = if existing.is_some() { "Updated" } else { "Added" };
+    write_audit_event(
+        &state,
+        make_audit_event(
+            "oidc_provider",
+            &id,
+            action,
+            format!("{verb} the sign-in provider {}", provider.display_name),
+            // The issuer is worth recording. The secret never is.
+            Some(provider.issuer.clone()),
+        ),
+    )
+    .await?;
+
+    let saved = state
+        .db
+        .load_oidc_provider(&id)
+        .await?
+        .ok_or_else(|| AppError::Internal("provider vanished after save".to_string()))?;
+    Ok(Json(OidcProviderResponse::from(&saved)))
+}
+
+async fn remove_oidc_provider(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    authorize_admin(&state, &headers).await?;
+
+    // Deleting cascades to the identity links, so anyone who signed in through
+    // this provider loses the only route back to their account. Their vaults
+    // are untouched but unreachable, which is worth recording rather than
+    // leaving to be discovered in a support ticket.
+    if !state.db.delete_oidc_provider(&id).await? {
+        return Err(AppError::NotFound("no such sign-in provider".to_string()));
+    }
+
+    write_audit_event(
+        &state,
+        make_audit_event(
+            "oidc_provider",
+            &id,
+            "oidc_provider_removed",
+            format!("Removed the sign-in provider {id}"),
+            Some(
+                "accounts that signed in through it can no longer reach their vaults".to_string(),
+            ),
+        ),
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn normalize_bounded(value: &str, field: &str, max: usize) -> Result<String, AppError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(format!("{field} is required")));
+    }
+    if trimmed.len() > max {
+        return Err(AppError::BadRequest(format!("{field} is too long")));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// The issuer has to be an absolute URL, because discovery is fetched straight
+/// from it. The trailing slash is dropped: a provider's own issuer claim never
+/// carries one, and keeping it would fail the comparison against it.
+fn normalize_issuer(value: &str) -> Result<String, AppError> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("issuer is required".to_string()));
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err(AppError::BadRequest(
+            "issuer must be a full URL beginning with https://".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// A URL-safe slug, because the id appears in the callback path the provider
+/// is configured with and must not need escaping.
+fn normalize_provider_id(value: &str) -> Result<String, AppError> {
+    let slug = value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if slug.is_empty() {
+        return Err(AppError::BadRequest(
+            "the provider name must contain letters or digits".to_string(),
+        ));
+    }
+    Ok(slug.chars().take(64).collect())
+}
+
+#[cfg(test)]
+mod oidc_admin_tests {
+    use super::*;
+
+    #[test]
+    fn a_display_name_becomes_a_url_safe_id() {
+        assert_eq!(
+            normalize_provider_id("Company SSO").expect("slug"),
+            "company-sso"
+        );
+        assert_eq!(normalize_provider_id("  Entra ID  ").expect("slug"), "entra-id");
+    }
+
+    #[test]
+    fn punctuation_collapses_rather_than_leaking_into_a_path() {
+        assert_eq!(
+            normalize_provider_id("Acme // Corp!").expect("slug"),
+            "acme-corp"
+        );
+    }
+
+    #[test]
+    fn a_name_with_nothing_usable_is_refused() {
+        assert!(normalize_provider_id("///").is_err());
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_issuer_is_dropped() {
+        assert_eq!(
+            normalize_issuer("https://idp.example/realms/x/").expect("issuer"),
+            "https://idp.example/realms/x"
+        );
+    }
+
+    #[test]
+    fn an_issuer_that_is_not_a_url_is_refused() {
+        assert!(normalize_issuer("idp.example").is_err());
+        assert!(normalize_issuer("   ").is_err());
     }
 }
