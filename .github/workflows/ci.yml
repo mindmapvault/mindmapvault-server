@@ -28,7 +28,13 @@ jobs:
       - name: Setup pnpm
         # Must precede setup-node: `cache: 'pnpm'` resolves the store by
         # shelling out to `pnpm store path`, so pnpm has to exist first.
+        #
+        # package_json_file is resolved from the repository root rather than
+        # from working-directory, and there is no package.json there, so the
+        # version has to be pointed at explicitly.
         uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend_app/package.json
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -67,6 +73,8 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend_admin/package.json
 
       - name: Setup Node
         uses: actions/setup-node@v6
