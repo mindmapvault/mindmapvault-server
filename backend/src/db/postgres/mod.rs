@@ -6,6 +6,7 @@
 mod admin;
 mod invite;
 mod mind_map;
+mod oidc;
 mod row;
 mod system;
 mod user;

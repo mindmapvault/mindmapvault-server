@@ -13,6 +13,7 @@ use crate::{
         instance_settings::InstanceSettings,
         invite::RegistrationInvite,
         mindmap::VersionSnapshot,
+        oidc::{EnrolKeysRequest, FederatedIdentity, OidcProvider},
         settings::UserAccountSettings,
         share::{ShareScope, ShareStatus},
         status::DatabaseStats,
@@ -543,6 +544,40 @@ pub trait UserStore: Send + Sync {
     async fn sum_user_stored_bytes(&self, user_id: &str) -> Result<i64, AppError>;
 }
 
+/// OpenID Connect providers and the accounts linked to them.
+#[async_trait]
+pub trait OidcStore: Send + Sync {
+    async fn list_oidc_providers(&self) -> Result<Vec<OidcProvider>, AppError>;
+    async fn load_oidc_provider(&self, id: &str) -> Result<Option<OidcProvider>, AppError>;
+    async fn upsert_oidc_provider(&self, provider: &OidcProvider) -> Result<(), AppError>;
+    async fn delete_oidc_provider(&self, id: &str) -> Result<bool, AppError>;
+
+    /// The account linked to this provider subject, if the pair is known.
+    async fn load_user_by_federated_identity(
+        &self,
+        provider_id: &str,
+        subject: &str,
+    ) -> Result<Option<StoredUser>, AppError>;
+
+    async fn link_federated_identity(
+        &self,
+        identity: &FederatedIdentity,
+    ) -> Result<(), AppError>;
+
+    /// Writes the key material a federated account derived from its vault
+    /// passphrase.
+    ///
+    /// Refuses an account that already has a salt: enrolment establishes the
+    /// keys once, and letting it run twice would replace the keys every vault
+    /// is encrypted under. Changing them afterwards is credential rotation,
+    /// which re-wraps the vaults as it goes.
+    async fn enrol_account_keys(
+        &self,
+        user_id: &str,
+        keys: &EnrolKeysRequest,
+    ) -> Result<bool, AppError>;
+}
+
 /// Registration invites, for instances that are not open to sign-ups.
 #[async_trait]
 pub trait InviteStore: Send + Sync {
@@ -699,9 +734,15 @@ pub trait MindMapStore: Send + Sync {
 /// not let a single impl block span files. `SqlStore` itself adds nothing:
 /// it is the name the rest of the app depends on, and a trait object still
 /// reaches every method through these supertraits.
-pub trait SqlStore: SystemStore + UserStore + InviteStore + AdminAuditStore + MindMapStore {}
+pub trait SqlStore:
+    SystemStore + UserStore + OidcStore + InviteStore + AdminAuditStore + MindMapStore
+{
+}
 
-impl<T: SystemStore + UserStore + InviteStore + AdminAuditStore + MindMapStore> SqlStore for T {}
+impl<T: SystemStore + UserStore + OidcStore + InviteStore + AdminAuditStore + MindMapStore> SqlStore
+    for T
+{
+}
 
 
 pub type DynSqlStore = Arc<dyn SqlStore>;
