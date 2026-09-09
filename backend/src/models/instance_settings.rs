@@ -16,6 +16,8 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::middleware::client_ip::TrustedProxies;
+
 /// Value meaning "no limit" for the byte caps, so an upgrade of an existing
 /// instance keeps behaving the way it did before this setting existed.
 pub const UNLIMITED: i64 = 0;
@@ -36,10 +38,19 @@ pub struct InstanceSettings {
     pub failed_login_threshold: i32,
     /// How long that throttle lasts.
     pub failed_login_lockout_minutes: i32,
-    /// Whether `X-Forwarded-For` may identify the client. Only turn this on
-    /// when a proxy you control sets the header — otherwise a caller can spoof
-    /// it and step around both throttles.
-    pub trust_proxy_headers: bool,
+    /// Address ranges the operator's own reverse proxies run on, as CIDR (a
+    /// bare address means that host alone). Only a request arriving from one of
+    /// these has its `X-Forwarded-For` believed, and only for the hops inside
+    /// it — see middleware/client_ip.rs.
+    ///
+    /// Empty is the default and means no proxy: the peer address is used and
+    /// the header ignored.
+    pub trusted_proxy_cidrs: Vec<String>,
+    /// The boolean this replaced, carried only so startup can tell an operator
+    /// their proxy configuration no longer does anything. Never read for a
+    /// decision. Removable once no live instance still has it set.
+    #[serde(default)]
+    pub legacy_trust_proxy_headers: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -52,7 +63,8 @@ impl Default for InstanceSettings {
             auth_rate_limit_per_minute: 30,
             failed_login_threshold: 10,
             failed_login_lockout_minutes: 15,
-            trust_proxy_headers: false,
+            trusted_proxy_cidrs: Vec::new(),
+            legacy_trust_proxy_headers: false,
             updated_at: Utc::now(),
         }
     }
@@ -76,8 +88,13 @@ impl InstanceSettings {
         if let Some(value) = env_i64("MAX_ATTACHMENT_SIZE_BYTES") {
             settings.max_attachment_size_bytes = value.max(0);
         }
+        if let Some(value) = env_list("TRUSTED_PROXY_CIDRS") {
+            settings.trusted_proxy_cidrs = value;
+        }
+        // Read only so a first boot carrying the old variable can be warned
+        // about; it never enables anything.
         if let Some(value) = env_bool("TRUST_PROXY_HEADERS") {
-            settings.trust_proxy_headers = value;
+            settings.legacy_trust_proxy_headers = value;
         }
 
         settings
@@ -102,7 +119,7 @@ pub struct UpdateInstanceSettingsRequest {
     pub auth_rate_limit_per_minute: Option<i32>,
     pub failed_login_threshold: Option<i32>,
     pub failed_login_lockout_minutes: Option<i32>,
-    pub trust_proxy_headers: Option<bool>,
+    pub trusted_proxy_cidrs: Option<Vec<String>>,
 }
 
 impl UpdateInstanceSettingsRequest {
@@ -146,8 +163,24 @@ impl UpdateInstanceSettingsRequest {
             }
             next.failed_login_lockout_minutes = value;
         }
-        if let Some(value) = self.trust_proxy_headers {
-            next.trust_proxy_headers = value;
+        if let Some(value) = self.trusted_proxy_cidrs {
+            let (_, rejected) = TrustedProxies::parse(value.iter());
+            if !rejected.is_empty() {
+                return Err(format!(
+                    "trusted_proxy_cidrs entries are not addresses or CIDR ranges: {}",
+                    rejected.join(", ")
+                ));
+            }
+            let cleaned: Vec<String> = value
+                .into_iter()
+                .map(|entry| entry.trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect();
+            // Declaring a proxy is what makes the header believed at all, so
+            // an operator who sets one has answered the question the old
+            // boolean asked. Clear it so the startup warning stops.
+            next.legacy_trust_proxy_headers = false;
+            next.trusted_proxy_cidrs = cleaned;
         }
 
         next.updated_at = Utc::now();
@@ -198,6 +231,17 @@ fn env_bool(key: &str) -> Option<bool> {
             None
         }
     }
+}
+
+/// A comma-separated list, e.g. `TRUSTED_PROXY_CIDRS=10.0.0.0/8,192.168.1.5`.
+fn env_list(key: &str) -> Option<Vec<String>> {
+    let raw = std::env::var(key).ok()?;
+    let entries: Vec<String> = raw
+        .split(',')
+        .map(|entry| entry.trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    (!entries.is_empty()).then_some(entries)
 }
 
 fn env_i64(key: &str) -> Option<i64> {

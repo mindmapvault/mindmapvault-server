@@ -81,6 +81,13 @@ pub async fn ensure_schema(client: &Client) -> anyhow::Result<()> {
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            -- Replaces trust_proxy_headers, which believed the left-most
+            -- X-Forwarded-For entry and so could be forged. The old column is
+            -- left in place so an upgraded instance can be told its proxy
+            -- setting no longer does anything; it is never read for a decision.
+            ALTER TABLE instance_settings
+                ADD COLUMN IF NOT EXISTS trusted_proxy_cidrs TEXT NOT NULL DEFAULT '';
+
             -- One-time codes that allow a sign-up while registration is
             -- closed. See models/invite.rs for why the code is stored as
             -- written rather than hashed.

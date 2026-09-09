@@ -36,6 +36,7 @@ use config::AppConfig;
 use db::{s3::S3Store, postgres::PostgresDb, sql_store::DynSqlStore};
 use error::AppError;
 use middleware::auth::{JwtService, KeyVersionCache};
+use middleware::client_ip::TrustedProxies;
 use middleware::request_cleanup::release_request_caches;
 use middleware::request_id::request_id_layer;
 use middleware::static_cache::static_cache_headers;
@@ -499,10 +500,38 @@ fn log_effective_settings(settings: &InstanceSettings) {
         );
     }
 
-    if !settings.trust_proxy_headers && settings.auth_rate_limit_per_minute > 0 {
+    let (trusted, rejected) = TrustedProxies::parse(settings.trusted_proxy_cidrs.iter());
+
+    if !rejected.is_empty() {
+        // Trusting fewer proxies than asked for is a working configuration
+        // that quietly throttles real users as one bucket, so it has to be
+        // said out loud rather than left to be inferred.
+        tracing::warn!(
+            entries = %rejected.join(", "),
+            "ignoring trusted_proxy_cidrs entries that are not addresses or CIDR ranges; \
+             requests arriving through those proxies will be throttled as one client"
+        );
+    }
+
+    if settings.legacy_trust_proxy_headers && trusted.is_empty() {
+        // The old boolean believed the left-most X-Forwarded-For entry, which
+        // the caller writes, so an instance running with it on had no working
+        // throttle at all. Carrying it forward would preserve that. Refusing
+        // to, silently, would throttle every client behind the proxy as one.
+        // Neither is acceptable without the operator knowing.
+        tracing::warn!(
+            "trust_proxy_headers is set but no longer does anything: it believed the left-most \
+             X-Forwarded-For entry, which any caller can forge. Set trusted_proxy_cidrs to your \
+             proxy's address ranges to restore per-client throttling. Until then every client \
+             behind the proxy shares one allowance"
+        );
+    }
+
+    if trusted.is_empty() && settings.auth_rate_limit_per_minute > 0 {
         tracing::info!(
             "auth throttling keys on the connecting address; if this instance sits behind a \
-             reverse proxy, turn on trust_proxy_headers or every client will share one allowance"
+             reverse proxy, set trusted_proxy_cidrs to its address ranges or every client will \
+             share one allowance"
         );
     }
 }

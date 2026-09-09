@@ -105,7 +105,7 @@ type InstanceSettings = {
   auth_rate_limit_per_minute: number;
   failed_login_threshold: number;
   failed_login_lockout_minutes: number;
-  trust_proxy_headers: boolean;
+  trusted_proxy_cidrs: string[];
   updated_at: string;
 };
 
@@ -618,7 +618,7 @@ export default function App() {
           auth_rate_limit_per_minute: settingsDraft.auth_rate_limit_per_minute,
           failed_login_threshold: settingsDraft.failed_login_threshold,
           failed_login_lockout_minutes: settingsDraft.failed_login_lockout_minutes,
-          trust_proxy_headers: settingsDraft.trust_proxy_headers,
+          trusted_proxy_cidrs: settingsDraft.trusted_proxy_cidrs,
         }),
       });
       setInstance(data);
@@ -1769,28 +1769,36 @@ export default function App() {
                           </span>
                         </label>
                         <label className="form-grid-span">
-                          <span className="detail-label switch-label">
-                            <input
-                              type="checkbox"
-                              checked={settingsDraft.trust_proxy_headers}
-                              onChange={(event) =>
-                                updateSettingsDraft({ trust_proxy_headers: event.target.checked })
-                              }
-                            />{' '}
-                            There is a reverse proxy in front of this server
-                          </span>
+                          <span className="detail-label">Trusted proxy ranges</span>
+                          <input
+                            type="text"
+                            className="detail-input"
+                            placeholder="10.0.0.0/8, 192.168.1.5"
+                            value={settingsDraft.trusted_proxy_cidrs.join(', ')}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                trusted_proxy_cidrs: event.target.value
+                                  .split(',')
+                                  .map((entry) => entry.trim())
+                                  .filter((entry) => entry.length > 0),
+                              })
+                            }
+                          />
                           <span className="panel-help field-help">
-                            Turn this on if traffic reaches the server through nginx, Caddy, Traefik
-                            or similar, so it counts each visitor separately instead of treating the
-                            whole internet as one. Leave it off otherwise — a visitor could then
-                            claim any address they liked and walk around the limits.{' '}
+                            The addresses your own reverse proxy talks to us from — nginx, Caddy,
+                            Traefik or similar — as ranges or single addresses, separated by commas.
+                            Only requests arriving from these are allowed to say who they are
+                            forwarding for, so each visitor is counted separately instead of the
+                            whole site sharing one allowance. Leave it empty if nothing sits in
+                            front: a visitor could otherwise claim any address they liked and walk
+                            around the limits.{' '}
                             <strong>
                               Right now this server thinks you are at {instance.observed_client_address}
                             </strong>
                             {instance.forwarded_header_present
                               ? ', and your request did come through a proxy.'
                               : ', and your request did not come through a proxy.'}{' '}
-                            If that is not the machine you are sitting at, this setting is wrong.
+                            If that is not the machine you are sitting at, this list is wrong.
                           </span>
                         </label>
                       </div>

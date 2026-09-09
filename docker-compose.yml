@@ -91,11 +91,20 @@ services:
       # REGISTRATION_ENABLED     true (default) or false
       # USER_STORAGE_LIMIT_BYTES per-account cap; 0 (default) is unlimited
       # MAX_ATTACHMENT_SIZE_BYTES largest single file; 0 (default) is unlimited
-      # TRUST_PROXY_HEADERS      true when a proxy you control sets
-      #                          X-Forwarded-For; false (default) otherwise
+      # TRUSTED_PROXY_CIDRS      comma-separated address ranges your own
+      #                          reverse proxy reaches the server from, e.g.
+      #                          10.0.0.0/8,192.168.1.5. Only requests from
+      #                          these have X-Forwarded-For believed. Empty
+      #                          (default) means nothing sits in front.
+      #                          Replaces TRUST_PROXY_HEADERS, which trusted
+      #                          an entry the caller writes; see
+      #                          docs/DEPLOYMENT.md#behind-a-reverse-proxy.
       REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
       USER_STORAGE_LIMIT_BYTES: ${USER_STORAGE_LIMIT_BYTES:-0}
       MAX_ATTACHMENT_SIZE_BYTES: ${MAX_ATTACHMENT_SIZE_BYTES:-0}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      # Read only so an upgraded instance can be warned that it no longer
+      # does anything.
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
 
       # Filesystem whose free space the Status page reports. The container root

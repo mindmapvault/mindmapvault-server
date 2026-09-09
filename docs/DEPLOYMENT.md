@@ -235,13 +235,45 @@ and revoked shares sit there until the daily cleanup removes them.
 | Auth requests per address per minute | 30 | Applies to sign-in, sign-up and the salt lookup. 0 turns it off. |
 | Failed sign-ins before lockout | 10 | Per username, then locked for the lockout length. 0 turns it off. |
 | Lockout length | 15 minutes | How long that lasts. |
+| Trusted proxy ranges | empty | Address ranges your own reverse proxy reaches the server from. Only a request from one of these has its `X-Forwarded-For` believed. Empty means nothing is in front. |
 
 The environment variables `REGISTRATION_ENABLED`, `USER_STORAGE_LIMIT_BYTES`,
-`MAX_ATTACHMENT_SIZE_BYTES` and `TRUST_PROXY_HEADERS` **seed** these values the
+`MAX_ATTACHMENT_SIZE_BYTES` and `TRUSTED_PROXY_CIDRS` **seed** these values the
 first time the server starts against an empty database, so a new deployment can
 come up already closed. Once the settings row exists they are ignored — the
 admin console is the authority, and there is no second place to look when the
 two disagree. The effective values are printed at startup.
+
+### Behind a reverse proxy
+
+Every request then arrives from the proxy, so without help the per-address
+limits count the whole site as one client. `X-Forwarded-For` carries the real
+address, but it is a request header and anyone can write anything in it.
+
+**List the addresses your proxy talks to us from** in *Trusted proxy ranges*,
+as CIDR ranges or single addresses:
+
+```
+TRUSTED_PROXY_CIDRS=10.0.0.0/8,192.168.1.5
+```
+
+A request is then attributed to the first hop, counting inwards from the
+server, that is **not** one of those ranges. Entries an attacker prepends sit
+further out than the address the proxy appended, so they are never reached.
+Leave the list empty when nothing sits in front: the connecting address is used
+and the header ignored.
+
+If the admin console's status panel says it thinks you are at your proxy's
+address rather than your own, the list is missing an entry.
+
+> **Upgrading from `TRUST_PROXY_HEADERS`.** That setting believed the
+> *left-most* `X-Forwarded-For` entry, which the caller writes — so an instance
+> running with it on could be stepped around with one header and had no working
+> per-address limit. It is **not** carried over. An upgraded instance that had
+> it set logs a warning at startup and behaves as though nothing is trusted,
+> which throttles everyone behind the proxy as one client until you set
+> `TRUSTED_PROXY_CIDRS`. That is deliberate: the alternative was to keep a
+> bypassable limit running silently.
 
 Two things worth knowing:
 

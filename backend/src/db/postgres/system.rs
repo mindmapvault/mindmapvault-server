@@ -43,7 +43,8 @@ impl SystemStore for PostgresDb {
             .query_opt(
                 "SELECT registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
                         auth_rate_limit_per_minute, failed_login_threshold,
-                        failed_login_lockout_minutes, trust_proxy_headers, updated_at
+                        failed_login_lockout_minutes, trust_proxy_headers,
+                        trusted_proxy_cidrs, updated_at
                  FROM instance_settings
                  WHERE id = 1",
                 &[],
@@ -57,8 +58,9 @@ impl SystemStore for PostgresDb {
             auth_rate_limit_per_minute: row.get(3),
             failed_login_threshold: row.get(4),
             failed_login_lockout_minutes: row.get(5),
-            trust_proxy_headers: row.get(6),
-            updated_at: row.get(7),
+            legacy_trust_proxy_headers: row.get(6),
+            trusted_proxy_cidrs: split_cidrs(row.get(7)),
+            updated_at: row.get(8),
         }))
     }
 
@@ -71,8 +73,9 @@ impl SystemStore for PostgresDb {
                 "INSERT INTO instance_settings (
                     id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
                     auth_rate_limit_per_minute, failed_login_threshold,
-                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
-                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+                    failed_login_lockout_minutes, trust_proxy_headers,
+                    trusted_proxy_cidrs, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT (id) DO NOTHING",
                 &[
                     &seed.registration_enabled,
@@ -81,7 +84,8 @@ impl SystemStore for PostgresDb {
                     &seed.auth_rate_limit_per_minute,
                     &seed.failed_login_threshold,
                     &seed.failed_login_lockout_minutes,
-                    &seed.trust_proxy_headers,
+                    &seed.legacy_trust_proxy_headers,
+                    &join_cidrs(&seed.trusted_proxy_cidrs),
                     &seed.updated_at,
                 ],
             )
@@ -101,8 +105,9 @@ impl SystemStore for PostgresDb {
                 "INSERT INTO instance_settings (
                     id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
                     auth_rate_limit_per_minute, failed_login_threshold,
-                    failed_login_lockout_minutes, trust_proxy_headers, updated_at
-                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8)
+                    failed_login_lockout_minutes, trust_proxy_headers,
+                    trusted_proxy_cidrs, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT (id) DO UPDATE SET
                     registration_enabled = EXCLUDED.registration_enabled,
                     user_storage_limit_bytes = EXCLUDED.user_storage_limit_bytes,
@@ -111,6 +116,7 @@ impl SystemStore for PostgresDb {
                     failed_login_threshold = EXCLUDED.failed_login_threshold,
                     failed_login_lockout_minutes = EXCLUDED.failed_login_lockout_minutes,
                     trust_proxy_headers = EXCLUDED.trust_proxy_headers,
+                    trusted_proxy_cidrs = EXCLUDED.trusted_proxy_cidrs,
                     updated_at = EXCLUDED.updated_at",
                 &[
                     &settings.registration_enabled,
@@ -119,7 +125,8 @@ impl SystemStore for PostgresDb {
                     &settings.auth_rate_limit_per_minute,
                     &settings.failed_login_threshold,
                     &settings.failed_login_lockout_minutes,
-                    &settings.trust_proxy_headers,
+                    &settings.legacy_trust_proxy_headers,
+                    &join_cidrs(&settings.trusted_proxy_cidrs),
                     &settings.updated_at,
                 ],
             )
@@ -152,4 +159,17 @@ impl SystemStore for PostgresDb {
             size_bytes: row.get::<_, Option<i64>>(1),
         })
     }
+}
+
+/// The CIDR list is stored as one comma-separated column rather than TEXT[],
+/// so it reads the same way in `psql` as it does in the env var that seeds it.
+fn split_cidrs(raw: String) -> Vec<String> {
+    raw.split(',')
+        .map(|entry| entry.trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+fn join_cidrs(entries: &[String]) -> String {
+    entries.join(",")
 }

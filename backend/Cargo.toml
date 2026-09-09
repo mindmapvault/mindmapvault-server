@@ -27,6 +27,9 @@ rand = "0.8"
 # transitively; naming them here only makes the dependency honest.
 hmac = "0.12"
 sha2 = "0.10"
+# CIDR containment for the trusted-proxy list in middleware/client_ip.rs.
+# Already resolved through the AWS SDK; named here to use it directly.
+ipnet = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

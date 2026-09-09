@@ -332,15 +332,15 @@ async fn get_status(
 
     // Only worth raising when the header is actually arriving: an instance
     // with no proxy in front has nothing to fix here.
-    if !settings.trust_proxy_headers && headers.contains_key("x-forwarded-for") {
+    if settings.trusted_proxy_cidrs.is_empty() && headers.contains_key("x-forwarded-for") {
         warnings.push(StatusWarning {
             code: "proxy_header_ignored",
             title: "There is a proxy in front, but its client addresses are being ignored"
                 .to_string(),
             detail: format!(
                 "This request arrived with an X-Forwarded-For header but was counted as coming \
-                 from {client_ip}. Until you turn on \"Read the client address from \
-                 X-Forwarded-For\" in Settings, everyone shares one sign-in allowance."
+                 from {client_ip}. Until you list your proxy's address ranges under \"Trusted \
+                 proxy ranges\" in Settings, everyone behind it shares one sign-in allowance."
             ),
         });
     }
@@ -739,9 +739,9 @@ fn describe_settings_change(before: &InstanceSettings, after: &InstanceSettings)
         after.failed_login_lockout_minutes.to_string(),
     );
     note(
-        "trust_proxy_headers",
-        before.trust_proxy_headers.to_string(),
-        after.trust_proxy_headers.to_string(),
+        "trusted_proxy_cidrs",
+        before.trusted_proxy_cidrs.join(","),
+        after.trusted_proxy_cidrs.join(","),
     );
 
     (!changes.is_empty()).then(|| changes.join("; "))
