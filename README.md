@@ -23,6 +23,9 @@ Interactive demo: https://mindmapvault.github.io/mindmapvault-foss/demo/
 - **Encrypted share links** — share a vault by link with a passphrase the server never sees; recipients need no account, and revoking deletes the shared copy
 - **Single Docker image** — one container runs the API, the web UI, and the admin surface together
 - **Single sign-on** — sign in with any OpenID Connect provider (Authentik, Keycloak, Entra, Google) alongside passwords. Federated users still choose a vault passphrase, because an identity provider can say who someone is but cannot decrypt their vaults
+- **Trusted devices** — "Remember this device" stops the unlock screen asking for a passphrase on a machine you own. The key is wrapped by a non-extractable key held in that browser, so the server keeps ciphertext it cannot open. Opt-in per device, and every stored copy is dropped when credentials are rotated
+- **Import and export** — a native lossless `.mmvault` format, plus FreeMind, FreePlane, XMind, WiseMapping, Markdown/Obsidian, PNG and PDF. A round-trip gate in CI fails the build when a format silently drops a field it claims to carry
+- **Sign-in protection** — per-address token buckets, bounded Argon2 verification, and no oracle telling a caller which usernames exist. Behind a reverse proxy, list the proxy's ranges in `TRUSTED_PROXY_CIDRS` so each visitor is counted separately
 - **AGPL-3 licensed**
 
 What this server does not include: sync, offline client features, team management, enterprise governance, or compliance controls. Those belong to other product lines. Plain OIDC sign-in **is** included here; directory sync, group and role mapping, and audit overlays are not.
@@ -51,6 +54,15 @@ What you get:
 
 For the public OSS feature status and what is intentionally out of scope, see [`docs/OSS_FEATURES.md`](docs/OSS_FEATURES.md).
 
+### Upgrading to 0.6.0
+
+Two settings need attention, both covered in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md):
+
+- **`TRUST_PROXY_HEADERS` is gone and is not carried over.** It trusted the left-most `X-Forwarded-For` entry, which the caller writes, so it could be stepped around with one header. Set [`TRUSTED_PROXY_CIDRS`](docs/DEPLOYMENT.md#client-addresses-behind-a-proxy) to your proxy's ranges instead. An instance that still has the old flag set logs a warning at startup and trusts nothing, which throttles everyone behind the proxy as a single client until you fill the new setting in.
+- **`PUBLIC_BASE_URL` is required for single sign-on.** The redirect URI has to match the one registered at the provider and cannot be taken from the `Host` header, which the caller chooses. See [Federated sign-in](docs/DEPLOYMENT.md#federated-sign-in-sso).
+
+Every release is written up in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Privacy Boundary
 
 This project is designed for zero-knowledge-compatible workflows.
@@ -68,9 +80,14 @@ This is a backend service, not an anonymity system. Password hygiene, endpoint p
 backend/          Rust API, auth, storage, route handlers
 frontend_app/     React web client (served at / in the packaged image)
 frontend_admin/   Admin surface (served at /admin/ in the packaged image)
+packages/         Shared libraries: mindmap-core, connectors
+desktop/          Tauri shell wrapping the web client
 docker-compose.yml  Local stack: PostgreSQL, S3, server
 docs/DEPLOYMENT.md  Full operator guide
+scripts/          Release and validation gates
+playwright/       Browser end-to-end tests
 tests/            Load tests and regression helpers
+.github/workflows/  CI, image build, security guard
 ```
 
 ## Build From Source
@@ -89,11 +106,36 @@ docker run --env-file .env -p 8090:8090 mindmapvault-server:local
 
 ## Validation
 
+Backend:
+
 ```bash
 cargo check --manifest-path backend/Cargo.toml
 cargo test --manifest-path backend/Cargo.toml
+```
+
+Web client and admin surface:
+
+```bash
+pnpm -C frontend_app install
+pnpm -C frontend_app exec tsc --noEmit -p tsconfig.json
+pnpm -C frontend_app test
+
+pnpm -C frontend_admin install
+pnpm -C frontend_admin build
+```
+
+Repository gates, from the root:
+
+```bash
+node scripts/check_import_export_roundtrip.mjs
 node scripts/check_no_committed_secrets.mjs
 ```
+
+`.github/workflows/ci.yml` runs all of the above on every pull request and on
+every push to `main`. The round-trip gate is the one worth knowing about: it
+exports a fixture tree that sets every field the editor supports, re-imports it,
+and diffs the result against a per-format fidelity mask, so a format that
+silently drops a field it claims to carry fails the build rather than shipping.
 
 ## Running This Yourself
 
