@@ -20,7 +20,8 @@ use crate::{
     middleware::{
         auth::{AuthenticatedUser, JwtService, KeyVersionCache},
         client_ip::ClientIp,
-        throttle::AuthThrottle,
+        throttle::{AttemptClass, AuthThrottle, CredentialKind},
+        verify_budget::VerifyBudget,
     },
     models::{
         access::{AccessSource, SubscriptionMode, UiSurface, UserAccessGrant},
@@ -50,6 +51,10 @@ pub struct AuthSqlState {
     /// credential. Derived from `JWT_SECRET` rather than being it, so the
     /// signing key is never used for a second purpose.
     pub salt_pepper: SaltPepper,
+    /// Bounds how much Argon2 this instance will run at once, and keeps it off
+    /// the async executor. The per-address throttle cannot do this: it is keyed
+    /// on the thing a botnet spreads across.
+    pub verify_budget: VerifyBudget,
 }
 
 impl FromRef<AuthSqlState> for Arc<JwtService> {
@@ -98,6 +103,10 @@ struct SaltQuery {
     username: String,
 }
 
+/// The salt length `RegisterPage` generates, and therefore the length a
+/// pseudo-salt has to match. HMAC-SHA256 outputs exactly this much.
+const REGISTRATION_SALT_BYTES: usize = 32;
+
 /// Derives the salt handed out for a username with no password credential.
 ///
 /// The value has to be three things at once: **stable**, so asking twice does
@@ -106,10 +115,6 @@ struct SaltQuery {
 /// response is indistinguishable from an account that does have one.
 ///
 /// HMAC-SHA256 keyed on a secret derived from `JWT_SECRET` gives all three.
-/// The salt length `RegisterPage` generates, and therefore the length a
-/// pseudo-salt has to match. HMAC-SHA256 outputs exactly this much.
-const REGISTRATION_SALT_BYTES: usize = 32;
-
 #[derive(Clone)]
 pub struct SaltPepper(Arc<[u8; REGISTRATION_SALT_BYTES]>);
 
@@ -162,16 +167,28 @@ struct RefreshRequest {
     refresh_token: String,
 }
 
-/// Counts one request against the caller's per-minute auth allowance.
+/// Counts one request against the caller's allowance for its class.
 ///
 /// Applied to the three unauthenticated routes — salt lookup, register and
 /// login — because those are the ones a stranger can call in a loop. The rest
 /// of this router needs a valid token first.
-fn count_auth_request(state: &AuthSqlState, client_ip: ClientIp) -> Result<(), AppError> {
-    let limit = state.settings.get().auth_rate_limit_per_minute;
+///
+/// The lookup has its own budget: it is an indexed read, and a vault unlock
+/// spends one, so sharing an allowance with sign-in meant a reload flurry could
+/// lock someone out of signing in entirely.
+fn count_auth_request(
+    state: &AuthSqlState,
+    client_ip: ClientIp,
+    class: AttemptClass,
+) -> Result<(), AppError> {
+    let settings = state.settings.get();
+    let limit = match class {
+        AttemptClass::Lookup => settings.lookup_rate_limit_per_minute,
+        AttemptClass::Credential => settings.auth_rate_limit_per_minute,
+    };
     state
         .throttle
-        .check_address(client_ip.0, limit)
+        .check_address(client_ip.0, class, limit)
         .map_err(|retry_after| {
             AppError::TooManyRequests(
                 "too many attempts; please wait and try again".to_string(),
@@ -185,7 +202,7 @@ async fn get_salt(
     client_ip: ClientIp,
     Query(q): Query<SaltQuery>,
 ) -> Result<Json<SaltResponse>, AppError> {
-    count_auth_request(&state, client_ip)?;
+    count_auth_request(&state, client_ip, AttemptClass::Lookup)?;
 
     if q.username.is_empty() {
         return Err(AppError::BadRequest("username is required".to_string()));
@@ -236,7 +253,7 @@ async fn register(
     client_ip: ClientIp,
     Json(body): Json<RegisterRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    count_auth_request(&state, client_ip)?;
+    count_auth_request(&state, client_ip, AttemptClass::Credential)?;
 
     if body.username.trim().is_empty() {
         return Err(AppError::BadRequest("username cannot be empty".to_string()));
@@ -356,7 +373,7 @@ async fn login(
     client_ip: ClientIp,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    count_auth_request(&state, client_ip)?;
+    count_auth_request(&state, client_ip, AttemptClass::Credential)?;
 
     if body.username.is_empty() || body.auth_token.is_empty() {
         return Err(AppError::BadRequest("username and auth_token are required".to_string()));
@@ -366,7 +383,10 @@ async fn login(
 
     // Checked before the account is even looked up, so a locked-out attacker
     // learns nothing further and costs the database nothing.
-    if let Some(remaining) = state.throttle.lockout_remaining(&body.username) {
+    if let Some(remaining) = state
+        .throttle
+        .lockout_remaining(&body.username, CredentialKind::Password)
+    {
         return Err(AppError::TooManyRequests(
             "too many failed sign-in attempts; please wait and try again".to_string(),
             remaining.as_secs().max(1),
@@ -381,6 +401,7 @@ async fn login(
             // password, which is a username oracle.
             state.throttle.record_failure(
                 &body.username,
+                CredentialKind::Password,
                 settings.failed_login_threshold,
                 settings.failed_login_lockout_minutes,
             );
@@ -392,16 +413,20 @@ async fn login(
         return Err(AppError::Unauthorized("account is locked".to_string()));
     }
 
-    if verify_auth_token(&body.auth_token, &user.auth_hash).is_err() {
+    if verify_auth_token_budgeted(&state.verify_budget, &body.auth_token, &user.auth_hash)
+        .await?
+        .is_err()
+    {
         state.throttle.record_failure(
             &body.username,
+            CredentialKind::Password,
             settings.failed_login_threshold,
             settings.failed_login_lockout_minutes,
         );
         return Err(AppError::Unauthorized("invalid credentials".to_string()));
     }
 
-    state.throttle.record_success(&body.username);
+    state.throttle.record_success(&body.username, CredentialKind::Password);
 
     let access_token = state.jwt.issue_access_token(&user.id, user.key_version)?;
     let refresh_token = state.jwt.issue_refresh_token(&user.id, user.key_version)?;
@@ -1080,4 +1105,22 @@ mod salt_oracle_tests {
         assert_eq!(salt, stored);
         assert_eq!(params.t_cost, 3);
     }
+}
+
+/// Runs `verify_auth_token` under the instance's verification budget.
+///
+/// The inner `Result` is the credential answer; the outer one is whether we
+/// were willing to spend the CPU at all. Keeping them apart matters: a rejected
+/// *attempt* must not be recorded as a failed *password*, or a busy server
+/// would lock out the users it is too busy to serve.
+async fn verify_auth_token_budgeted(
+    budget: &VerifyBudget,
+    auth_token: &str,
+    stored_hash: &str,
+) -> Result<Result<(), AppError>, AppError> {
+    let auth_token = auth_token.to_string();
+    let stored_hash = stored_hash.to_string();
+    budget
+        .run(move || verify_auth_token(&auth_token, &stored_hash))
+        .await
 }

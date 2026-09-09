@@ -103,6 +103,7 @@ type InstanceSettings = {
   user_storage_limit_bytes: number;
   max_attachment_size_bytes: number;
   auth_rate_limit_per_minute: number;
+  lookup_rate_limit_per_minute: number;
   failed_login_threshold: number;
   failed_login_lockout_minutes: number;
   trusted_proxy_cidrs: string[];
@@ -616,6 +617,7 @@ export default function App() {
           user_storage_limit_bytes: settingsDraft.user_storage_limit_bytes,
           max_attachment_size_bytes: settingsDraft.max_attachment_size_bytes,
           auth_rate_limit_per_minute: settingsDraft.auth_rate_limit_per_minute,
+          lookup_rate_limit_per_minute: settingsDraft.lookup_rate_limit_per_minute,
           failed_login_threshold: settingsDraft.failed_login_threshold,
           failed_login_lockout_minutes: settingsDraft.failed_login_lockout_minutes,
           trusted_proxy_cidrs: settingsDraft.trusted_proxy_cidrs,
@@ -1724,8 +1726,29 @@ export default function App() {
                             }
                           />
                           <span className="panel-help field-help">
-                            Covers signing in, signing up and the salt lookup. One normal sign-in
-                            costs two. 0 turns it off.
+                            Covers signing in and signing up. These check the password with Argon2,
+                            which is deliberately slow, so keep this tight. 0 turns it off.
+                          </span>
+                        </label>
+                        <label>
+                          <span className="detail-label">Salt lookups per minute, per address</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="detail-input number-input"
+                            value={settingsDraft.lookup_rate_limit_per_minute}
+                            onChange={(event) =>
+                              updateSettingsDraft({
+                                lookup_rate_limit_per_minute: Number(event.target.value) || 0,
+                              })
+                            }
+                          />
+                          <span className="panel-help field-help">
+                            A lookup is one indexed read, and unlocking a vault spends one — so
+                            this can be generous. It used to share the allowance above, which meant
+                            a burst of reloads could lock someone out of signing in. 0 turns it
+                            off.
                           </span>
                         </label>
                         <label>

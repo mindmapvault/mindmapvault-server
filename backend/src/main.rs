@@ -37,6 +37,7 @@ use db::{s3::S3Store, postgres::PostgresDb, sql_store::DynSqlStore};
 use error::AppError;
 use middleware::auth::{JwtService, KeyVersionCache};
 use middleware::client_ip::TrustedProxies;
+use middleware::verify_budget::VerifyBudget;
 use middleware::request_cleanup::release_request_caches;
 use middleware::request_id::request_id_layer;
 use middleware::static_cache::static_cache_headers;
@@ -291,6 +292,19 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let throttle = Arc::new(AuthThrottle::new());
+    // Sized from the hardware unless the operator says otherwise. This is a
+    // property of the machine rather than a policy, so it stays an environment
+    // variable instead of joining the admin console's settings.
+    let verify_budget = VerifyBudget::new(
+        std::env::var("AUTH_VERIFY_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0),
+    );
+    tracing::info!(
+        concurrent_verifications = verify_budget.limit(),
+        "credential verification is bounded; requests over this wait briefly, then get 429"
+    );
     // User id → current key_version, so write requests can refuse sessions
     // that predate a password rotation without a DB read per request.
     let key_versions = KeyVersionCache::new();
@@ -374,6 +388,7 @@ async fn main() -> anyhow::Result<()> {
             throttle: throttle.clone(),
             key_versions: key_versions.clone(),
             salt_pepper: SaltPepper::from_jwt_secret(&cfg.jwt_secret),
+            verify_budget: verify_budget.clone(),
         };
 
         let mindmaps_state = MindMapsSqlState {
@@ -489,6 +504,7 @@ fn log_effective_settings(settings: &InstanceSettings) {
         user_storage_limit = %describe(settings.storage_limit()),
         max_attachment_size = %describe(settings.attachment_limit()),
         auth_rate_limit_per_minute = settings.auth_rate_limit_per_minute,
+        lookup_rate_limit_per_minute = settings.lookup_rate_limit_per_minute,
         failed_login_threshold = settings.failed_login_threshold,
         "instance settings loaded (change these in the admin console)"
     );

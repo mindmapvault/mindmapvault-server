@@ -88,6 +88,12 @@ pub async fn ensure_schema(client: &Client) -> anyhow::Result<()> {
             ALTER TABLE instance_settings
                 ADD COLUMN IF NOT EXISTS trusted_proxy_cidrs TEXT NOT NULL DEFAULT '';
 
+            -- Salt lookups get their own allowance: they are an indexed read,
+            -- and a vault unlock spends one, so sharing the sign-in budget let
+            -- a reload flurry lock someone out of signing in.
+            ALTER TABLE instance_settings
+                ADD COLUMN IF NOT EXISTS lookup_rate_limit_per_minute INTEGER NOT NULL DEFAULT 120;
+
             -- One-time codes that allow a sign-up while registration is
             -- closed. See models/invite.rs for why the code is stored as
             -- written rather than hashed.

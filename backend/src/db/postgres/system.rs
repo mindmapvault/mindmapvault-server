@@ -44,7 +44,7 @@ impl SystemStore for PostgresDb {
                 "SELECT registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
                         auth_rate_limit_per_minute, failed_login_threshold,
                         failed_login_lockout_minutes, trust_proxy_headers,
-                        trusted_proxy_cidrs, updated_at
+                        trusted_proxy_cidrs, lookup_rate_limit_per_minute, updated_at
                  FROM instance_settings
                  WHERE id = 1",
                 &[],
@@ -60,7 +60,8 @@ impl SystemStore for PostgresDb {
             failed_login_lockout_minutes: row.get(5),
             legacy_trust_proxy_headers: row.get(6),
             trusted_proxy_cidrs: split_cidrs(row.get(7)),
-            updated_at: row.get(8),
+            lookup_rate_limit_per_minute: row.get(8),
+            updated_at: row.get(9),
         }))
     }
 
@@ -74,8 +75,8 @@ impl SystemStore for PostgresDb {
                     id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
                     auth_rate_limit_per_minute, failed_login_threshold,
                     failed_login_lockout_minutes, trust_proxy_headers,
-                    trusted_proxy_cidrs, updated_at
-                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    trusted_proxy_cidrs, lookup_rate_limit_per_minute, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT (id) DO NOTHING",
                 &[
                     &seed.registration_enabled,
@@ -86,6 +87,7 @@ impl SystemStore for PostgresDb {
                     &seed.failed_login_lockout_minutes,
                     &seed.legacy_trust_proxy_headers,
                     &join_cidrs(&seed.trusted_proxy_cidrs),
+                    &seed.lookup_rate_limit_per_minute,
                     &seed.updated_at,
                 ],
             )
@@ -106,8 +108,8 @@ impl SystemStore for PostgresDb {
                     id, registration_enabled, user_storage_limit_bytes, max_attachment_size_bytes,
                     auth_rate_limit_per_minute, failed_login_threshold,
                     failed_login_lockout_minutes, trust_proxy_headers,
-                    trusted_proxy_cidrs, updated_at
-                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    trusted_proxy_cidrs, lookup_rate_limit_per_minute, updated_at
+                 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                  ON CONFLICT (id) DO UPDATE SET
                     registration_enabled = EXCLUDED.registration_enabled,
                     user_storage_limit_bytes = EXCLUDED.user_storage_limit_bytes,
@@ -117,6 +119,7 @@ impl SystemStore for PostgresDb {
                     failed_login_lockout_minutes = EXCLUDED.failed_login_lockout_minutes,
                     trust_proxy_headers = EXCLUDED.trust_proxy_headers,
                     trusted_proxy_cidrs = EXCLUDED.trusted_proxy_cidrs,
+                    lookup_rate_limit_per_minute = EXCLUDED.lookup_rate_limit_per_minute,
                     updated_at = EXCLUDED.updated_at",
                 &[
                     &settings.registration_enabled,
@@ -127,6 +130,7 @@ impl SystemStore for PostgresDb {
                     &settings.failed_login_lockout_minutes,
                     &settings.legacy_trust_proxy_headers,
                     &join_cidrs(&settings.trusted_proxy_cidrs),
+                    &settings.lookup_rate_limit_per_minute,
                     &settings.updated_at,
                 ],
             )

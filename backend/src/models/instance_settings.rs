@@ -32,8 +32,16 @@ pub struct InstanceSettings {
     /// Largest single attachment in bytes; `UNLIMITED` disables it. The
     /// transport still caps a request body at `MAX_UPLOAD_BODY_BYTES`.
     pub max_attachment_size_bytes: i64,
-    /// Auth requests allowed per client address per minute; 0 disables it.
+    /// Sign-in, sign-up and other credential attempts allowed per client
+    /// address per minute; 0 disables it. These run Argon2, so the allowance is
+    /// deliberately tight.
     pub auth_rate_limit_per_minute: i32,
+    /// Salt lookups allowed per client address per minute; 0 disables it.
+    ///
+    /// Separate from the above because a lookup is an indexed read, and because
+    /// unlocking a vault spends one — sharing an allowance meant a reload
+    /// flurry could lock someone out of signing in.
+    pub lookup_rate_limit_per_minute: i32,
     /// Consecutive failed logins before an account is throttled; 0 disables it.
     pub failed_login_threshold: i32,
     /// How long that throttle lasts.
@@ -61,6 +69,7 @@ impl Default for InstanceSettings {
             user_storage_limit_bytes: UNLIMITED,
             max_attachment_size_bytes: UNLIMITED,
             auth_rate_limit_per_minute: 30,
+            lookup_rate_limit_per_minute: 120,
             failed_login_threshold: 10,
             failed_login_lockout_minutes: 15,
             trusted_proxy_cidrs: Vec::new(),
@@ -117,6 +126,7 @@ pub struct UpdateInstanceSettingsRequest {
     pub user_storage_limit_bytes: Option<i64>,
     pub max_attachment_size_bytes: Option<i64>,
     pub auth_rate_limit_per_minute: Option<i32>,
+    pub lookup_rate_limit_per_minute: Option<i32>,
     pub failed_login_threshold: Option<i32>,
     pub failed_login_lockout_minutes: Option<i32>,
     pub trusted_proxy_cidrs: Option<Vec<String>>,
@@ -148,6 +158,12 @@ impl UpdateInstanceSettingsRequest {
                 return Err("auth_rate_limit_per_minute must be between 0 and 100000".to_string());
             }
             next.auth_rate_limit_per_minute = value;
+        }
+        if let Some(value) = self.lookup_rate_limit_per_minute {
+            if !(0..=100_000).contains(&value) {
+                return Err("lookup_rate_limit_per_minute must be between 0 and 100000".to_string());
+            }
+            next.lookup_rate_limit_per_minute = value;
         }
         if let Some(value) = self.failed_login_threshold {
             if !(0..=1_000).contains(&value) {

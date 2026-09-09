@@ -83,6 +83,12 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:1420,http://tauri.localhost,https://tauri.localhost}
       RUST_LOG: ${RUST_LOG:-backend=info,tower_http=info}
 
+      # How many credential verifications may run at once. Argon2 is
+      # deliberately slow, and the per-address limits are keyed on something a
+      # botnet spreads across, so this is what actually bounds the CPU one
+      # instance will spend on sign-ins. Empty means "one per core".
+      AUTH_VERIFY_CONCURRENCY: ${AUTH_VERIFY_CONCURRENCY:-}
+
       # Seeds for the instance settings, read only when this database has no
       # settings row yet — the first start of a new deployment. After that the
       # admin console at /admin/ is the one place these change, so editing them

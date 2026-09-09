@@ -232,7 +232,8 @@ and revoked shares sit there until the daily cleanup removes them.
 | Allow new sign-ups | on | Off refuses `POST /api/auth/register` and hides the sign-up form. Existing accounts are unaffected. |
 | Storage per account | unlimited | Refuses an upload that would take the account past the cap. |
 | Largest single file | unlimited | Refuses one file above the size, before it is uploaded. |
-| Auth requests per address per minute | 30 | Applies to sign-in, sign-up and the salt lookup. 0 turns it off. |
+| Auth requests per address per minute | 30 | Sign-in and sign-up. These run Argon2, so keep it tight. 0 turns it off. |
+| Salt lookups per address per minute | 120 | One indexed read each, and a vault unlock spends one, so it can be generous. 0 turns it off. |
 | Failed sign-ins before lockout | 10 | Per username, then locked for the lockout length. 0 turns it off. |
 | Lockout length | 15 minutes | How long that lasts. |
 | Trusted proxy ranges | empty | Address ranges your own reverse proxy reaches the server from. Only a request from one of these has its `X-Forwarded-For` believed. Empty means nothing is in front. |
@@ -243,6 +244,28 @@ first time the server starts against an empty database, so a new deployment can
 come up already closed. Once the settings row exists they are ignored — the
 admin console is the authority, and there is no second place to look when the
 two disagree. The effective values are printed at startup.
+
+These are **token buckets**, not fixed windows: a minute's allowance can be
+spent at once and refills steadily, so a burst of page reloads is absorbed
+while a sustained flood is not.
+
+### What the per-address limits do not cover
+
+They are keyed on the address, which is what an attacker with many machines
+spreads across. Ten thousand sources each staying under the limit still arrive
+as ten thousand Argon2 hashes.
+
+`AUTH_VERIFY_CONCURRENCY` bounds that directly: it caps how many credential
+verifications run at once, regardless of where they came from. It defaults to
+the number of cores, which is right for most deployments — one verification
+saturates roughly one core. Requests over the cap wait briefly and are then
+turned away with `429` rather than queued, because a queued request is 64 MiB
+of Argon2 working memory waiting to be allocated.
+
+Raise it if sign-ins are being refused on a machine that is not busy; lower it
+if sign-in load is starving the rest of the server. It is an environment
+variable rather than an admin setting because it describes the hardware, not a
+policy.
 
 ### Behind a reverse proxy
 
