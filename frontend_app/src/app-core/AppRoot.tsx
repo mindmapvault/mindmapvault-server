@@ -14,6 +14,8 @@ const LoginPage = lazy(() => import('../pages/LoginPage').then((module) => ({ de
 const LocalUnlockPage = lazy(() => import('../pages/LocalUnlockPage').then((module) => ({ default: module.LocalUnlockPage })));
 const ModePage = lazy(() => import('../pages/ModePage').then((module) => ({ default: module.ModePage })));
 const RegisterPage = lazy(() => import('../pages/RegisterPage').then((module) => ({ default: module.RegisterPage })));
+const OidcCallbackPage = lazy(() => import('../pages/OidcCallbackPage').then((module) => ({ default: module.OidcCallbackPage })));
+const FederatedEnrolPage = lazy(() => import('../pages/FederatedEnrolPage').then((module) => ({ default: module.FederatedEnrolPage })));
 const SharedVaultPage = lazy(() => import('../pages/SharedVaultPage').then((module) => ({ default: module.SharedVaultPage })));
 const VaultsPage = lazy(() => import('./pages/VaultsPage').then((module) => ({ default: module.VaultsPage })));
 const ChangePasswordPage = lazy(() => import('../pages/ChangePasswordPage').then((module) => ({ default: module.ChangePasswordPage })));
@@ -108,6 +110,10 @@ export default function AppRoot() {
 
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          {/* Where the server lands the browser after a federated sign-in, and
+              the one-time screen that finishes a new federated account. */}
+          <Route path="/auth/callback" element={<OidcCallbackPage />} />
+          <Route path="/sso/finish" element={<FederatedEnrolPage />} />
           <Route path="/shared/:shareId" element={<SharedVaultPage />} />
 
           <Route path="/local-unlock" element={isDesktop ? <LocalUnlockPage /> : <Navigate to="/login" replace />} />

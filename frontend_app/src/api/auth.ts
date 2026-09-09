@@ -7,6 +7,12 @@ import type {
 } from '../types';
 import { api } from './client';
 
+/** Only what a sign-in button needs; the server deliberately sends no more. */
+export interface OidcProvider {
+  id: string;
+  display_name: string;
+}
+
 export interface KeyBundleResponse {
   classical_public_key: string;
   pq_public_key: string;
@@ -100,6 +106,24 @@ export const authApi = {
 
   getKeyBundle: () =>
     api.get<KeyBundleResponse>('/auth/keys'),
+
+  /// The sign-in buttons to draw. Empty when no provider is configured, which
+  /// is every instance until an operator adds one.
+  listOidcProviders: () =>
+    api.get<OidcProvider[]>('/auth/oidc/providers'),
+
+  /// Finishes a federated account: the username the user chose and the key
+  /// material their vault passphrase produced. The passphrase never leaves
+  /// the browser.
+  enrolFederatedAccount: (body: {
+    username: string;
+    argon2_salt: string;
+    argon2_params: Argon2Params;
+    classical_public_key: string;
+    pq_public_key: string;
+    classical_priv_encrypted: string;
+    pq_priv_encrypted: string;
+  }) => api.post<{ username: string }>('/auth/oidc/enrol', body),
 
   getRotationManifest: () =>
     api.get<RotationManifest>('/auth/rotation-manifest'),

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { authApi } from '../api/auth';
+import { authApi, type OidcProvider } from '../api/auth';
 import { DEFAULT_CLOUD_SERVER_URL, setServerUrl } from '../api/client';
 import { DesktopTauriBadge } from '../components/DesktopTauriBadge';
 import { LogoBlock } from '../components/Logo';
@@ -64,9 +64,30 @@ export function LoginPage() {
   // Only hides the sign-up link once the server confirms it is closed; an
   // unreachable or older backend leaves the link where it has always been.
   const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
+  const [ssoProviders, setSsoProviders] = useState<OidcProvider[]>([]);
+  // Set by the callback when a provider or the user refused, so the reason is
+  // shown here rather than swallowed.
+  const ssoError = searchParams.get('sso_error');
   const postAuthRedirect = useMemo(() => getSafeRedirectPath(searchParams), [searchParams]);
   const registrationSucceeded = searchParams.get('registered') === '1';
   const appVersion = packageJson.version;
+
+  useEffect(() => {
+    // The desktop build talks to no server of its own, so it has no providers
+    // to offer. A failure here is silent on purpose: an instance with none
+    // configured is the normal case, not an error worth showing.
+    if (isDesktop) return;
+    let cancelled = false;
+    authApi
+      .listOidcProviders()
+      .then((providers) => {
+        if (!cancelled) setSsoProviders(providers);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop]);
 
   useEffect(() => {
     const prefilledUsername = searchParams.get('username')?.trim();
@@ -259,6 +280,12 @@ export function LoginPage() {
           )}
           <h2 className="mb-6 text-lg font-semibold text-white">Sign in</h2>
 
+          {ssoError && (
+            <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-200">
+              {ssoError}
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {registrationSucceeded && (
               <p className="rounded-lg border border-emerald-800 bg-emerald-900/20 px-3 py-2 text-sm text-emerald-300">
@@ -320,6 +347,31 @@ export function LoginPage() {
             </button>
 
           </form>
+
+          {ssoProviders.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-center gap-3">
+                <span className="h-px flex-1 bg-slate-700" />
+                <span className="text-xs uppercase tracking-wide text-slate-500">or</span>
+                <span className="h-px flex-1 bg-slate-700" />
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {ssoProviders.map((provider) => (
+                  <a
+                    key={provider.id}
+                    // A full navigation, not fetch: the provider needs the
+                    // browser itself, and its own cookies decide whether the
+                    // user has to sign in again.
+                    href={`/api/auth/oidc/${encodeURIComponent(provider.id)}/start`}
+                    className="flex w-full items-center justify-center rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-accent hover:text-white"
+                  >
+                    Continue with {provider.display_name}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {registrationEnabled !== false && (
