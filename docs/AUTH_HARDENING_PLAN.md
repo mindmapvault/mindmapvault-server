@@ -2,7 +2,11 @@
 
 Written 2026-09-09, after the rate limiter locked out a test run and the
 investigation found two real defects behind it. Same discipline — see
-`CLAUDE.md`. Nothing here is implemented yet.
+`CLAUDE.md`.
+
+**All four steps are implemented**, on `feat/auth-hardening`, one commit each.
+The open questions below have been answered where the work settled them; the
+rest stand.
 
 ## How this started
 
@@ -254,13 +258,25 @@ last so a security change and a UX change are not reviewed as one diff.
 
 ## Open questions
 
-- **Step 4's trade-off** above: accept the unmetered unlock screen, or keep a
-  local attempt counter, or leave `/login` in the unlock path and accept the
-  cost.
+- ~~**Step 4's trade-off**: accept the unmetered unlock screen, or keep a local
+  attempt counter, or leave `/login` in the unlock path.~~ **Settled by doing
+  it.** Whoever reaches the unlock screen already holds a session token, and
+  `GET /auth/keys` hands that token the same encrypted bundle — so they can
+  attack it offline without touching a throttled route. The server-side counter
+  was metering an attacker who had no reason to be there. A wrong password now
+  fails in the AES-GCM tag and the screen stays local.
 - **Pseudo-salt params.** Returning the instance default advertises what the
   default is. Harmless, but worth a second opinion.
 - **Semaphore sizing.** A cap that is too low turns a busy legitimate morning
-  into `429`s. Wants a number measured on real hardware, not guessed.
+  into `429`s. Wants a number measured on real hardware, not guessed. Shipped
+  as one per core via `AUTH_VERIFY_CONCURRENCY`, which is a guess dressed as a
+  default.
+- **The saturation refusal has not been exercised against a running server.**
+  `curl` process startup caps the test machine's client at about 43 requests a
+  second, which is slower than the server verifies even at one permit, so the
+  queue never fills from a shell. A unit test holds a permit and asserts the
+  caller is turned away; that is not the same as having seen it happen under
+  load.
 - **Lockout and SSO-only accounts.** Refusing password login outright is the
   clean answer, but it needs the account model to carry a credential kind,
   which does not exist yet and is arguably the enterprise layer's to define.

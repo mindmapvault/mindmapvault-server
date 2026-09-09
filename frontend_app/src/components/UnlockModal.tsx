@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { authApi } from '../api/auth';
 import { aesDecrypt } from '../crypto/aes';
-import { deriveMasterAesKey, deriveMasterKey, deriveAuthToken } from '../crypto/kdf';
+import { deriveMasterAesKey, deriveMasterKey } from '../crypto/kdf';
 import { fromBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
 import { PasswordInput } from './PasswordInput';
@@ -31,34 +31,44 @@ export function UnlockModal({ onUnlocked }: Props) {
     }
     setLoading(true);
     try {
-      // 1. Fetch Argon2 parameters for this user
-      const saltResp = await authApi.getSalt(username!);
+      // Everything needed to re-derive and unwrap the keys comes from one
+      // authenticated call. This used to be /auth/salt followed by /auth/login
+      // — two calls against the allowance meant for strangers, made by someone
+      // who is already signed in, and it threw away the tokens the login
+      // returned. On a page reload that was enough to have a user rate-limited
+      // out of their own vault.
+      const bundle = await authApi.getKeyBundle();
 
-      // 2. Re-derive master key
       const masterKey = await deriveMasterKey(
         password,
-        saltResp.argon2_salt,
-        saltResp.argon2_params,
+        bundle.argon2_salt,
+        bundle.argon2_params,
       );
 
-      // 3. Re-derive auth token and log in to get the encrypted key bundle
-      const authToken = deriveAuthToken(masterKey);
-      const loginResp = await authApi.login(username!, authToken);
-
-      // 4. Decrypt the private key bundle with masterKey
+      // A wrong password fails here, in the AES-GCM tag, rather than at the
+      // server. Nothing is lost by that: whoever reaches this screen already
+      // holds a session token, and could fetch this same bundle and attack it
+      // offline without touching the sign-in route at all.
       const masterAesKey = await deriveMasterAesKey(masterKey);
-      const classicalPrivKey = await aesDecrypt(
-        masterAesKey,
-        fromBase64(loginResp.classical_priv_encrypted),
-      );
-      const pqPrivKey = await aesDecrypt(masterAesKey, fromBase64(loginResp.pq_priv_encrypted));
+      let classicalPrivKey: Uint8Array;
+      let pqPrivKey: Uint8Array;
+      try {
+        classicalPrivKey = await aesDecrypt(
+          masterAesKey,
+          fromBase64(bundle.classical_priv_encrypted),
+        );
+        pqPrivKey = await aesDecrypt(masterAesKey, fromBase64(bundle.pq_priv_encrypted));
+      } catch {
+        setError('Incorrect password');
+        return;
+      }
 
       const keys: SessionKeys = {
         masterKey,
         classicalPrivKey,
-        classicalPubKey: fromBase64(loginResp.classical_public_key),
+        classicalPubKey: fromBase64(bundle.classical_public_key),
         pqPrivKey,
-        pqPubKey: fromBase64(loginResp.pq_public_key),
+        pqPubKey: fromBase64(bundle.pq_public_key),
       };
 
       setSessionKeys(keys);
