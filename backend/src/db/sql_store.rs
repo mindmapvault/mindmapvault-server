@@ -564,8 +564,8 @@ pub trait OidcStore: Send + Sync {
         identity: &FederatedIdentity,
     ) -> Result<(), AppError>;
 
-    /// Writes the key material a federated account derived from its vault
-    /// passphrase.
+    /// Writes the username and key material a federated account settled on at
+    /// enrolment, in one statement.
     ///
     /// Refuses an account that already has a salt: enrolment establishes the
     /// keys once, and letting it run twice would replace the keys every vault

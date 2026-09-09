@@ -132,6 +132,11 @@ pub struct FederatedIdentity {
 /// for `/auth/login` to verify and no counter for an attacker to grind against.
 #[derive(Debug, Deserialize)]
 pub struct EnrolKeysRequest {
+    /// Chosen by the user on the enrolment screen, not taken from the
+    /// provider. A name lifted from an IdP claim can collide with an existing
+    /// local account, and resolving that collision by merging is an account
+    /// takeover. Asking costs one field and cannot collide silently.
+    pub username: String,
     pub argon2_salt: String,
     pub argon2_params: crate::models::user::Argon2Params,
     pub classical_public_key: String,

@@ -154,6 +154,7 @@ impl OidcStore for PostgresDb {
             .client
             .execute(
                 "UPDATE users SET
+                    username = $8,
                     argon2_salt = $2,
                     argon2_params = $3,
                     classical_public_key = $4,
@@ -169,6 +170,7 @@ impl OidcStore for PostgresDb {
                     &keys.pq_public_key,
                     &keys.classical_priv_encrypted,
                     &keys.pq_priv_encrypted,
+                    &keys.username,
                 ],
             )
             .await?;
