@@ -9,6 +9,7 @@ mod mind_map;
 mod oidc;
 mod row;
 mod system;
+mod unlock;
 mod user;
 
 use std::sync::Arc;

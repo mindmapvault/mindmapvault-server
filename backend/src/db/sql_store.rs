@@ -14,6 +14,7 @@ use crate::{
         invite::RegistrationInvite,
         mindmap::VersionSnapshot,
         oidc::{EnrolKeysRequest, FederatedIdentity, OidcProvider},
+        unlock::UnlockMethod,
         settings::UserAccountSettings,
         share::{ShareScope, ShareStatus},
         status::DatabaseStats,
@@ -587,6 +588,23 @@ pub trait OidcStore: Send + Sync {
     ) -> Result<bool, AppError>;
 }
 
+/// Ways to unlock an account other than typing the passphrase.
+#[async_trait]
+pub trait UnlockStore: Send + Sync {
+    async fn list_unlock_methods(&self, user_id: &str) -> Result<Vec<UnlockMethod>, AppError>;
+    async fn load_unlock_method(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<Option<UnlockMethod>, AppError>;
+    async fn save_unlock_method(&self, method: &UnlockMethod) -> Result<(), AppError>;
+    async fn touch_unlock_method(&self, user_id: &str, id: &str) -> Result<(), AppError>;
+    async fn delete_unlock_method(&self, user_id: &str, id: &str) -> Result<bool, AppError>;
+    /// Drops every stored copy of the master key. Called when the master key
+    /// changes, since each copy was encrypted under the old one.
+    async fn delete_all_unlock_methods(&self, user_id: &str) -> Result<u64, AppError>;
+}
+
 /// Registration invites, for instances that are not open to sign-ups.
 #[async_trait]
 pub trait InviteStore: Send + Sync {
@@ -744,12 +762,19 @@ pub trait MindMapStore: Send + Sync {
 /// it is the name the rest of the app depends on, and a trait object still
 /// reaches every method through these supertraits.
 pub trait SqlStore:
-    SystemStore + UserStore + OidcStore + InviteStore + AdminAuditStore + MindMapStore
+    SystemStore + UserStore + OidcStore + UnlockStore + InviteStore + AdminAuditStore + MindMapStore
 {
 }
 
-impl<T: SystemStore + UserStore + OidcStore + InviteStore + AdminAuditStore + MindMapStore> SqlStore
-    for T
+impl<
+        T: SystemStore
+            + UserStore
+            + OidcStore
+            + UnlockStore
+            + InviteStore
+            + AdminAuditStore
+            + MindMapStore,
+    > SqlStore for T
 {
 }
 

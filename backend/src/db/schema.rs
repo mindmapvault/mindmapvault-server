@@ -130,6 +130,29 @@ pub async fn ensure_schema(client: &Client) -> anyhow::Result<()> {
             ALTER TABLE users ALTER COLUMN auth_hash SET DEFAULT '';
             ALTER TABLE users ALTER COLUMN argon2_salt SET DEFAULT '';
 
+            -- A copy of the account's master key, wrapped under something
+            -- other than the passphrase, so a device that has been trusted
+            -- once can unlock without being asked again.
+            --
+            -- The server cannot read any of these. It holds ciphertext whose
+            -- key never leaves the browser (or the authenticator), which is
+            -- what keeps this from becoming key escrow by the back door.
+            --
+            -- 'kind' is open for what comes next: 'device' today, 'webauthn-prf'
+            -- when passkeys land. One row per method per account.
+            CREATE TABLE IF NOT EXISTS unlock_methods (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                wrapped_master_key TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_used_at TIMESTAMPTZ
+            );
+
+            CREATE INDEX IF NOT EXISTS unlock_methods_user_idx
+                ON unlock_methods(user_id);
+
             -- One-time codes that allow a sign-up while registration is
             -- closed. See models/invite.rs for why the code is stored as
             -- written rather than hashed.

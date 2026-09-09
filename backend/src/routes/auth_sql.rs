@@ -3,7 +3,7 @@ use std::sync::Arc;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 use axum::{
-    extract::{FromRef, Query, State},
+    extract::{FromRef, Path, Query, State},
     routing::{get, post},
     Json, Router,
 };
@@ -30,6 +30,10 @@ use crate::{
         invite::normalize_invite_code,
         mindmap::stored_version_bytes,
         settings::{UpdateUserAccountSettingsRequest, UserAccountSettings},
+        unlock::{
+            RegisterUnlockMethodRequest, UnlockMethod, UnlockMethodSummary,
+            WrappedMasterKeyResponse,
+        },
         user::{
             AccountCapabilitiesResponse, AccountStorageResponse, Argon2Params, KeyBundleResponse,
             LoginRequest, LoginResponse, ProfileResponse, RegisterRequest,
@@ -95,6 +99,8 @@ pub fn router(state: AuthSqlState) -> Router {
         .route("/storage", get(get_storage))
         .route("/settings", get(get_settings).patch(update_settings))
         .route("/profile", get(get_profile).put(update_profile).delete(delete_profile))
+        .route("/unlock-methods", get(list_unlock_methods).post(register_unlock_method))
+        .route("/unlock-methods/{id}", get(get_wrapped_master_key).delete(revoke_unlock_method))
         .with_state(state)
 }
 
@@ -979,6 +985,25 @@ async fn rotate_credentials(
     // refused (VerifiedWriter) instead of storing old-key ciphertext.
     state.key_versions.set(&auth.0, body.new_key_version);
 
+    // Every trusted device holds a copy of the *old* master key. They are now
+    // undecryptable noise, and leaving them would mean a device that was
+    // trusted yesterday failing to unlock today with nothing to explain why.
+    // Dropping them puts those devices back to asking for the passphrase,
+    // which is also the right answer if the rotation was because the old one
+    // leaked.
+    match state.db.delete_all_unlock_methods(&auth.0).await {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(
+            user_id = %auth.0,
+            removed,
+            "cleared trusted devices after a credential rotation"
+        ),
+        // The rotation itself has already committed, so this cannot abort it.
+        // A stale row only costs one failed silent unlock and a passphrase
+        // prompt, which is the safe direction to fail in.
+        Err(error) => tracing::warn!(?error, "could not clear unlock methods after rotation"),
+    }
+
     // ── Re-issue tokens ───────────────────────────────────────────────────────
     // The rotating session gets tokens carrying the new key version, so it
     // alone continues seamlessly.
@@ -1133,4 +1158,91 @@ async fn verify_auth_token_budgeted(
     budget
         .run(move || verify_auth_token(&auth_token, &stored_hash))
         .await
+}
+
+// ── Trusted devices and other unlock methods ─────────────────────────────────
+
+/// Everything the account holds besides the passphrase.
+async fn list_unlock_methods(
+    State(state): State<AuthSqlState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Vec<UnlockMethodSummary>>, AppError> {
+    let methods = state.db.list_unlock_methods(&user.0).await?;
+    Ok(Json(methods.iter().map(UnlockMethodSummary::from).collect()))
+}
+
+/// Stores a copy of the master key wrapped under something this account already
+/// controls — today, a key held by one browser.
+///
+/// The wrapping key is never sent. What arrives is ciphertext the server cannot
+/// read, which is the whole difference between this and escrow.
+async fn register_unlock_method(
+    State(state): State<AuthSqlState>,
+    user: AuthenticatedUser,
+    Json(body): Json<RegisterUnlockMethodRequest>,
+) -> Result<Json<UnlockMethodSummary>, AppError> {
+    let id = body.id.trim();
+    if id.is_empty() || id.len() > 128 {
+        return Err(AppError::BadRequest("a method id is required".to_string()));
+    }
+    if body.wrapped_master_key.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "the wrapped master key is required".to_string(),
+        ));
+    }
+    if body.wrapped_master_key.len() > 4096 {
+        return Err(AppError::BadRequest(
+            "the wrapped master key is too large".to_string(),
+        ));
+    }
+
+    let method = UnlockMethod {
+        id: id.to_string(),
+        user_id: user.0.clone(),
+        kind: body.kind,
+        label: body.label.trim().chars().take(64).collect(),
+        wrapped_master_key: body.wrapped_master_key,
+        created_at: Utc::now(),
+        last_used_at: None,
+    };
+    state.db.save_unlock_method(&method).await?;
+
+    tracing::info!(user_id = %user.0, kind = method.kind.as_str(), "unlock method registered");
+    Ok(Json(UnlockMethodSummary::from(&method)))
+}
+
+/// Hands back one wrapped copy, for the device that can open it.
+async fn get_wrapped_master_key(
+    State(state): State<AuthSqlState>,
+    user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<WrappedMasterKeyResponse>, AppError> {
+    let method = state
+        .db
+        .load_unlock_method(&user.0, &id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such unlock method".to_string()))?;
+
+    // Best-effort: the list is for a person deciding what to revoke, and
+    // failing an unlock because a timestamp could not be written would be
+    // worse than a stale one.
+    if let Err(error) = state.db.touch_unlock_method(&user.0, &id).await {
+        tracing::warn!(?error, "could not record unlock method use");
+    }
+
+    Ok(Json(WrappedMasterKeyResponse {
+        wrapped_master_key: method.wrapped_master_key,
+    }))
+}
+
+async fn revoke_unlock_method(
+    State(state): State<AuthSqlState>,
+    user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !state.db.delete_unlock_method(&user.0, &id).await? {
+        return Err(AppError::NotFound("no such unlock method".to_string()));
+    }
+    tracing::info!(user_id = %user.0, "unlock method revoked");
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

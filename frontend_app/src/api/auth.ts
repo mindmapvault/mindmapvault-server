@@ -7,6 +7,14 @@ import type {
 } from '../types';
 import { api } from './client';
 
+export interface UnlockMethodSummary {
+  id: string;
+  kind: 'device' | 'webauthn-prf';
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
 /** Only what a sign-in button needs; the server deliberately sends no more. */
 export interface OidcProvider {
   id: string;
@@ -111,6 +119,25 @@ export const authApi = {
   /// is every instance until an operator adds one.
   listOidcProviders: () =>
     api.get<OidcProvider[]>('/auth/oidc/providers'),
+
+  /// The unlock methods this account holds besides its passphrase.
+  listUnlockMethods: () =>
+    api.get<UnlockMethodSummary[]>('/auth/unlock-methods'),
+
+  /// Stores a copy of the master key wrapped under a key the server never
+  /// sees. What is sent is ciphertext it cannot open.
+  registerUnlockMethod: (body: {
+    id: string;
+    kind: 'device' | 'webauthn-prf';
+    label: string;
+    wrapped_master_key: string;
+  }) => api.post<UnlockMethodSummary>('/auth/unlock-methods', body),
+
+  getWrappedMasterKey: (id: string) =>
+    api.get<{ wrapped_master_key: string }>(`/auth/unlock-methods/${encodeURIComponent(id)}`),
+
+  revokeUnlockMethod: (id: string) =>
+    api.delete<{ ok: boolean }>(`/auth/unlock-methods/${encodeURIComponent(id)}`),
 
   /// Finishes a federated account: the username the user chose and the key
   /// material their vault passphrase produced. The passphrase never leaves

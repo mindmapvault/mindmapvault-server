@@ -1,7 +1,14 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { authApi } from '../api/auth';
 import { aesDecrypt } from '../crypto/aes';
 import { deriveMasterAesKey, deriveMasterKey } from '../crypto/kdf';
+import {
+  accountIdFromToken,
+  forgetDevice,
+  loadDeviceRecord,
+  trustThisDevice,
+  unwrapWithDevice,
+} from '../crypto/trustedDevice';
 import { fromBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
 import { PasswordInput } from './PasswordInput';
@@ -17,10 +24,77 @@ interface Props {
  * master key and decrypt their private key bundle.
  */
 export function UnlockModal({ onUnlocked }: Props) {
-  const { username, setSessionKeys } = useAuthStore();
+  const { username, accessToken, setSessionKeys } = useAuthStore();
+  const userId = accountIdFromToken(accessToken);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(false);
+  /** Held back until the silent attempt has had its turn, so a trusted device
+   *  does not flash a passphrase prompt before letting the user in. */
+  const [checkingDevice, setCheckingDevice] = useState(true);
+
+  /** Turns a master key into session keys and finishes. Shared by both paths,
+   *  because from here on they are the same. */
+  const openWithMasterKey = useCallback(
+    async (masterKey: Uint8Array, bundle: { classical_priv_encrypted: string; pq_priv_encrypted: string; classical_public_key: string; pq_public_key: string }) => {
+      const masterAesKey = await deriveMasterAesKey(masterKey);
+      const classicalPrivKey = await aesDecrypt(
+        masterAesKey,
+        fromBase64(bundle.classical_priv_encrypted),
+      );
+      const pqPrivKey = await aesDecrypt(masterAesKey, fromBase64(bundle.pq_priv_encrypted));
+      setSessionKeys({
+        masterKey,
+        classicalPrivKey,
+        classicalPubKey: fromBase64(bundle.classical_public_key),
+        pqPrivKey,
+        pqPubKey: fromBase64(bundle.pq_public_key),
+      } satisfies SessionKeys);
+      onUnlocked();
+    },
+    [onUnlocked, setSessionKeys],
+  );
+
+  // ── Trusted device ────────────────────────────────────────────────────────
+  // If this browser holds a key for this account, the master key can be
+  // decrypted without asking. Every failure path here falls through to the
+  // passphrase prompt rather than surfacing an error: not being remembered is
+  // the normal case, not a fault.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!userId) return;
+        const record = await loadDeviceRecord(userId);
+        if (!record || cancelled) return;
+
+        const { wrapped_master_key: wrapped } = await authApi.getWrappedMasterKey(record.methodId);
+        const masterKey = await unwrapWithDevice(record, wrapped);
+        if (!masterKey) {
+          // The stored copy was made under a master key that no longer exists
+          // — almost always a passphrase rotation. The local key is useless
+          // now, so drop it rather than retrying it on every unlock.
+          await forgetDevice(userId);
+          return;
+        }
+        if (cancelled) return;
+        await openWithMasterKey(masterKey, await authApi.getKeyBundle());
+      } catch {
+        // A revoked device answers 404 here. Ask for the passphrase.
+      } finally {
+        // Unconditionally, even when this run was superseded. React's
+        // development double-mount cancels the first pass, and gating this on
+        // the cancelled flag left the spinner up for ever with nothing behind
+        // it.
+        setCheckingDevice(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, openWithMasterKey]);
 
   const handleUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,40 +119,52 @@ export function UnlockModal({ onUnlocked }: Props) {
         bundle.argon2_params,
       );
 
-      // A wrong password fails here, in the AES-GCM tag, rather than at the
-      // server. Nothing is lost by that: whoever reaches this screen already
-      // holds a session token, and could fetch this same bundle and attack it
-      // offline without touching the sign-in route at all.
+      // A wrong password fails in the AES-GCM tag rather than at the server.
+      // Nothing is lost by that: whoever reaches this screen already holds a
+      // session token, and could fetch this same bundle and attack it offline
+      // without touching the sign-in route at all.
       const masterAesKey = await deriveMasterAesKey(masterKey);
-      let classicalPrivKey: Uint8Array;
-      let pqPrivKey: Uint8Array;
       try {
-        classicalPrivKey = await aesDecrypt(
-          masterAesKey,
-          fromBase64(bundle.classical_priv_encrypted),
-        );
-        pqPrivKey = await aesDecrypt(masterAesKey, fromBase64(bundle.pq_priv_encrypted));
+        await aesDecrypt(masterAesKey, fromBase64(bundle.classical_priv_encrypted));
       } catch {
         setError('Incorrect password');
         return;
       }
 
-      const keys: SessionKeys = {
-        masterKey,
-        classicalPrivKey,
-        classicalPubKey: fromBase64(bundle.classical_public_key),
-        pqPrivKey,
-        pqPubKey: fromBase64(bundle.pq_public_key),
-      };
+      // Do this before opening: if trusting the device fails, the user should
+      // still get in, but they should not be told it worked when it did not.
+      if (remember && userId) {
+        try {
+          const trusted = await trustThisDevice(userId, masterKey);
+          await authApi.registerUnlockMethod({
+            id: trusted.methodId,
+            kind: 'device',
+            label: trusted.label,
+            wrapped_master_key: trusted.wrappedMasterKey,
+          });
+        } catch {
+          await forgetDevice(userId);
+          setError('Unlocked, but this device could not be remembered.');
+        }
+      }
 
-      setSessionKeys(keys);
-      onUnlocked();
+      await openWithMasterKey(masterKey, bundle);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unlock failed');
     } finally {
       setLoading(false);
     }
   };
+
+  // A trusted device unlocks in well under a second, and showing the
+  // passphrase form first would make it flash up and vanish on every reload.
+  if (checkingDevice) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <p className="text-sm text-slate-400">Unlocking…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
@@ -106,6 +192,25 @@ export function UnlockModal({ onUnlocked }: Props) {
               autoFocus
             />
           </div>
+
+          {userId && (
+            <label className="flex items-start gap-2 text-sm text-slate-400">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Remember this device
+                <span className="block text-xs text-slate-500">
+                  Skips this step next time on this browser. Anyone who can use this browser
+                  profile can then open your vaults, so leave it off on a shared machine. You
+                  can undo it from account settings.
+                </span>
+              </span>
+            </label>
+          )}
 
           {error && (
             <p className="rounded-lg border border-red-800 bg-red-900/30 px-3 py-2 text-sm text-red-400">
