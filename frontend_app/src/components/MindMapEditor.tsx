@@ -54,6 +54,8 @@ import type { NoteEditorHandle } from './notes/NoteEditor';
 import { normalizeBareTasks, toggleTaskAtIndex } from './notes/markdownEditing';
 import { useUserLabels } from '../hooks/useUserLabels';
 import type { MindMapEditorProps } from './MindMapEditor.types';
+import { beginCardDrag } from './mindmap/floatingCard';
+import { useDismissOnOutsideClick } from './mindmap/useDismissOnOutsideClick';
 import {
   NODE_COLORS,
   COLOR_PALETTE,
@@ -99,7 +101,7 @@ export function DesktopMindMapEditor({
   initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
   exportFormats, onExport, titleChanged, onRenameTitle, renamingTitle,
   versionLabel, versionTooltip,
-  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onShowHistory, onOpenNodeAttachment,
+  onTreeChange, onSelectionChange, onNodeFileDrop, onOpenSecurePanel, onShowHistory, historyOpen, onOpenNodeAttachment,
   onFetchNodeAttachmentContent,
   onDeleteNodeAttachment,
   onCopyNodeAttachment,
@@ -116,6 +118,14 @@ export function DesktopMindMapEditor({
   const iconTrayEnabled = useUiStore((s) => s.iconTrayEnabled);
   const iconTrayPosition = useUiStore((s) => s.iconTrayPosition);
   const setIconTray = useUiStore((s) => s.setIconTray);
+  const shortcutsPinned = useUiStore((s) => s.shortcutsPinned);
+  const setShortcutsPinned = useUiStore((s) => s.setShortcutsPinned);
+  const shortcutsPos = useUiStore((s) => s.shortcutsPos);
+  const setShortcutsPos = useUiStore((s) => s.setShortcutsPos);
+  const labelsPinned = useUiStore((s) => s.labelsPinned);
+  const setLabelsPinned = useUiStore((s) => s.setLabelsPinned);
+  const labelsPos = useUiStore((s) => s.labelsPos);
+  const setLabelsPos = useUiStore((s) => s.setLabelsPos);
   const keyboardLayout = useEffectiveKeyboardLayout();
   const { statusBarVisible, toolbarLabels, buttonShortcuts: buttonShortcutsVisible, toolbarMode } = useResolvedDensity();
   const [activeRibbonTab, setActiveRibbonTab] = useState<'home' | 'insert' | 'view' | 'export'>('home');
@@ -169,19 +179,22 @@ export function DesktopMindMapEditor({
   const skipNextAutoPan = useRef(false);
 
   // ── UI toggles ─────────────────────────────────────────────────────────────
-  const [showShortcuts, setShowShortcuts] = useState(() => Boolean(initialShowShortcuts));
-  const [shortcutsPos, setShortcutsPos] = useState<{ x: number; y: number } | null>(null);
-  const scDragRef = useRef<{
-    /** Grab point inside the panel. */
-    offsetX: number; offsetY: number;
-    /** Offset-parent origin, so viewport coords can be converted to the
-     *  `left`/`top` the absolutely-positioned panel actually needs. */
-    originX: number; originY: number;
-    /** Bounds to keep the panel inside its (overflow-hidden) parent. */
-    maxX: number; maxY: number;
-  } | null>(null);
+  // "Always on" wins over the host's initial hint: a card the user pinned has
+  // to come back on the next mount, including where the host passes false.
+  const [showShortcuts, setShowShortcuts] = useState(
+    () => useUiStore.getState().shortcutsPinned || Boolean(initialShowShortcuts),
+  );
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
+  // Each ref wraps a popup together with the control that opens it, so the
+  // trigger counts as inside — see useDismissOnOutsideClick.
+  const colorPickerWrapRef = useRef<HTMLDivElement>(null);
+  const iconPickerWrapRef = useRef<HTMLDivElement>(null);
+  const tagDialogRef = useRef<HTMLDivElement>(null);
+  const closeColorPicker = useCallback(() => setShowColorPicker(false), []);
+  const closeIconPicker = useCallback(() => setShowIconPicker(false), []);
+  useDismissOnOutsideClick(showColorPicker, colorPickerWrapRef, closeColorPicker);
+  useDismissOnOutsideClick(showIconPicker, iconPickerWrapRef, closeIconPicker);
   const [showDateDialog, setShowDateDialog] = useState(false);
   const [showUrlDialog, setShowUrlDialog] = useState(false);
   const [rootLeftCollapsed, setRootLeftCollapsed] = useState(false);
@@ -200,8 +213,23 @@ export function DesktopMindMapEditor({
   // ── Export menu ────────────────────────────────────────────────────────────
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  // The button and the menu together, so a click on the button counts as
+  // inside: testing against the menu alone would close it on mousedown and let
+  // the button's own click toggle it straight back open.
+  const exportMenuWrapRef = useRef<HTMLDivElement>(null);
   const [exportMenuMaxH, setExportMenuMaxH] = useState<number | null>(null);
   const [exportMenuAlign, setExportMenuAlign] = useState<'left' | 'right'>('right');
+
+  const closeExportMenu = useCallback(() => setShowExportMenu(false), []);
+  useDismissOnOutsideClick(showExportMenu, exportMenuWrapRef, closeExportMenu);
+
+  // The version panel opens over the canvas, and the menu sits above it in the
+  // stack, so it would hang over the panel it has nothing to do with. Closing
+  // on the panel opening covers the keyboard route too, which never produces a
+  // click for the handler above to see.
+  useEffect(() => {
+    if (historyOpen) setShowExportMenu(false);
+  }, [historyOpen]);
 
   // Where the Export button lands moves with the density — the Large ribbon
   // puts it low and hard against the left edge, the Lean icon row high and to
@@ -231,6 +259,10 @@ export function DesktopMindMapEditor({
 
   // ── Tag dialog ─────────────────────────────────────────────────────────────
   const [showTagDialog, setShowTagDialog] = useState(false);
+  // Mobile keeps its own tap-through overlay, and an always-on dialog opts out
+  // of dismissal entirely.
+  const closeTagDialog = useCallback(() => setShowTagDialog(false), []);
+  useDismissOnOutsideClick(showTagDialog && !labelsPinned && !isMobile, tagDialogRef, closeTagDialog);
 
   // ── Mobile file upload sheet ───────────────────────────────────────────────
   const [mobileFileUploadOpen, setMobileFileUploadOpen] = useState(false);
@@ -2341,13 +2373,13 @@ export function DesktopMindMapEditor({
               <div className="mm-toolbar-group-btns">
           <button className="mm-btn" onClick={() => { hasBulk ? bulkToggleCheckbox() : toggleCheckbox(selectedId); }} data-label="Checkbox" data-shortcut={formatButtonShortcut('node.checkbox', keyboardLayout)} title="Checkbox (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></button>
           <button className="mm-btn" onClick={() => { hasBulk ? bulkCycleProgress() : cycleProgress(selectedId); }} data-label="Progress" data-shortcut={formatButtonShortcut('node.progress', keyboardLayout)} title="Progress (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 017.07 17.07" strokeLinecap="round"/></svg></button>
-          <div style={{ position: 'relative' }}>
+          <div ref={colorPickerWrapRef} style={{ position: 'relative' }}>
             <button className="mm-btn mm-btn--color" onClick={() => setShowColorPicker((v) => !v)} data-label="Colour" data-shortcut={formatButtonShortcut('node.colour', keyboardLayout)} title="Color (F4)" style={{ background: selNode?.color ?? 'transparent' }}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
             </button>
             <MindMapColorPicker open={showColorPicker} currentColor={selNode?.color ?? null} onSelect={(c) => { hasBulk ? bulkSetColor(c) : setNodeColor(selectedId, c); setShowColorPicker(false); }} onClose={() => setShowColorPicker(false)} showToast={showToast} />
           </div>
-          <div style={{ position: 'relative' }}>
+          <div ref={iconPickerWrapRef} style={{ position: 'relative' }}>
             <button className="mm-btn" onClick={() => setShowIconPicker((v) => !v)} data-label="Icons" data-shortcut={formatButtonShortcut('node.icons', keyboardLayout)} title="Icons (I)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>
             <MindMapIconPicker open={showIconPicker} currentIcons={selNode?.icons ?? []} onSelect={(name: string | null) => hasBulk ? bulkSetIcon(name) : setNodeIcon(selectedId, name)} onClose={() => setShowIconPicker(false)} showToast={showToast} />
           </div>
@@ -2502,10 +2534,10 @@ export function DesktopMindMapEditor({
           )}
           {(densityPreset !== 'large' || activeRibbonTab === 'export') && (
             <div className="mm-toolbar-group" data-ribbon-tab="export">
-              <span className="mm-toolbar-group-label">Output</span>
+              <span className="mm-toolbar-group-label">Export</span>
               <div className="mm-toolbar-group-btns">
           {onExport && (exportFormats ?? []).length > 0 && (
-            <div style={{ position: 'relative' }}>
+            <div ref={exportMenuWrapRef} style={{ position: 'relative' }}>
               <button className="mm-btn" onClick={() => setShowExportMenu((v) => !v)} data-label="Export" title="Export">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
               </button>
@@ -2623,7 +2655,7 @@ export function DesktopMindMapEditor({
         <svg ref={svgRef} className="mm-canvas" onMouseDown={onMouseDownSvg} onMouseMove={onMouseMoveSvg} onMouseUp={onMouseUpSvg} onMouseLeave={onMouseUpSvg}
           onTouchStart={onTouchStartSvg} onTouchMove={onTouchMoveSvg} onTouchEnd={onTouchEndSvg} onTouchCancel={onTouchEndSvg}
           onDragOver={onDragOverSvg} onDragLeave={onDragLeaveSvg} onDrop={(e) => { void onDropSvg(e); }}
-          onClick={() => { setShowColorPicker(false); setContextMenu(null); }}>
+          onClick={() => { setShowColorPicker(false); setContextMenu(null); if (!shortcutsPinned) setShowShortcuts(false); }}>
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
             <g className="mm-connections">{renderConnections(root)}</g>
             <g className="mm-nodes">{renderNodes(root)}</g>
@@ -3130,12 +3162,62 @@ export function DesktopMindMapEditor({
         };
         const libraryOnlyLabels = userLabels.filter((l) => !currentTags.includes(l.name));
         return (
-          <div className={`mm-tag-dialog${isMobile ? ' mm-tag-dialog--mobile' : ''}`} style={isMobile ? {} : { position: 'absolute', right: 12, top: 60, zIndex: 200 }}>
+          <div
+            ref={tagDialogRef}
+            className={`mm-tag-dialog${isMobile ? ' mm-tag-dialog--mobile' : ''}`}
+            style={isMobile
+              ? {}
+              : {
+                  position: 'absolute',
+                  ...(labelsPos ? { left: labelsPos.x, top: labelsPos.y } : { right: 12, top: 60 }),
+                  zIndex: 200,
+                }}
+          >
             {isMobile && <div className="mm-tag-dialog-handle" />}
-            <div className="mm-tag-dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div
+              className="mm-tag-dialog-title"
+              style={isMobile ? undefined : { cursor: 'grab', userSelect: 'none' }}
+              onMouseDown={isMobile
+                ? undefined
+                : (e) => {
+                    // Only the bar itself drags; the switch and the close
+                    // button inside it have to stay clickable.
+                    if ((e.target as HTMLElement).closest('button, label, input')) return;
+                    beginCardDrag(e.currentTarget, e.clientX, e.clientY, setLabelsPos);
+                  }}
+            >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5l8.5 8.5a2 2 0 010 2.83l-5.17 5.17a2 2 0 01-2.83 0L3 10V5a2 2 0 012-2z"/></svg>
-              <span>Labels — {getVisibleNodeTextLines(nodeForTags?.text ?? '')[0] || 'Node'}</span>
-              <button className="mm-btn-icon" onClick={() => setShowTagDialog(false)} style={{ marginLeft: 'auto' }} title="Close">
+              <span className="mm-tag-dialog-name">Labels — {getVisibleNodeTextLines(nodeForTags?.text ?? '')[0] || 'Node'}</span>
+              {!isMobile && (
+                <label
+                  className="mm-switch"
+                  style={{ marginLeft: 'auto' }}
+                  title={labelsPinned
+                    ? 'Always on: the dialog stays open until you close it'
+                    : 'Always on: off — a click outside closes the dialog'}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <span className="mm-switch-label">Always on</span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={labelsPinned}
+                    onChange={(e) => setLabelsPinned(e.target.checked)}
+                  />
+                </label>
+              )}
+              <button
+                className="mm-btn-icon"
+                onClick={() => {
+                  // As with the shortcuts card, closing by hand is an explicit
+                  // "not now" and clears the flag, so it cannot come back
+                  // later with nothing on screen to explain why.
+                  setLabelsPinned(false);
+                  setShowTagDialog(false);
+                }}
+                style={isMobile ? { marginLeft: 'auto' } : undefined}
+                title="Close"
+              >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
@@ -3338,38 +3420,36 @@ export function DesktopMindMapEditor({
       {showShortcuts && (
         <div className="mm-shortcuts-panel" style={shortcutsPos ? { left: shortcutsPos.x, top: shortcutsPos.y, right: 'auto' } : undefined}>
           <div className="mm-notes-header" style={{ cursor: 'grab', userSelect: 'none' }}
-            onMouseDown={(e) => {
-              const el = (e.currentTarget.parentElement as HTMLDivElement);
-              const rect = el.getBoundingClientRect();
-              // The panel is positioned against its offset parent, not the
-              // viewport, so the pointer's client coords have to be rebased
-              // onto that parent or the panel jumps by the parent's offset
-              // the moment it is grabbed.
-              const parent = (el.offsetParent as HTMLElement | null);
-              const pRect = parent?.getBoundingClientRect();
-              const MARGIN = 8;
-              scDragRef.current = {
-                offsetX: e.clientX - rect.left,
-                offsetY: e.clientY - rect.top,
-                originX: pRect?.left ?? 0,
-                originY: pRect?.top ?? 0,
-                maxX: (pRect?.width ?? window.innerWidth) - rect.width - MARGIN,
-                maxY: (pRect?.height ?? window.innerHeight) - rect.height - MARGIN,
-              };
-              const onMove = (me: MouseEvent) => {
-                const d = scDragRef.current;
-                if (!d) return;
-                setShortcutsPos({
-                  x: Math.max(MARGIN, Math.min(me.clientX - d.offsetX - d.originX, d.maxX)),
-                  y: Math.max(MARGIN, Math.min(me.clientY - d.offsetY - d.originY, d.maxY)),
-                });
-              };
-              const onUp = () => { scDragRef.current = null; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-              window.addEventListener('mousemove', onMove);
-              window.addEventListener('mouseup', onUp);
-            }}
+            onMouseDown={(e) => beginCardDrag(e.currentTarget, e.clientX, e.clientY, setShortcutsPos)}
           ><span>Keyboard Shortcuts</span>
-            <button className="mm-btn-icon" onClick={() => setShowShortcuts(false)}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            <label
+              className="mm-switch"
+              style={{ marginLeft: 'auto' }}
+              title={shortcutsPinned
+                ? 'Always on: the card stays on the canvas and reopens with the editor'
+                : 'Always on: off — a canvas click closes the card'}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <span className="mm-switch-label">Always on</span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={shortcutsPinned}
+                onChange={(e) => setShortcutsPinned(e.target.checked)}
+              />
+            </label>
+            <button
+              className="mm-btn-icon"
+              title="Close"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                // Closing by hand is an explicit "not now", so it clears the
+                // always-on flag too — otherwise the card would silently
+                // reappear on the next launch with no way to see why.
+                setShortcutsPinned(false);
+                setShowShortcuts(false);
+              }}
+            ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
           <div className="mm-shortcuts-grid">
             {(['Nodes', 'Format', 'View', 'Edit', 'Find', 'File'] as const).map((group) => (

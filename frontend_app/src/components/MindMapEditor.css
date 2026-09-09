@@ -443,6 +443,59 @@
   padding: 4px 10px 5px;
 }
 
+/* ── Toggle switch ────────────────────────────────────────────
+   Used in floating-card headers (Keyboard Shortcuts "Always on"). Plain CSS
+   rather than the Tailwind switch in SettingsModal, so the rule travels with
+   the editor stylesheet wherever it is embedded. */
+.mm-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.mm-switch-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mm-statusbar-text);
+  opacity: 0.75;
+  /* The Labels dialog header is narrow; without this the two words stack and
+     the switch drifts off the title's baseline. */
+  white-space: nowrap;
+}
+.mm-switch input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 26px;
+  height: 15px;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--mm-btn-text);
+  opacity: 0.45;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.mm-switch input:checked { background: var(--accent); opacity: 1; }
+.mm-switch input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.mm-switch input:checked::after { transform: translateX(11px); }
+.mm-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mm-switch:hover .mm-switch-label { opacity: 1; }
+
 /* ── Color picker ────────────────────────────────────────────────────────── */
 .mm-color-picker {
   position: absolute;
@@ -1364,17 +1417,30 @@
   border: 1px solid var(--mm-node-stroke, #334155);
   border-radius: 10px;
   padding: 12px;
-  min-width: 240px;
-  max-width: 320px;
+  min-width: 260px;
+  /* Wide enough for the title, the Always-on switch and the close button to
+     share one line with the buttons below still on one row. */
+  max-width: 360px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
 .mm-tag-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   font-weight: 600;
   color: var(--mm-statusbar-text);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 8px;
+}
+/* The node's text can be any length; it gives way so the Always-on switch and
+   the close button keep their place. */
+.mm-tag-dialog-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .mm-tag-chips {
   display: flex;
@@ -1423,18 +1489,48 @@
   font-family: inherit;
 }
 .mm-tag-input:focus { border-color: var(--accent); }
+/* Add and "Save to lib" are one control pair: same height as the input beside
+   them, same shape, neither wrapping. They differ only in weight — Add is the
+   primary action, saving to the library the secondary one — rather than in
+   size, which is what made the row look accidental. */
 .mm-tag-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: var(--accent);
   color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 4px 10px;
   font-size: 12px;
-  cursor: pointer;
+  font-weight: 500;
   font-family: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
 }
-.mm-tag-add-btn:hover { opacity: 0.85; }
+.mm-tag-add-btn:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
+.mm-tag-add-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mm-tag-add-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Secondary: the same footprint, carried by the border instead of a fill. */
+.mm-tag-save-btn {
+  background: transparent;
+  border-color: var(--mm-btn-border);
+  color: var(--text-primary);
+}
+.mm-tag-save-btn:hover:not(:disabled) {
+  background: var(--mm-btn-bg);
+  border-color: var(--accent);
+}
+
+/* The input and the colour swatch line up with the buttons rather than
+   floating at their own heights. */
+.mm-tag-input-row { align-items: center; }
+.mm-tag-input { height: 26px; }
+.mm-tag-color-label { flex-shrink: 0; }
 
 /* ── Overlay / dialog ────────────────────────────────────────────────────── */
 .mm-overlay {
@@ -2655,6 +2751,20 @@
   gap: 0;
   max-height: 420px;
   overflow-y: auto;
+}
+
+/* The rows are `display: contents`, so each kbd/span lands directly in the
+   grid. A group label must therefore span both columns — without this it
+   occupies a single cell and shifts every pair after it by one. */
+.mm-shortcuts-group-label {
+  grid-column: 1 / -1;
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mm-statusbar-text);
+  opacity: 0.65;
 }
 
 .mm-shortcut-row {

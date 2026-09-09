@@ -1178,6 +1178,7 @@ export function EditorPage() {
         renamingTitle={renamingTitle}
         onBack={() => navigate('/vaults')}
         onShowHistory={isLocalMode ? undefined : () => setShowHistory(true)}
+        historyOpen={!isLocalMode && showHistory}
         exportFormats={EXPORT_FORMATS}
         onExport={handleExport}
         versionLabel={versionLabel}

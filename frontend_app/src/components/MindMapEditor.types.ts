@@ -24,6 +24,11 @@ export interface MindMapEditorProps {
   error: string;
   onBack?: () => void;
   onShowHistory?: () => void;
+  /** Whether the version history panel is currently open. The editor's own
+   *  transient popups close when it opens — the panel is owned by the page,
+   *  so a click that opens it from anywhere but the toolbar button never
+   *  reaches the editor's outside-click handling. */
+  historyOpen?: boolean;
   onDownloadEncrypted?: (fileBaseName?: string) => void;
   onDownloadJson?: (tree: MindMapTree, title: string) => void;
   /** The formats the export menu offers, in order. */

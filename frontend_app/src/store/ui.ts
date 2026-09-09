@@ -47,6 +47,26 @@ interface UiState {
   toggleColourFavourite: (color: string) => void;
   iconFavourites: string[];
   toggleIconFavourite: (name: string) => void;
+
+  /** When true, the floating Keyboard Shortcuts card is always on: it opens
+   *  with the editor and survives canvas clicks, instead of being a
+   *  dismiss-on-click popup. Persisted, so it comes back on the next launch. */
+  shortcutsPinned: boolean;
+  setShortcutsPinned: (pinned: boolean) => void;
+
+  /** Where the user dragged the card, in offset-parent coords. `null` = the
+   *  CSS default (top right). Persisted so an always-on card reopens where it
+   *  was left instead of jumping back to the corner. */
+  shortcutsPos: { x: number; y: number } | null;
+  setShortcutsPos: (pos: { x: number; y: number } | null) => void;
+
+  /** The same pair for the floating Labels dialog: always on keeps it up
+   *  through outside clicks, and the position it was dragged to is kept so it
+   *  reopens where it was left. */
+  labelsPinned: boolean;
+  setLabelsPinned: (pinned: boolean) => void;
+  labelsPos: { x: number; y: number } | null;
+  setLabelsPos: (pos: { x: number; y: number } | null) => void;
 }
 
 export const useUiStore = create<UiState>()(
@@ -104,6 +124,18 @@ export const useUiStore = create<UiState>()(
           ? state.iconFavourites.filter((n) => n !== name)
           : [...state.iconFavourites, name],
       })),
+
+      shortcutsPinned: false,
+      setShortcutsPinned: (shortcutsPinned) => set({ shortcutsPinned }),
+
+      shortcutsPos: null,
+      setShortcutsPos: (shortcutsPos) => set({ shortcutsPos }),
+
+      labelsPinned: false,
+      setLabelsPinned: (labelsPinned) => set({ labelsPinned }),
+
+      labelsPos: null,
+      setLabelsPos: (labelsPos) => set({ labelsPos }),
     }),
     { name: 'mindmapvault-ui' },
   ),
