@@ -6,27 +6,57 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
-A map you export now comes back the way you saved it. This ports the FOSS
-import/export overhaul to the server: a lossless native format, a markdown
-importer that reads its own exporter, byte-compatible FreeMind output, and a
-test gate in CI so the "export loses formatting" class of bug cannot ship
-again.
+## [0.6.0] - 2026-09-09
+
+Federated sign-in, trusted devices, and a reworked auth surface.
+
+**Two upgrade actions.** `TRUST_PROXY_HEADERS` no longer does anything and is
+not carried over — set `TRUSTED_PROXY_CIDRS` instead, or every client behind
+your reverse proxy shares one sign-in allowance. Set `PUBLIC_BASE_URL` if you
+intend to use single sign-on. Both are described below.
+
+It also carries the import/export overhaul that had been sitting unreleased: a
+lossless native format, a markdown importer that reads its own exporter,
+byte-compatible FreeMind output, and a test gate in CI so the "export loses
+formatting" class of bug cannot ship again.
 
 ### Added
+- **Single sign-on through any OpenID Connect provider.** Authentik, Keycloak, Entra, Google, or anything else that speaks OIDC. Providers are added in the admin console under Settings → Single sign-on; the callback URL to register at the provider is shown there. Authorization code flow with PKCE, a single-use `state`, and a `nonce` bound to the request; the ID token is verified on signature, issuer, audience, expiry and nonce. Accounts link on `(provider_id, subject)` and **never** on email, because an address can be reassigned to a new employee. `routes/oidc.rs`, `routes/oidc_client.rs`, `middleware/oidc_flow.rs`.
+- **A vault passphrase step for federated accounts.** An identity provider proves who someone is; it cannot decrypt their vaults. A new federated account has no keys until the browser derives them from a passphrase the server never sees, so first sign-in ends on a screen that asks for a username and that passphrase. `models/oidc.rs`.
+- **Trusted devices.** "Remember this device" on the unlock screen stores a copy of the master key encrypted under a non-extractable key held in that browser. The server keeps ciphertext it cannot open. Opt-in per device, revocable, and cleared automatically when credentials are rotated, since every stored copy is encrypted under the old key. `models/unlock.rs`, `crypto/trustedDevice.ts`.
+- **A local Keycloak profile** for trying the flow without an external provider: `docker compose --profile sso up -d keycloak`. Development only — it publishes a test identity provider with a published admin password. See `docs/DEPLOYMENT.md#federated-sign-in-sso`.
+- **`AUTH_VERIFY_CONCURRENCY`**, bounding how many credential verifications run at once. The per-address limits are keyed on the thing a distributed attacker spreads across; this is not. It also moves Argon2 off the async executor, where it had been blocking a runtime worker per verification. Defaults to one per core.
+- **A separate allowance for salt lookups** (`lookup_rate_limit_per_minute`, default 120). A lookup is one indexed read and a vault unlock spends one, so sharing the sign-in budget meant a burst of page reloads could lock a user out of signing in.
 - **A native, lossless map format (`.mmvault`).** Every other export is an interchange with a third-party app and drops fields the editor can set — icons, progress, dates, tags, pictures, attachments. `.mmvault` is the application's own: a versioned JSON envelope (`mindmapvault-tree`, v1) that carries the tree verbatim, so export → re-import loses nothing. It is listed first in both the export and import menus. `utils/mmvaultFormat.ts`.
 - **A round-trip fidelity suite** (`utils/__tests__/roundTrip.test.ts`). A fixture tree sets every field the editor supports; each format is exported and re-imported, then diffed against a per-format fidelity mask that declares what it can carry. A format that silently drops a field it claims to keep now fails the build.
 - **A compatibility suite for real source-software files** (`utils/__tests__/compat.test.ts`). It proves the importers can read files the *actual* applications write — FreeMind's `<font>`/`<attribute>` children, FreePlane's `richcontent` node text and `BACKGROUND_COLOR`, WiseMapping's `order`/`CDATA` notes, both XMind layouts (Zen `content.json` and XMind 8 `content.xml`), and Obsidian tasks/callouts/wiki-links. Eleven real maps from the freeplane.org gallery plus a genuine FreeMind 1.1.0 export are committed fixtures.
 - **A CI workflow** (`.github/workflows/ci.yml`) that runs on every pull request and push to `main`. A frontend-app job type-checks, runs the vitest suite, and runs the import/export round-trip gate; a frontend-admin job builds; a backend job runs `cargo check` and `cargo test`. Previously no workflow ran the frontend tests.
 - **A release gate** (`scripts/check_import_export_roundtrip.mjs`) that runs the round-trip and compatibility suites and blocks on a regression.
 
+### Changed
+- **`TRUST_PROXY_HEADERS` is replaced by `TRUSTED_PROXY_CIDRS`** and is **not** carried over. The old setting believed the left-most `X-Forwarded-For` entry, which the caller writes — an instance running with it on could be stepped around with one header. List your proxy's address ranges instead; the client is then the first hop, counted from the server outwards, that is not one of them. An upgraded instance that had the old flag set logs a warning at startup and behaves as though nothing is trusted, which throttles everyone behind the proxy as one client until the new setting is filled in. That is deliberate: the alternative was to keep a bypassable limit running quietly.
+- **`PUBLIC_BASE_URL`** is read for the first time. Federated sign-in needs it to build a redirect URI matching the one registered at the provider; it cannot come from the `Host` header, which the caller chooses. Sign-in fails with a clear error when it is unset.
+- **The per-address limits are token buckets, not fixed windows.** A window reset on a boundary allowed twice the limit in the seconds either side of one, then nothing for the rest of the minute. The retry-after reported is now the time to earn one token.
+- **Failed sign-ins are counted per credential, not per account.** A no-op today, since password is the only kind. It is here because an account will later hold a password and a federated identity at once, and locking the account on failed passwords would let an attacker who cannot guess the password deny the user their federated sign-in instead.
+- **Basic OIDC sign-in is part of this AGPL server**, not the enterprise overlay. `README.md` and `docs/SURFACE_OWNERSHIP.md` are updated: directory sync, group and role mapping, and audit overlays remain enterprise.
+- **Encrypted FreeMind/FreePlane branches are explicitly out of scope.** A password-protected branch stores its children encrypted in `ENCRYPTED_CONTENT`, and the password is not in the file — so "importing" it means prompting for a password, which is a feature, not a parser fix. Rather than dropping the locked subtree silently, the importer now marks the node with a `🔒 Encrypted branch` note so the hidden content is visible.
+- Frontend unit tests now stand at 209, including the new round-trip and compatibility suites.
+
 ### Fixed
+- **`GET /api/auth/salt` no longer reveals whether an account exists.** It answered `404` for an unknown username and `200` with the salt for a real one — the same oracle `/login` was already careful to avoid, one route away. Unknown usernames now receive a deterministic pseudo-salt, keyed on a secret derived from `JWT_SECRET`, of the same length and shape as a real one.
+- **Unlocking a vault no longer spends the anonymous sign-in allowance.** It called `/auth/salt` and then `/auth/login` — two calls against the budget meant for strangers, made by someone already signed in, on every page load. It now reads the authenticated key bundle instead. A wrong passphrase is caught locally by the AES-GCM tag.
+- **A federated account cannot be password-signed-in.** An account with no stored hash is refused before the comparison, so an empty hash is never treated as a credential and failures against a password it does not have cannot lock it.
+- **The keyboard shortcuts card showed every shortcut against the wrong action.** `.mm-shortcuts-group-label` had no rule, so each group heading consumed one grid cell and shifted every key/label pair after it, swapping the columns. It also gains an "Always on" switch and remembers where it is dragged.
+- **The Export menu, the colour and icon pickers, and the Labels dialog close when you click away from them.** Only a canvas click cleared them, so they hung over the toolbar or the status bar.
+- The toolbar group above the Export button said "Output" while the button, its tooltip and the ribbon tab all said "Export".
 - **The markdown importer could not read its own exporter.** The exporter wrote a rich structured dialect — `[75%]`, `:icon:`, `Tags: #…`, `📅`, `🔗 <url>`, `📎`, `>` notes — but the importer was a generic Obsidian parser that understood none of it, so a map exported to Markdown and re-imported lost its notes, tags, dates, links, and progress, and grew a spurious wrapper node. The importer now reads the dialect back (and unwraps the export's root), while leaving generic Obsidian notes untouched.
 - **FreeMind export was not byte-compatible with FreeMind.** It emitted an XML prolog FreeMind never writes, attributes in insertion order, and UTF-8 text. It now follows the format FreeMind actually writes: no prolog, the fixed FreeMind comment, `<map version="1.1.0">`, attributes in alphabetical order, pure-ASCII escaping with `&#xHH;` numeric entities for non-ASCII, `POSITION` only on the root's direct children, and LF newlines with no indentation.
 - **Rich-text node labels lost word boundaries.** The importer's HTML stripper decoded the named entities but not numeric character references, so a non-breaking space written as `&#160;` — which FreePlane emits inside rich text — survived as literal text and glued words together. Numeric references (`&#xHH;` and `&#NNN;`) are now decoded. Surfaced by the real freeplane.org maps.
 
-### Changed
-- **Encrypted FreeMind/FreePlane branches are explicitly out of scope.** A password-protected branch stores its children encrypted in `ENCRYPTED_CONTENT`, and the password is not in the file — so "importing" it means prompting for a password, which is a feature, not a parser fix. Rather than dropping the locked subtree silently, the importer now marks the node with a `🔒 Encrypted branch` note so the hidden content is visible.
-- Frontend unit tests now stand at 209, including the new round-trip and compatibility suites.
+### Security
+- Argon2 verification is bounded and off the async executor, so a flood of sign-in attempts can no longer starve the runtime of workers.
+- The admin API never returns a configured OIDC client secret. The response carries `has_client_secret`; an empty secret on save means "keep the stored one", so editing a provider's name cannot silently blank its credential.
+- An email claim is stored only when the provider states it verified it, and is never used to find an account.
 
 ## [0.5.3] - 2026-09-07
 

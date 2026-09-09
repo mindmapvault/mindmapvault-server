@@ -58,8 +58,12 @@ impl UnlockStore for PostgresDb {
         Ok(row.as_ref().and_then(from_row))
     }
 
-    async fn save_unlock_method(&self, method: &UnlockMethod) -> Result<(), AppError> {
-        self.client
+    async fn save_unlock_method(&self, method: &UnlockMethod) -> Result<bool, AppError> {
+        // The user_id guard stops one account overwriting another's row. When it
+        // does not match, no row is written — and returning Ok(()) there would
+        // have told a device it was trusted when the server had stored nothing.
+        let affected = self
+            .client
             .execute(
                 "INSERT INTO unlock_methods
                      (id, user_id, kind, label, wrapped_master_key, created_at)
@@ -78,7 +82,7 @@ impl UnlockStore for PostgresDb {
                 ],
             )
             .await?;
-        Ok(())
+        Ok(affected > 0)
     }
 
     async fn touch_unlock_method(&self, user_id: &str, id: &str) -> Result<(), AppError> {

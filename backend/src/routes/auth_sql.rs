@@ -1205,7 +1205,11 @@ async fn register_unlock_method(
         created_at: Utc::now(),
         last_used_at: None,
     };
-    state.db.save_unlock_method(&method).await?;
+    if !state.db.save_unlock_method(&method).await? {
+        return Err(AppError::Conflict(
+            "that unlock method id is already in use".to_string(),
+        ));
+    }
 
     tracing::info!(user_id = %user.0, kind = method.kind.as_str(), "unlock method registered");
     Ok(Json(UnlockMethodSummary::from(&method)))

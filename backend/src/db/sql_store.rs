@@ -597,7 +597,9 @@ pub trait UnlockStore: Send + Sync {
         user_id: &str,
         id: &str,
     ) -> Result<Option<UnlockMethod>, AppError>;
-    async fn save_unlock_method(&self, method: &UnlockMethod) -> Result<(), AppError>;
+    /// Returns false when the row exists under a different account, in which
+    /// case nothing was written — the caller must not report success.
+    async fn save_unlock_method(&self, method: &UnlockMethod) -> Result<bool, AppError>;
     async fn touch_unlock_method(&self, user_id: &str, id: &str) -> Result<(), AppError>;
     async fn delete_unlock_method(&self, user_id: &str, id: &str) -> Result<bool, AppError>;
     /// Drops every stored copy of the master key. Called when the master key

@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.5.3';
+export const APP_VERSION = '0.6.0';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,43 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.0',
+    date: '2026-09-09',
+    highlights: 'Sign in with your identity provider, stay signed in on devices you trust, and a sign-in surface that gives away less.',
+    items: [
+      {
+        kind: 'feature',
+        title: 'Sign in with an identity provider',
+        desc: 'An administrator can add any OpenID Connect provider — Authentik, Keycloak, Entra, Google — under Settings → Single sign-on. Signing in that way proves who you are; you still choose a vault passphrase once, because the server cannot decrypt your vaults and neither can the provider.',
+      },
+      {
+        kind: 'feature',
+        title: 'Remember this device',
+        desc: 'Tick it on the unlock screen and this browser stops asking for your passphrase. It keeps a copy of your key that only this browser can open — the server stores something it cannot read. Anyone who can use this browser profile can open your vaults, so leave it off on a shared machine.',
+      },
+      {
+        kind: 'improvement',
+        title: 'Unlocking no longer counts against the sign-in limit',
+        desc: 'Reloading a vault used to spend two of the attempts meant for people signing in from outside, which could lock you out of your own account. It now spends none.',
+      },
+      {
+        kind: 'fix',
+        title: 'The sign-in page no longer says which usernames exist',
+        desc: 'Asking about an account that does not exist now answers exactly like one that does.',
+      },
+      {
+        kind: 'fix',
+        title: 'Behind a reverse proxy, each visitor is counted separately again',
+        desc: 'Operators list their proxy’s address ranges under Settings → Trusted proxy ranges. The old switch trusted a header any caller could forge; see DEPLOYMENT.md before upgrading.',
+      },
+      {
+        kind: 'fix',
+        title: 'The keyboard shortcuts card reads correctly',
+        desc: 'Every shortcut was shown against the wrong action, with the two columns swapped. It also gains an Always on switch and remembers where you drag it.',
+      },
+    ],
+  },
   {
     version: '0.5.3',
     date: '2026-09-07',
