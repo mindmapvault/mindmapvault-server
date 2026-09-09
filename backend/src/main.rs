@@ -48,6 +48,8 @@ use models::user::MAX_UPLOAD_BODY_BYTES;
 use routes::{
     admin::{router as admin_router, AdminState},
     auth_sql::{router as auth_sql_router, AuthSqlState, SaltPepper},
+    oidc::{router as oidc_router, OidcState},
+    oidc_client::OidcCache,
     mindmaps_sql::{router as mindmaps_sql_router, MindMapsSqlState},
     public::{router as public_router, PublicState},
     share_public::{router as share_public_router, SharePublicState},
@@ -292,6 +294,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let throttle = Arc::new(AuthThrottle::new());
+    let oidc_flows = Arc::new(middleware::oidc_flow::OidcFlows::new());
+    let oidc_cache = Arc::new(OidcCache::new());
     // Sized from the hardware unless the operator says otherwise. This is a
     // property of the machine rather than a policy, so it stays an environment
     // variable instead of joining the admin console's settings.
@@ -391,6 +395,17 @@ async fn main() -> anyhow::Result<()> {
             verify_budget: verify_budget.clone(),
         };
 
+        let oidc_state = OidcState {
+            db: sql_store.clone(),
+            jwt: jwt.clone(),
+            settings: settings.clone(),
+            throttle: throttle.clone(),
+            key_versions: key_versions.clone(),
+            flows: oidc_flows.clone(),
+            cache: oidc_cache.clone(),
+            public_base_url: cfg.public_base_url.clone(),
+        };
+
         let mindmaps_state = MindMapsSqlState {
             db: sql_store.clone(),
             storage: storage.clone(),
@@ -403,6 +418,7 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
             .route("/health", get(health))
             .route("/admin", get(|| async { Redirect::permanent("/admin/") }))
+            .nest("/api/auth/oidc", oidc_router(oidc_state))
             .nest("/api/auth", auth_sql_router(auth_state))
             .nest("/api/admin", admin_router(admin_state))
             .nest("/api/mindmaps", mindmaps_sql_router(mindmaps_state))
@@ -465,12 +481,16 @@ async fn main() -> anyhow::Result<()> {
     // ── Throttle housekeeping ─────────────────────────────────────────────────
     {
         let throttle = throttle.clone();
+        // Sign-ins that were started and never came back expire on the same
+        // timer, so an abandoned redirect does not sit in memory until restart.
+        let oidc_flows = oidc_flows.clone();
         tokio::spawn(async move {
             let mut ticker =
                 tokio::time::interval(std::time::Duration::from_secs(THROTTLE_PRUNE_SECS));
             loop {
                 ticker.tick().await;
                 throttle.prune();
+                oidc_flows.prune();
             }
         });
     }

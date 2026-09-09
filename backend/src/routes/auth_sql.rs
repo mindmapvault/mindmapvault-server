@@ -413,6 +413,16 @@ async fn login(
         return Err(AppError::Unauthorized("account is locked".to_string()));
     }
 
+    // An account with no password credential — one that signs in through an
+    // identity provider — has nothing here to verify. Refusing before the hash
+    // comparison keeps an empty stored hash from ever being treated as a
+    // credential, and keeps a federated account off the lockout counter, where
+    // failures against a password it does not have would be pure denial of
+    // service. See docs/AUTH_HARDENING_PLAN.md.
+    if user.auth_hash.is_empty() {
+        return Err(AppError::Unauthorized("invalid credentials".to_string()));
+    }
+
     if verify_auth_token_budgeted(&state.verify_budget, &body.auth_token, &user.auth_hash)
         .await?
         .is_err()

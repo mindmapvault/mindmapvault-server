@@ -1,0 +1,49 @@
+{
+  "realm": "mindmapvault",
+  "enabled": true,
+  "displayName": "MindMapVault Test Realm",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "mindmapvault",
+      "name": "MindMapVault",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "mindmapvault-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8091/api/auth/oidc/*",
+        "http://127.0.0.1:8091/api/auth/oidc/*",
+        "http://host.docker.internal:8091/api/auth/oidc/*"
+      ],
+      "webOrigins": [
+        "http://localhost:8091"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "ssouser",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "ssouser@example.com",
+      "firstName": "Sso",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ssouser",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

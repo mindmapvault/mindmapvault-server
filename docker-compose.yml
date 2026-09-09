@@ -89,6 +89,12 @@ services:
       # instance will spend on sign-ins. Empty means "one per core".
       AUTH_VERIFY_CONCURRENCY: ${AUTH_VERIFY_CONCURRENCY:-}
 
+      # The origin browsers reach this server on. Federated sign-in needs it to
+      # build a redirect URI that matches the one registered at the identity
+      # provider; it cannot be taken from the Host header, which the caller
+      # chooses. Leave empty if you are not using SSO.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+
       # Seeds for the instance settings, read only when this database has no
       # settings row yet — the first start of a new deployment. After that the
       # admin console at /admin/ is the one place these change, so editing them
@@ -119,6 +125,35 @@ services:
       STATUS_DISK_PATH: ${STATUS_DISK_PATH:-/}
     ports:
       - "8090:8090"
+
+  # A local identity provider for trying federated sign-in out. Not part of a
+  # deployment: start it with `--profile sso`.
+  #
+  # Keycloak rather than Authentik purely because it runs from one container
+  # with no database or worker of its own. Any OIDC-compliant provider works —
+  # see docs/DEPLOYMENT.md#federated-sign-in-sso.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: mindmapvault-keycloak
+    profiles: ["sso"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8080
+      # The issuer has to be one string that resolves the same way from the
+      # browser and from the server container. host.docker.internal is the only
+      # name both agree on without editing the machine's hosts file.
+      KC_HOSTNAME: http://host.docker.internal:8095
+    volumes:
+      - ./docker/keycloak-realm.json:/opt/keycloak/data/import/realm.json:ro
+    # Bound to every interface on purpose: host.docker.internal resolves to the
+    # host's LAN address, so a loopback-only binding is unreachable. That does
+    # put a test identity provider with a published admin password on your
+    # network, which is why this sits behind a profile and must never be run
+    # anywhere real.
+    ports:
+      - "8095:8080"
 
 volumes:
   postgres-data:

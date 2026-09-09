@@ -25,6 +25,13 @@ pub struct AppConfig {
     pub jwt_refresh_expiry_secs: u64,
     pub cors_allowed_origins: String,
 
+    /// The origin this server is reached on, e.g. `https://maps.example.com`.
+    ///
+    /// Only federated sign-in needs it, to build a redirect URI that matches
+    /// what is registered at the identity provider. It cannot be taken from the
+    /// `Host` header, which the caller chooses.
+    pub public_base_url: String,
+
     pub db_engine: String,
     pub enable_diagnostics_routes: bool,
     pub admin_api_token: String,
@@ -51,6 +58,7 @@ impl AppConfig {
             // anything else belongs in CORS_ALLOWED_ORIGINS, not in a default
             // every deployment inherits.
             .set_default("cors_allowed_origins", "http://localhost:5173,http://localhost:8090,http://tauri.localhost,https://tauri.localhost")?
+            .set_default("public_base_url", "")?
             .set_default("db_engine", "sql")?
             .set_default("enable_diagnostics_routes", false)?
             .set_default("admin_api_token", "")?
