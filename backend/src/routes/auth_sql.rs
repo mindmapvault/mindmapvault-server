@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
 use axum::{
     extract::{FromRef, Query, State},
     routing::{get, post},
@@ -28,7 +30,7 @@ use crate::{
         mindmap::stored_version_bytes,
         settings::{UpdateUserAccountSettingsRequest, UserAccountSettings},
         user::{
-            AccountCapabilitiesResponse, AccountStorageResponse, KeyBundleResponse,
+            AccountCapabilitiesResponse, AccountStorageResponse, Argon2Params, KeyBundleResponse,
             LoginRequest, LoginResponse, ProfileResponse, RegisterRequest,
             RotateCredentialsRequest, SaltResponse, SubscriptionSummaryResponse,
             SubscriptionTier, UpdateProfileRequest, MAX_UPLOAD_BODY_BYTES,
@@ -44,6 +46,10 @@ pub struct AuthSqlState {
     pub settings: InstanceSettingsHandle,
     pub throttle: Arc<AuthThrottle>,
     pub key_versions: KeyVersionCache,
+    /// Keys the pseudo-salt handed out for usernames with no password
+    /// credential. Derived from `JWT_SECRET` rather than being it, so the
+    /// signing key is never used for a second purpose.
+    pub salt_pepper: SaltPepper,
 }
 
 impl FromRef<AuthSqlState> for Arc<JwtService> {
@@ -92,6 +98,65 @@ struct SaltQuery {
     username: String,
 }
 
+/// Derives the salt handed out for a username with no password credential.
+///
+/// The value has to be three things at once: **stable**, so asking twice does
+/// not expose the account as fictional; **unpredictable**, so it cannot be
+/// recomputed offline and compared; and **shaped like a real salt**, so the
+/// response is indistinguishable from an account that does have one.
+///
+/// HMAC-SHA256 keyed on a secret derived from `JWT_SECRET` gives all three.
+/// The salt length `RegisterPage` generates, and therefore the length a
+/// pseudo-salt has to match. HMAC-SHA256 outputs exactly this much.
+const REGISTRATION_SALT_BYTES: usize = 32;
+
+#[derive(Clone)]
+pub struct SaltPepper(Arc<[u8; REGISTRATION_SALT_BYTES]>);
+
+impl SaltPepper {
+    /// Separates a dedicated key from the JWT signing secret, so the same
+    /// bytes never serve two purposes.
+    pub fn from_jwt_secret(secret: &str) -> Self {
+        Self(Arc::new(hmac_sha256(
+            secret.as_bytes(),
+            b"mindmapvault-salt-pepper-v1",
+        )))
+    }
+
+    /// A base64 salt of exactly the length registration produces.
+    ///
+    /// `RegisterPage` generates `randomBytes(32)`, so this returns all 32 bytes
+    /// of the HMAC. Returning fewer would separate real accounts from invented
+    /// ones on length alone — which is the whole leak this is closing.
+    pub fn pseudo_salt(&self, username: &str) -> String {
+        let mac = hmac_sha256(self.0.as_slice(), normalize_username(username).as_bytes());
+        BASE64.encode(mac)
+    }
+}
+
+impl std::fmt::Debug for SaltPepper {
+    /// Never let the key reach a log line through a derived `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SaltPepper(<redacted>)")
+    }
+}
+
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(message);
+    mac.finalize().into_bytes().into()
+}
+
+/// Usernames are matched case-insensitively elsewhere, so the pseudo-salt has
+/// to agree — otherwise `Alice` and `alice` return different salts and the
+/// difference itself says the account is not real.
+fn normalize_username(username: &str) -> String {
+    username.trim().to_lowercase()
+}
+
 #[derive(Debug, Deserialize)]
 struct RefreshRequest {
     refresh_token: String,
@@ -126,16 +191,44 @@ async fn get_salt(
         return Err(AppError::BadRequest("username is required".to_string()));
     }
 
-    let user = state
-        .db
-        .load_user_by_username(&q.username)
-        .await?
-        .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
+    // No 404 from this route. `/login` was already careful not to make a wrong
+    // username cheaper than a wrong password; answering "user not found" here
+    // handed that oracle back one route away.
+    //
+    // The test is "has a password credential", not "exists", so an SSO-only
+    // account falls to the same branch as an unknown one once SSO exists, and
+    // a dual account to the same branch as a local one. See
+    // docs/AUTH_HARDENING_PLAN.md.
+    //
+    // The lookup runs either way: returning early would restore the oracle in
+    // the response time.
+    let user = state.db.load_user_by_username(&q.username).await?;
 
-    Ok(Json(SaltResponse {
-        argon2_salt: user.argon2_salt,
-        argon2_params: user.argon2_params,
+    Ok(Json(match user.and_then(|u| password_salt(u.argon2_salt, u.argon2_params)) {
+        Some((argon2_salt, argon2_params)) => SaltResponse {
+            argon2_salt,
+            argon2_params,
+        },
+        None => SaltResponse {
+            argon2_salt: state.salt_pepper.pseudo_salt(&q.username),
+            argon2_params: Argon2Params::default(),
+        },
     }))
+}
+
+/// The stored password salt, or `None` when the account has no password
+/// credential to derive one from.
+///
+/// Today every account has one. When SSO lands, an SSO-only account will not,
+/// and this is the single place that has to learn about it.
+fn password_salt(
+    argon2_salt: String,
+    argon2_params: Argon2Params,
+) -> Option<(String, Argon2Params)> {
+    if argon2_salt.is_empty() {
+        return None;
+    }
+    Some((argon2_salt, argon2_params))
 }
 
 async fn register(
@@ -912,4 +1005,79 @@ fn normalize_choice(value: String, field: &str, allowed: &[&str]) -> Result<Stri
         )));
     }
     Ok(normalized)
+}
+#[cfg(test)]
+mod salt_oracle_tests {
+    use super::*;
+
+    fn pepper() -> SaltPepper {
+        SaltPepper::from_jwt_secret("a-test-jwt-secret")
+    }
+
+    #[test]
+    fn a_pseudo_salt_is_stable_for_the_same_username() {
+        let p = pepper();
+        assert_eq!(p.pseudo_salt("ghost"), p.pseudo_salt("ghost"));
+    }
+
+    #[test]
+    fn different_usernames_get_different_salts() {
+        let p = pepper();
+        assert_ne!(p.pseudo_salt("ghost"), p.pseudo_salt("phantom"));
+    }
+
+    #[test]
+    fn case_and_padding_do_not_change_the_answer() {
+        // Usernames match case-insensitively elsewhere. If they did not agree
+        // here, the mismatch would itself reveal that the account is not real.
+        let p = pepper();
+        assert_eq!(p.pseudo_salt("Ghost"), p.pseudo_salt("ghost"));
+        assert_eq!(p.pseudo_salt("  ghost  "), p.pseudo_salt("ghost"));
+    }
+
+    #[test]
+    fn a_different_instance_secret_gives_a_different_salt() {
+        // Two instances must not agree, or one of them becomes an oracle for
+        // the other.
+        let other = SaltPepper::from_jwt_secret("a-different-secret");
+        assert_ne!(pepper().pseudo_salt("ghost"), other.pseudo_salt("ghost"));
+    }
+
+    #[test]
+    fn the_pepper_is_not_the_jwt_secret() {
+        let secret = "a-test-jwt-secret";
+        let p = SaltPepper::from_jwt_secret(secret);
+        assert_ne!(p.0.as_slice(), secret.as_bytes());
+    }
+
+    #[test]
+    fn a_pseudo_salt_is_the_same_length_as_a_real_one() {
+        // `RegisterPage` stores `randomBytes(32)`. A different length would
+        // separate real accounts from invented ones at a glance — the first
+        // cut of this returned 16 bytes and was visibly distinguishable
+        // against a live server.
+        let decoded = BASE64.decode(pepper().pseudo_salt("ghost")).expect("base64");
+        assert_eq!(decoded.len(), REGISTRATION_SALT_BYTES);
+    }
+
+    #[test]
+    fn debug_does_not_leak_the_key() {
+        assert_eq!(format!("{:?}", pepper()), "SaltPepper(<redacted>)");
+    }
+
+    #[test]
+    fn an_account_without_a_password_credential_has_no_salt() {
+        // The predicate is "has a password", not "exists" — this is the branch
+        // an SSO-only account will fall into.
+        assert!(password_salt(String::new(), Argon2Params::default()).is_none());
+    }
+
+    #[test]
+    fn an_account_with_a_password_credential_returns_its_own_salt() {
+        let stored = "cmVhbC1zYWx0LWJ5dGVzISE=".to_string();
+        let (salt, params) = password_salt(stored.clone(), Argon2Params::default())
+            .expect("a password account has a salt");
+        assert_eq!(salt, stored);
+        assert_eq!(params.t_cost, 3);
+    }
 }

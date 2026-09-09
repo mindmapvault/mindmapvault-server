@@ -23,6 +23,10 @@ aws-credential-types = "1"
 jsonwebtoken = "9"
 argon2 = "0.5"
 rand = "0.8"
+# Keyed hash behind the salt oracle in routes/auth_sql.rs. Both already arrived
+# transitively; naming them here only makes the dependency honest.
+hmac = "0.12"
+sha2 = "0.10"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

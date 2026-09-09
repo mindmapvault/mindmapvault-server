@@ -45,7 +45,7 @@ use models::status::PurgeStatusHandle;
 use models::user::MAX_UPLOAD_BODY_BYTES;
 use routes::{
     admin::{router as admin_router, AdminState},
-    auth_sql::{router as auth_sql_router, AuthSqlState},
+    auth_sql::{router as auth_sql_router, AuthSqlState, SaltPepper},
     mindmaps_sql::{router as mindmaps_sql_router, MindMapsSqlState},
     public::{router as public_router, PublicState},
     share_public::{router as share_public_router, SharePublicState},
@@ -372,6 +372,7 @@ async fn main() -> anyhow::Result<()> {
             settings: settings.clone(),
             throttle: throttle.clone(),
             key_versions: key_versions.clone(),
+            salt_pepper: SaltPepper::from_jwt_secret(&cfg.jwt_secret),
         };
 
         let mindmaps_state = MindMapsSqlState {
