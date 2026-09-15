@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.0';
+export const APP_VERSION = '0.6.1';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,18 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.1',
+    date: '2026-09-15',
+    highlights: 'PNG and PDF exports contain the whole map.',
+    items: [
+      {
+        kind: 'fix',
+        title: 'PNG and PDF exports showed only part of the map',
+        desc: 'An exported image or PDF now contains every node, including the ones scrolled out of view, in the same font as the editor.',
+      },
+    ],
+  },
   {
     version: '0.6.0',
     date: '2026-09-09',
