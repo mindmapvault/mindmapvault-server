@@ -35,20 +35,20 @@ WORKDIR /app
 
 # Build the backend crate directly so the image does not depend on the full
 # workspace layout being present in the Docker build context.
-COPY backend/Cargo.lock ./Cargo.lock
+COPY backend/Cargo.lock ./backend/Cargo.lock
 COPY backend/Cargo.toml ./backend/
 
 # Seed a dummy binary so cargo can pre-compile all dependencies
 RUN mkdir -p backend/src && echo 'fn main(){}' > backend/src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --manifest-path backend/Cargo.toml --target-dir /app/target || true
+    cargo build --release --locked --manifest-path backend/Cargo.toml --target-dir /app/target || true
 
 # Now copy the real source and do the final build
 COPY backend/src ./backend/src
 # Touch main.rs so cargo knows the source changed
 RUN touch backend/src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release --manifest-path backend/Cargo.toml --target-dir /app/target
+    cargo build --release --locked --manifest-path backend/Cargo.toml --target-dir /app/target
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
