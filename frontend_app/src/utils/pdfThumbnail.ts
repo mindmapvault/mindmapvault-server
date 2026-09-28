@@ -29,8 +29,12 @@ export async function renderPdfThumbnail(
   await ensureWorker();
   const pdfjsLib = await import('pdfjs-dist');
 
+  // pdf.js transfers the buffer it is handed to its worker, which leaves the
+  // caller's array detached and empty. BoardPage encrypts and uploads the same
+  // bytes right after thumbnailing them, so handing over the original stored an
+  // empty attachment. Give pdf.js a copy and leave the caller's own intact.
   const pdf: PDFDocumentProxy = await pdfjsLib.getDocument({
-    data: pdfBytes,
+    data: new Uint8Array(pdfBytes),
     disableStream: true,
     disableAutoFetch: true,
   }).promise;
