@@ -70,7 +70,7 @@ import {
   defaultRoot,
   migrateNode,
 } from './MindMapHelpers';
-import { layoutTree, bezierPath, describeNode, nodeGeometry } from '@mindmapvault/mindmap-core';
+import { layoutTree, bezierPath, describeNode, nodeGeometry, editorBox } from '@mindmapvault/mindmap-core';
 import { appendAttachmentMarkdownLinks, getVisibleNodeTextLines } from '../utils/nodeAttachments';
 import { exportSvgAsPdf, renderSvgToCanvas } from '../utils/pdfExport';
 import { downloadBlob, downloadDataUrl } from '../utils/download';
@@ -2045,6 +2045,9 @@ export function DesktopMindMapEditor({
     // text used to drift out of the box that was reserved for it.
     const parts = box.parts;
     const geom = nodeGeometry(box, parts);
+    // Sized from the text being typed, not from the node, which is still
+    // measured from its committed text. See editorBox in mindmap-core.
+    const editBox = isEditing ? editorBox(box, geom, editText) : null;
 
     // Only the node's own explicit color fills the bubble — and, in
     // renderConnections, the one line coming into it. Nothing is inherited.
@@ -2066,8 +2069,8 @@ export function DesktopMindMapEditor({
       fontWeight: isRoot ? 'bold' : 'normal',
     };
 
-    const editor = isEditing ? (
-      <foreignObject x={box.x + 2} y={geom.bodyTopY + 2} width={box.w - 4} height={Math.max(0, geom.bodyH - 4)}>
+    const editor = isEditing && editBox ? (
+      <foreignObject x={editBox.x} y={editBox.y} width={editBox.w} height={editBox.h}>
         <textarea ref={editRef} value={editText} onChange={(e) => setEditText(e.target.value)} onBlur={commitEdit}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(); } if (e.key === 'Escape') cancelEdit(); e.stopPropagation(); }}
           className="mm-edit-textarea" style={{ color: visual.textColor, background: visual.fillColor }} />
