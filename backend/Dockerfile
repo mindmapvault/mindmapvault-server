@@ -53,11 +53,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# The trust store, as a file rather than a package. Installing
+# `ca-certificates` also pulls in openssl and pcre2, and nothing in this image
+# uses either: the backend links rustls and aws-lc statically -- there is no
+# openssl crate in the dependency tree -- and only ever reads this bundle,
+# through rustls-native-certs. Those two packages were the whole of what this
+# image added to its base: one critical and five high advisories.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /app
 
@@ -72,5 +74,8 @@ ENV HOST=0.0.0.0
 ENV PORT=8090
 ENV SERVER_APP_DIST_DIR=/app/frontend_app_dist
 ENV SERVER_ADMIN_DIST_DIR=/app/frontend_admin_dist
+# Named explicitly: the bundle is copied in rather than installed, so nothing
+# here guarantees the path rustls-native-certs would otherwise guess at.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 ENTRYPOINT ["/app/backend"]
