@@ -15,6 +15,13 @@ export interface PdfMeta {
   pageCount: number;
 }
 
+/**
+ * Renders the first page of an uploaded PDF, in the same document that holds
+ * the reader's decrypted vault. Keep pdfjs-dist at 6.2.108 or newer: earlier
+ * 6.x releases ran a malicious PDF's script through pdf.js's eval-based font
+ * path (GHSA-hq66-cqwq-w95j). Version 6 removed that path outright, so there
+ * is no option to switch off -- the floor in package.json is the whole fix.
+ */
 export async function renderPdfThumbnail(
   pdfBytes: Uint8Array,
   targetWidth = 400,
