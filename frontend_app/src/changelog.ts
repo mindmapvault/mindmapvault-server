@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.1';
+export const APP_VERSION = '0.6.2';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,23 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.2',
+    date: '2026-09-28',
+    highlights: 'PDFs attached to a board are stored properly again, and typed text stays on its node in Safari.',
+    items: [
+      {
+        kind: 'fix',
+        title: 'A PDF attached to a board was saved empty',
+        desc: 'The preview looked right, but the stored file held nothing, and the preview then vanished on a later visit. PDFs attached before this release cannot be recovered and need attaching again.',
+      },
+      {
+        kind: 'fix',
+        title: 'Typed text jumped away from the node in Safari',
+        desc: 'Typing more than a word or two moved the text to the top of the canvas, into a field too narrow to read, and the node looked empty until you pressed Return. The edit field now grows with what you type and stays where the node is.',
+      },
+    ],
+  },
   {
     version: '0.6.1',
     date: '2026-09-15',

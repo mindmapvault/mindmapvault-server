@@ -6,6 +6,18 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-28
+
+A PDF attached to a board was stored empty, text typed into a node jumped away
+from it in Safari, and the server image carries far fewer advisories.
+
+### Fixed
+- **A PDF attached to a board was stored empty.** pdf.js transfers the buffer it is handed to its worker, so the caller's array comes back detached and zero-length. `handlePickPdf` rendered the thumbnail first and then encrypted and uploaded the very same array, which by then held nothing: the card showed a correct preview while the stored attachment was empty. On a later visit the board re-fetched it, failed to render, and swallowed the error as non-fatal, so the preview simply went missing with nothing said. pdf.js is given a copy now. Measured in a browser: 22,566 bytes in, and the caller's array was 0 bytes afterwards before the fix. **PDFs attached before this release are already stored empty and cannot be recovered** — check with a query for attachments of type `application/pdf` whose size looks wrong. `frontend_app/src/utils/pdfThumbnail.ts`, with a regression test.
+- **Typing more than a word or two into a node moved the text off the node, in Safari.** The edit field is a textarea inside an SVG `<foreignObject>`, sized from the node's *committed* text, so it stayed at the size the node had before editing began — for a new node the 80px minimum — and anything longer overflowed a fixed, scrollable box. WebKit then painted that overflowing control outside its `foreignObject`, far from its node, so the text appeared near the top of the canvas while the node looked empty. The field is measured from what is being typed now. It also makes long text less cramped in every other browser. `packages/mindmap-core/src/geometry.ts` (four new unit tests), `frontend_app/src/components/MindMapEditor.tsx`.
+
+### Changed
+- **The server image no longer installs the `ca-certificates` package.** Doing so also pulled in openssl and pcre2, and nothing in the image uses either: there is no openssl crate in the backend's dependency tree — TLS is rustls over aws-lc, linked statically — and the only thing wanted from the package was the bundle `rustls-native-certs` reads, which is now copied in as a file. Scanning the published image gave 3 critical and 14 high advisories; it now gives 2 and 9, which is what `debian:bookworm-slim` carries on its own, in packages nothing here runs. `backend/Dockerfile`.
+
 ## [0.6.1] - 2026-09-15
 
 PNG and PDF exports contain the whole map.
