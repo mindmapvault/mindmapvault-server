@@ -656,11 +656,12 @@ export function DesktopMindMapEditor({
    * layout has to measure with the same count the renderer draws with, or the
    * meta strip is drawn in space nothing reserved and the text loses 18px.
    */
-  const layout = useMemo(
-    () => layoutTree(root, 0, 0, (node) =>
+  const layoutOf = useCallback(
+    (tree: MindMapTreeNode) => layoutTree(tree, 0, 0, (node) =>
       describeNode(node, { attachmentCount: getNodeAttachments(node.id, node.attachments).length })),
-    [root, getNodeAttachments],
+    [getNodeAttachments],
   );
+  const layout = useMemo(() => layoutOf(root), [root, layoutOf]);
 
   const loadAttachmentPreview = useCallback(async (attachment: NodeAttachmentRef) => {
     const isImage = (attachment.content_type ?? '').startsWith('image/');
@@ -724,12 +725,12 @@ export function DesktopMindMapEditor({
   }, [mutate]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const addChild = useCallback((parentId: string, side?: 'left' | 'right') => {
-    commitInsertion(ops.addChild(root, parentId, side));
-  }, [root, commitInsertion]);
+    commitInsertion(ops.placeInsertion(ops.addChild(root, parentId, side), layoutOf));
+  }, [root, commitInsertion, layoutOf]);
 
   const addSibling = useCallback((nodeId: string) => {
-    commitInsertion(ops.addSibling(root, nodeId));
-  }, [root, commitInsertion]);
+    commitInsertion(ops.placeInsertion(ops.addSibling(root, nodeId), layoutOf));
+  }, [root, commitInsertion, layoutOf]);
 
   const deleteNode = useCallback((nodeId: string) => {
     const result = ops.removeNode(root, nodeId);
