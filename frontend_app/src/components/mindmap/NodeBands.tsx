@@ -232,18 +232,24 @@ export function ImageBand({
   geom,
   parts,
   node,
+  href,
   onOpen,
 }: Omit<BandProps, 'visual'> & {
   node: MindMapTreeNode;
+  /** A larger copy built from the original, when there is one; else the glyph. */
+  href?: string;
   onOpen: (node: MindMapTreeNode) => void;
 }): JSX.Element | null {
   // Derived from the parts, not re-read from the node, so the glyph and the
-  // band that makes room for it cannot disagree about whether there is one.
+  // band that makes room for it cannot disagree about whether there is one —
+  // and the parts carry the picture at its display size.
   if (!parts.image) return null;
-  const image = node.image!;
+  const image = parts.image;
   return (
     <image
-      href={image.thumb}
+      href={href ?? image.thumb}
+      // The export cannot load a blob: URL; it falls back to this.
+      data-glyph={href && href !== image.thumb ? image.thumb : undefined}
       x={box.x + (box.w - image.w) / 2}
       y={geom.imageY}
       width={image.w}
@@ -255,7 +261,7 @@ export function ImageBand({
       style={{ clipPath: 'inset(0 round 5px)' }}
       onClick={(e) => { e.stopPropagation(); onOpen(node); }}
     >
-      <title>{image.name ?? 'Image'}</title>
+      <title>{node.image?.name ?? 'Image'}</title>
     </image>
   );
 }

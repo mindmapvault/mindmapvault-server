@@ -107,7 +107,7 @@ export function VaultsPage() {
   const { labels: userLabels, addLabel: addUserLabel, updateLabelColor: updateUserLabelColor } = useUserLabels();
   const themeMode = useThemeStore((state) => state.mode);
   const toggleThemeMode = useThemeStore((state) => state.toggleMode);
-  const storage = useMemo(() => getStorage(), []);
+  const storage = useMemo(() => getStorage(mode === 'local' ? 'local' : 'server'), [mode]);
   const hasKeys = !!sessionKeys;
 
   const [maps, setMaps] = useState<MapWithTitle[]>([]);
@@ -324,7 +324,10 @@ export function VaultsPage() {
         setMaps(items.map((m) => toVaultRow(m, null, '')));
       }
       setActiveSharesByVault({});
-      setPreviewStates({});
+      // Previews are not cleared here: the effects below
+      // rebuild them whenever the list or an updated_at changes, and when
+      // neither has (reopening the lobby from the editor), clearing them left
+      // every card blank with nothing to fill it again.
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load vaults');
     } finally {

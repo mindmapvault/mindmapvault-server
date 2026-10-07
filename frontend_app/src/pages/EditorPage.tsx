@@ -22,6 +22,14 @@ import { decryptTitle, decryptTree, encryptTitle, encryptTree } from '../crypto/
 import { BOARD_LABEL } from '../utils/vaultLabels';
 import type { LinkableVault } from '../components/MindMapVaultLinkDialog';
 import { getOfflineStorage, getStorage, isPwa, OfflineStorageAdapter, type SyncStatus } from '../storage';
+import {
+  externalizeInlineAttachments,
+  inlineLocalAttachments,
+  pruneLocalAttachments,
+  readLocalAttachment,
+  withLocalVaultLock,
+  writeLocalAttachment,
+} from '../storage/localAttachments';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { fromBase64, toBase64 } from '../crypto/utils';
 import { useAuthStore } from '../store/auth';
@@ -383,17 +391,43 @@ export function EditorPage() {
         fromBase64(kemFields.wrapped_dek),
       );
 
-      const blob = !isLocalMode && specificVersionId
-        ? await (async () => {
-            return mindmapsApi.downloadBlob(id, specificVersionId);
-          })()
-        : await storage.downloadBlob(id);
-      const tree = await decryptTree(blob, dek);
-      saveTreeVaultPreview(id, detail.updated_at, tree);
+      let tree: MindMapTree;
+      let updatedAt = detail.updated_at;
+      if (isLocalMode) {
+        // Read, migrate and save as one step: two opens interleaving would
+        // leave the files under one set of keys and the map under the other.
+        ({ tree, updatedAt } = await withLocalVaultLock(id, async () => {
+          let opened = await decryptTree(await storage.downloadBlob(id), dek);
+          let stamp = updatedAt;
+          // A map saved by 0.6.2 or earlier carries its originals inline. Move
+          // them to files and save the slimmer map with the same key, before
+          // the editor (and its undo history) ever holds the heavy copy.
+          const moved = await externalizeInlineAttachments(id, opened.root);
+          if (moved) {
+            try {
+              const migrated = { ...opened, root: moved };
+              await storage.uploadBlob(id, await encryptTree(migrated, dek));
+              opened = migrated;
+              stamp = (await storage.getVault(id)).updated_at;
+            } catch {
+              // The saved map still has them inline; the files are rewritten next time.
+            }
+          }
+          // `opened` is now exactly what is saved, so anything it does not point at can go.
+          await pruneLocalAttachments(id, opened.root).catch(() => {});
+          return { tree: opened, updatedAt: stamp };
+        }));
+      } else {
+        const blob = specificVersionId
+          ? await mindmapsApi.downloadBlob(id, specificVersionId)
+          : await storage.downloadBlob(id);
+        tree = await decryptTree(blob, dek);
+      }
+      saveTreeVaultPreview(id, updatedAt, tree);
       setInitialTree(tree);
       setCurrentTree(tree);
       setSelectedNodeId(tree.view_state?.selected_node_id ?? 'root');
-      const vdt = new Date(detail.updated_at);
+      const vdt = new Date(updatedAt);
       setVersionTooltip(vdt.toLocaleString());
       // Fetch version list to show vN numbering in toolbar
       if (!isLocalMode) {
@@ -606,10 +640,12 @@ export function EditorPage() {
    * title. The builder is idempotent, so doing so twice is harmless.
    */
   const handleExport = useCallback(async (format: ExportFormat, tree: MindMapTree, baseName: string) => {
-    const blob = await format.serialize(tree.root, baseName);
+    // An export has to stand on its own: originals kept as local files go back in.
+    const root = isLocalMode && id ? await inlineLocalAttachments(id, tree.root) : tree.root;
+    const blob = await format.serialize(root, baseName);
     const fileName = buildExportFileBaseName({ baseTitle: baseName, title, fallback: 'vault', versionLabel });
     void downloadBlob(blob, `${fileName}${format.extension}`);
-  }, [title, versionLabel]);
+  }, [id, isLocalMode, title, versionLabel]);
 
   const handleUploadFiles = useCallback(async (files: FileList) => {
     if (!id || !sessionKeys || isLocalMode) return;
@@ -659,8 +695,9 @@ export function EditorPage() {
           setAttachmentUpload({ busy: true, label: `Adding ${file.name}…` });
           const plaintext = new Uint8Array(await file.arrayBuffer());
           const preview = await createEncryptedFilePreview(file);
+          const attachmentId = `local-${crypto.randomUUID()}`;
           created.push({
-            attachment_id: `local-${crypto.randomUUID()}`,
+            attachment_id: attachmentId,
             preview_attachment_id: null,
             name: file.name,
             content_type: file.type || 'application/octet-stream',
@@ -668,8 +705,10 @@ export function EditorPage() {
             preview_content_type: preview.contentType,
             preview_kind: preview.kind,
             uploaded_at: new Date().toISOString(),
-            inline_data_base64: toBase64(plaintext),
-            inline_preview_data_base64: toBase64(preview.bytes),
+            local_file_key_b64: await writeLocalAttachment(id, attachmentId, plaintext),
+            // An image is previewed from its own original; only other files
+            // need the generated card, and it is small enough to stay inline.
+            inline_preview_data_base64: file.type.startsWith('image/') ? undefined : toBase64(preview.bytes),
           });
         }
 
@@ -839,11 +878,11 @@ export function EditorPage() {
     if (!id || !sessionKeys) return;
 
     if (isLocalMode) {
-      if (!attachment.inline_data_base64) {
+      const bytes = await readLocalAttachment(id, attachment).catch(() => null);
+      if (!bytes) {
         setSecureError('Local attachment payload is unavailable.');
         return;
       }
-      const bytes = fromBase64(attachment.inline_data_base64);
       saveBytesToFile(bytes, attachment.name, attachment.content_type || 'application/octet-stream');
       return;
     }
@@ -865,8 +904,8 @@ export function EditorPage() {
     if (!id || !sessionKeys) return null;
 
     if (isLocalMode) {
-      if (!attachment.inline_data_base64) return null;
-      const bytes = fromBase64(attachment.inline_data_base64);
+      const bytes = await readLocalAttachment(id, attachment).catch(() => null);
+      if (!bytes) return null;
       const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
       const contentType = attachment.content_type || 'application/octet-stream';
       return {
@@ -904,12 +943,11 @@ export function EditorPage() {
       const cached = previewBlobUrlCacheRef.current[previewSourceId];
       if (cached) return cached;
 
-      const payloadBase64 = isImageAttachment
-        ? attachment.inline_data_base64
-        : attachment.inline_preview_data_base64;
-      if (!payloadBase64) return null;
+      const bytes = isImageAttachment
+        ? await readLocalAttachment(id, attachment).catch(() => null)
+        : attachment.inline_preview_data_base64 ? fromBase64(attachment.inline_preview_data_base64) : null;
+      if (!bytes) return null;
 
-      const bytes = fromBase64(payloadBase64);
       const payload = bytes.buffer.slice(
         bytes.byteOffset,
         bytes.byteOffset + bytes.byteLength,

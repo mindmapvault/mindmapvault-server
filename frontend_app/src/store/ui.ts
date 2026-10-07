@@ -67,7 +67,16 @@ interface UiState {
   setLabelsPinned: (pinned: boolean) => void;
   labelsPos: { x: number; y: number } | null;
   setLabelsPos: (pos: { x: number; y: number } | null) => void;
+
+  /** Zoom for the whole window, 1 = 100 %. For screens where the OS scaling
+   *  still leaves the interface small (a 15" 4K laptop). Desktop only — a
+   *  browser has its own zoom. */
+  interfaceScale: number;
+  setInterfaceScale: (scale: number) => void;
 }
+
+/** The steps offered in Settings → Interface. */
+export const INTERFACE_SCALES = [1, 1.25, 1.5, 1.75, 2];
 
 export const useUiStore = create<UiState>()(
   persist(
@@ -136,6 +145,9 @@ export const useUiStore = create<UiState>()(
 
       labelsPos: null,
       setLabelsPos: (labelsPos) => set({ labelsPos }),
+
+      interfaceScale: 1,
+      setInterfaceScale: (interfaceScale) => set({ interfaceScale }),
     }),
     { name: 'mindmapvault-ui' },
   ),

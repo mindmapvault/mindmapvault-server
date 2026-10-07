@@ -7,6 +7,7 @@ import { applyCanvasPalette } from '../utils/canvasPalette';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 import { useThemeStore } from '../store/theme';
+import { useUiStore } from '../store/ui';
 
 const EditorPage = lazy(() => import('./pages/EditorPage').then((module) => ({ default: module.EditorPage })));
 const ProjectPage = lazy(() => import('../pages/ProjectPage').then((module) => ({ default: module.ProjectPage })));
@@ -37,6 +38,7 @@ export default function AppRoot() {
   const sessionKeys = useAuthStore((s) => s.sessionKeys);
   const logout = useAuthStore((s) => s.logout);
   const isDesktop = isTauri();
+  const interfaceScale = useUiStore((s) => s.interfaceScale);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -49,6 +51,15 @@ export default function AppRoot() {
     // light/dark stylesheets.
     applyCanvasPalette(root, canvasColor);
   }, [mode, primaryColor, canvasColor]);
+
+  // The webview's own zoom, not CSS `zoom`: it scales the whole page the way
+  // browser zoom does, so pointer coordinates on the canvas stay right.
+  useEffect(() => {
+    if (!isDesktop) return;
+    void import('@tauri-apps/api/webview')
+      .then(({ getCurrentWebview }) => getCurrentWebview().setZoom(interfaceScale))
+      .catch(() => {});
+  }, [isDesktop, interfaceScale]);
 
   useEffect(() => {
     if (isDesktop && appMode === null) {
