@@ -6,6 +6,25 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-07
+
+Pictures in three sizes, and hand-placed nodes stay where you put them.
+
+### Added
+- **Pictures on nodes in three sizes.** Right-click a picture and choose Small, Medium or Large. The pixel size of each can be set per map with the “…” next to them. Larger pictures are drawn from the original, so they stay sharp, and the map file does not grow.
+- **Interface size.** Settings → Interface → Interface size makes the whole window larger, from 100 to 200 %. Useful on small high-resolution screens.
+
+### Changed
+- **Pictures no longer weigh down the map.** In the desktop app's local mode, the original of every attached file is now kept beside the map instead of inside it, so a map with many photos saves and undoes as quickly as one without. Existing maps are converted the first time you open them; an export still carries everything.
+
+### Fixed
+- **Adding a node no longer moves the ones you placed by hand.** A new child or sibling used to snap the whole branch back to the automatic layout. Hand-placed nodes now stay put, and the new node goes next to its neighbours.
+- **Pasting a picture works on Linux.** Ctrl+V with a copied image now puts it on the selected node on Linux too. The Image button tooltip mentions the shortcut.
+- **Vault previews stay after leaving the editor.** Going back to the vault list from a map left every card without its preview until the next unlock.
+- **Importing into a local vault works again.** In local mode, importing a file asked the server instead of the local store and failed with “missing Authorization header”.
+
+A map opened by this version keeps its attachment originals in `vaults/attachments/<map id>/`. An older version still opens it and shows the pictures, but not the originals behind them.
+
 ## [0.6.2] - 2026-09-28
 
 A PDF attached to a board was stored empty, text typed into a node jumped away
