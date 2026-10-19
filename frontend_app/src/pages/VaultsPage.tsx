@@ -924,7 +924,7 @@ export function VaultsPage() {
                   </svg>
                 </button>
                 {showImportMenu && (
-                  <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--color-surface-1, #1e293b)', border: '1px solid var(--color-border, #334155)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                  <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
                     {IMPORT_MENU_ITEMS.map((item) => (
                       <button
                         key={`${item.format}-${item.label}`}
@@ -956,7 +956,7 @@ export function VaultsPage() {
                   </svg>
                 </button>
                 {showCreateMenu && (
-                  <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--color-surface-1, #1e293b)', border: '1px solid var(--color-border, #334155)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                  <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 200, minWidth: 200, background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 8, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
                     <button
                       className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-slate-300 hover:bg-white/5 hover:text-white"
                       onClick={() => { setShowCreate(true); setShowCreateMenu(false); }}
@@ -1113,7 +1113,7 @@ export function VaultsPage() {
                 </span>
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                <span>{storageSummary.vaults.length} vaults</span>
+                <span>{storageSummary.vaults.length} vault{storageSummary.vaults.length === 1 ? '' : 's'}</span>
                 {attachedFileCount > 0 && <span>{attachedFileCount} attached file{attachedFileCount === 1 ? '' : 's'} using {fmtBytes(attachedFileBytes)}</span>}
                 
               </div>
