@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-02
+
+Security updates for the server and the app. Nothing changes in how they work.
+
+### Fixed
+- **Backend dependencies.** `rustls` 0.23.46, `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11, `quinn-proto` 0.11.19, `tokio` 1.54.1, and the AWS S3 SDK 1.157 with `aws-sigv4` 1.6.4, which moves `crypto-bigint` from 0.5.5 to 0.7.10 (RUSTSEC-2026-0338/0340/0343/0346–0349/0382/0383/0385/0387). `quinn-proto` is in the lockfile only and is not compiled into the server.
+- **App and admin dependencies.** `dompurify` 3.4.17, `vite` 6.4.5, `vitest` 4.1.12, and overrides for `undici`, `fast-uri`, `serialize-javascript`, `minimatch` and `glob`. The DOMPurify advisories need `SAFE_FOR_TEMPLATES`, `IN_PLACE` or hooks, none of which the app uses. `deepmerge` (GHSA-gcqx-w48m-w2h4, build-time only, no fixed release) is ignored in the audit.
+
 ## [0.6.4] - 2026-11-02
 
 Zooming and moving the map on a phone feel natural, nodes can be moved by

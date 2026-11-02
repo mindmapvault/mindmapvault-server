@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.4';
+export const APP_VERSION = '0.6.5';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,18 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.5',
+    date: '2026-11-02',
+    highlights: 'Security updates for the server and the app.',
+    items: [
+      {
+        kind: 'fix',
+        title: 'Security updates',
+        desc: 'Updated the TLS, AWS storage and HTML-sanitising libraries to versions that fix recently published advisories. Nothing changes in how the app works.',
+      },
+    ],
+  },
   {
     version: '0.6.4',
     date: '2026-11-02',
