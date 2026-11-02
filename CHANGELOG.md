@@ -9,12 +9,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ## [0.6.4] - 2026-11-02
 
 Zooming and moving the map on a phone feel natural, nodes can be moved by
-touch, and editing a node puts the cursor after its text.
+touch, the vault list is compact on phones, and editing a node puts the cursor
+after its text.
 
 ### Added
 - **Move nodes on a touch screen.** Now that one finger moves the map, nodes have their own gesture. Hold a node still for a moment until it lifts, then drag it. Drop it on another node to make it a child of that node, or anywhere else to place it there.
 
 ### Changed
+- **A tidier vault list on phones.** Each vault card on a phone is now about a third of the screen. The actions sit behind one ⋯ button, the preview is smaller, and the colour, note, labels and versions fold away under Details, with their own Save button. Phones always show the cards; the table view stays on larger screens.
 - **Drag the map from anywhere.** On a phone or tablet, moving the map only worked if your finger started on empty canvas, which a full map may not have. A one-finger drag now moves the map wherever it starts, nodes included; tapping a node still selects it. After a pinch, the finger left on the screen keeps moving the map.
 - **Editing a node continues from the end of its text.** Opening a node for editing put the cursor before its text. It now goes after the last word, ready to keep writing.
 

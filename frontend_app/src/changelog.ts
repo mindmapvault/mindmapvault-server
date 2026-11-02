@@ -44,7 +44,7 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     version: '0.6.4',
     date: '2026-11-02',
-    highlights: 'Zooming and moving the map on a phone feel natural, nodes can be moved by touch, and editing a node puts the cursor after its text.',
+    highlights: 'Zooming and moving the map on a phone feel natural, nodes can be moved by touch, the vault list is compact on phones, and editing a node puts the cursor after its text.',
     items: [
       {
         kind: 'feature',
@@ -60,6 +60,11 @@ export const CHANGELOG: ChangelogEntry[] = [
         kind: 'fix',
         title: 'Zoom stays centred',
         desc: 'Pinching on a phone or tablet used to zoom towards the left edge of the map, so what you were looking at slid away. The map now zooms around the point between your fingers and follows them as they move. The zoom buttons and the + and − keys zoom around the middle of the screen, and Ctrl or ⌘ with the scroll wheel zooms around the pointer.',
+      },
+      {
+        kind: 'improvement',
+        title: 'A tidier vault list on phones',
+        desc: 'Each vault card on a phone is now about a third of the screen. The actions sit behind one ⋯ button, the preview is smaller, and the colour, note, labels and versions fold away under Details, with their own Save button. Phones always show the cards; the table view stays on larger screens.',
       },
       {
         kind: 'improvement',

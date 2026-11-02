@@ -6,12 +6,13 @@
  * `vaultState` — deliberately not merged behind a `variant` prop.
  */
 
-import { memo, type CSSProperties } from 'react';
+import { memo, useCallback, useRef, useState, type CSSProperties } from 'react';
+import { useDismissOnOutsideClick } from '../../components/mindmap/useDismissOnOutsideClick';
 import type { StorageSummary } from '../../types';
 import { visibleLabels } from '../../utils/vaultLabels';
-import { VaultLabelInput } from './VaultLabelInput';
 import { fmtBytes, formatDateShort } from './format';
 import type { MapWithTitle, VaultPreviewState } from './types';
+import { VaultLabelInput } from './VaultLabelInput';
 import {
   deriveVaultState,
   labelsEqual,
@@ -49,6 +50,11 @@ export interface VaultCardProps {
   onUpdateUserLabelColor: (name: string, color: string) => void;
   onAddUserLabel: (name: string, color?: string) => void;
   onSaveMeta: (map: MapWithTitle) => Promise<void>;
+  /**
+   * Phone layout: actions behind one "⋯" button, a smaller preview, and the
+   * vault settings folded away behind a Details row.
+   */
+  compact?: boolean;
 }
 
 export const VaultCard = memo(function VaultCard({
@@ -79,18 +85,41 @@ export const VaultCard = memo(function VaultCard({
   onUpdateUserLabelColor,
   onAddUserLabel,
   onSaveMeta,
+  compact = false,
 }: VaultCardProps) {
   const persistedColor = normalizeHexColor(map.vault_color);
   const persistedMax = Math.max(1, map.max_versions ?? 50);
-  const { path: vaultPath, isShared: isSharedVault } = deriveVaultState(map, activeShareCount);
   const persistedEncryptionMode = normalizeEncryptionMode(map.vault_encryption_mode);
   const persistedLabels = normalizeVaultLabels(map.vault_labels);
+  const { path: vaultPath, isShared: isSharedVault } = deriveVaultState(map, activeShareCount);
   const blurPreview = isSharedVault;
   const dirty =
     map.draftNote !== map.vaultNote ||
     map.draftColor !== persistedColor ||
     !labelsEqual(map.draftLabels, persistedLabels) ||
     (!isLocalMode && map.draftMaxVersions !== persistedMax);
+
+  // Phone layout only: the "⋯" menu and whether the settings are unfolded.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  useDismissOnOutsideClick(menuOpen, menuRef, closeMenu);
+  const menuItems: Array<{ label: string; run: () => void; danger?: boolean }> = [
+    { label: 'Open', run: () => onNavigate(vaultPath) },
+    { label: 'Rename', run: () => onStartRename(map) },
+    ...(isLocalMode ? [] : [
+      { label: 'Share exports', run: () => onOpenShares(map.id) },
+      { label: 'Version history', run: () => onOpenHistory(map.id) },
+    ]),
+    { label: 'Delete vault', run: () => onDeleteRequest(map.id, map.title), danger: true },
+  ];
+  const nodeCount = previewState?.summary?.nodeCount;
+  const fileCount = usage?.attachment_count ?? 0;
+  const compactMeta =
+    (nodeCount != null ? ` · ${nodeCount} node${nodeCount === 1 ? '' : 's'}` : '')
+    + (fileCount > 0 ? ` · ${fileCount} file${fileCount === 1 ? '' : 's'}` : '');
+  const storageLine = <>{usage?.version_count ?? 0} stored versions{(usage?.attachment_count ?? 0) > 0 ? ` · ${usage?.attachment_count ?? 0} file${(usage?.attachment_count ?? 0) === 1 ? '' : 's'}` : ''} · {fmtBytes(usage?.total_bytes ?? 0)} total{(usage?.attachment_bytes ?? 0) > 0 ? ` incl. ${fmtBytes(usage?.attachment_bytes ?? 0)} files` : ''}{!isLocalMode && ` · max kept ${persistedMax}`}</>;
 
   return (
     <article
@@ -99,7 +128,7 @@ export const VaultCard = memo(function VaultCard({
       style={{ borderColor: map.draftColor }}
     >
       <div className="h-1" style={{ backgroundColor: map.draftColor }} />
-      <div className="space-y-4 p-4">
+      <div className={compact ? 'space-y-3 p-3.5' : 'space-y-4 p-4'}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             {renamingId === map.id ? (
@@ -137,7 +166,7 @@ export const VaultCard = memo(function VaultCard({
                   {map.title ?? <span className="italic text-slate-500">Decrypting...</span>}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Updated {formatDateShort(map.updated_at)}
+                  Updated {formatDateShort(map.updated_at)}{compact ? compactMeta : ''}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {isSharedVault && (
@@ -151,13 +180,47 @@ export const VaultCard = memo(function VaultCard({
                     </span>
                   )}
                 </div>
+                {!compact && (
                 <p className="mt-1 text-xs text-slate-500">
                   {usage?.version_count ?? 0} stored versions{(usage?.attachment_count ?? 0) > 0 ? ` · ${usage?.attachment_count ?? 0} file${(usage?.attachment_count ?? 0) === 1 ? '' : 's'}` : ''} · {fmtBytes(usage?.total_bytes ?? 0)} total{(usage?.attachment_bytes ?? 0) > 0 ? ` incl. ${fmtBytes(usage?.attachment_bytes ?? 0)} files` : ''}{!isLocalMode && ` · max kept ${persistedMax}`}
                 </p>
+                )}
               </button>
             )}
           </div>
 
+          {compact ? (
+            <div ref={menuRef} className="relative -mr-2 -mt-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMenuOpen((v) => !v)}
+                aria-label="Vault actions"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-700 hover:text-slate-200"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
+              </button>
+              {menuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-30 mt-1 min-w-[200px] overflow-hidden rounded-xl border border-slate-700 bg-surface-1 py-1 shadow-xl"
+                >
+                  {menuItems.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => { setMenuOpen(false); item.run(); }}
+                      className={`flex h-11 w-full items-center px-4 text-left text-sm transition hover:bg-white/5 ${item.danger ? 'text-red-400' : 'text-slate-200'}`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
           <div className="flex shrink-0 gap-1">
             <button
               onClick={() => onStartRename(map)}
@@ -214,8 +277,44 @@ export const VaultCard = memo(function VaultCard({
               </svg>
             </button>
           </div>
+          )}
         </div>
 
+        {compact ? (
+          previewState?.summary ? (
+            <button
+              type="button"
+              onClick={() => onNavigate(vaultPath)}
+              className="relative block w-full overflow-hidden rounded-lg border focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              style={previewPanelStyle}
+              title={`Open ${map.title ?? 'vault'}`}
+            >
+              <div className={blurPreview ? 'select-none blur-sm opacity-60' : ''}>
+                <img
+                  src={previewState.summary.image_data_url}
+                  alt={`Preview of ${map.title ?? 'vault'}`}
+                  className="h-32 w-full object-contain"
+                  loading="lazy"
+                />
+              </div>
+              {blurPreview && (
+                <div className="absolute inset-0 flex items-center justify-center" style={previewOverlayStyle}>
+                  <span className="rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em]" style={previewOverlayBadgeStyle}>
+                    Blurred for shared vaults
+                  </span>
+                </div>
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onNavigate(vaultPath)}
+              className="flex h-20 w-full items-center justify-center rounded-lg border border-dashed border-slate-700 px-4 text-center text-xs text-slate-500"
+            >
+              {previewState?.error ? 'Preview unavailable for this vault yet.' : 'Open and save this vault to create its preview.'}
+            </button>
+          )
+        ) : (
         <div className="rounded-xl border p-3" style={previewPanelStyle}>
           <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
             <span>Vault preview</span>
@@ -272,7 +371,27 @@ export const VaultCard = memo(function VaultCard({
             </button>
           )}
         </div>
+        )}
 
+        {compact && (
+          <button
+            type="button"
+            onClick={() => setDetailsOpen((v) => !v)}
+            aria-expanded={detailsOpen}
+            className="-mb-1 flex h-11 w-full items-center justify-between gap-2 border-t border-slate-700 text-left text-sm text-slate-400"
+          >
+            <span>
+              Details · colour, note, labels{isLocalMode ? '' : ', versions'}
+              {dirty && !detailsOpen && <span className="ml-2 text-xs text-amber-300">Unsaved</span>}
+            </span>
+            <svg className={`h-4 w-4 shrink-0 transition-transform ${detailsOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        )}
+        {(!compact || detailsOpen) && (
+        <div className="space-y-4">
+        {compact && usage && <p className="text-xs text-slate-500">{storageLine}</p>}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-xs text-slate-400">
             Card color
@@ -345,24 +464,39 @@ export const VaultCard = memo(function VaultCard({
             />
           </div>
         </label>
+        </div>
+        )}
 
+        {(!compact || dirty) && (
         <div className="flex flex-wrap items-center justify-end gap-2">
           {dirty && <span className="text-xs text-amber-300">Unsaved settings</span>}
+          {dirty && compact && (
+            <button
+              type="button"
+              onClick={() => { void onSaveMeta(map); }}
+              disabled={map.metaSaving}
+              className="h-10 rounded-lg bg-accent px-4 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-50"
+            >
+              {map.metaSaving ? 'Saving…' : 'Save'}
+            </button>
+          )}
         </div>
+        )}
       </div>
     </article>
   );
 }, (prev, next) => {
-  return sameRenameContext(prev, next)
-    && prev.map === next.map
+  return prev.map === next.map
     && prev.usage === next.usage
     && prev.isLocalMode === next.isLocalMode
+    && sameRenameContext(prev, next)
     && prev.activeShareCount === next.activeShareCount
     && prev.previewState === next.previewState
     && prev.userLabels === next.userLabels
     && prev.previewPanelStyle === next.previewPanelStyle
     && prev.previewOverlayStyle === next.previewOverlayStyle
-    && prev.previewOverlayBadgeStyle === next.previewOverlayBadgeStyle;
+    && prev.previewOverlayBadgeStyle === next.previewOverlayBadgeStyle
+    && prev.compact === next.compact;
 });
 
 // ─── Table row (compact view) ────────────────────────────────────────────────

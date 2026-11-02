@@ -19,6 +19,7 @@ import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
 import { useThemeStore } from '../store/theme';
 import { useUserLabels } from '../hooks/useUserLabels';
+import { useIsPhone } from '../hooks/useIsPhone';
 import type {
   MapShareOwnerSummary,
   MindMapTree,
@@ -167,9 +168,13 @@ export function VaultsPage() {
   const [shareFilter, setShareFilter] = useState<'none' | 'outgoing' | 'imported'>('none');
   const [previewStates, setPreviewStates] = useState<Record<string, VaultPreviewState>>({});
   const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>(
+  const [preferredViewMode, setViewMode] = useState<'grid' | 'table'>(
     () => (localStorage.getItem('mmv-lobby-view') === 'table' ? 'table' : 'grid'),
   );
+  // A phone always gets the compact cards: the table has no room there. The
+  // saved choice is kept for when the same account is used on a wider screen.
+  const isPhone = useIsPhone();
+  const viewMode = isPhone ? 'grid' : preferredViewMode;
 
   const previewPanelStyle = useMemo(() => (
     themeMode === 'light'
@@ -1230,7 +1235,7 @@ export function VaultsPage() {
                   </button>
                 )}
               </div>
-              <div className="flex overflow-hidden rounded-lg border border-slate-700">
+              {!isPhone && (<div className="flex overflow-hidden rounded-lg border border-slate-700">
                 <button
                   type="button"
                   onClick={() => { setViewMode('grid'); localStorage.setItem('mmv-lobby-view', 'grid'); }}
@@ -1251,7 +1256,7 @@ export function VaultsPage() {
                     <line x1="3" y1="6" x2="21" y2="6" strokeLinecap="round"/><line x1="3" y1="12" x2="21" y2="12" strokeLinecap="round"/><line x1="3" y1="18" x2="21" y2="18" strokeLinecap="round"/>
                   </svg>
                 </button>
-              </div>
+              </div>)}
             </div>
           )}
 
@@ -1356,6 +1361,7 @@ export function VaultsPage() {
                   onUpdateUserLabelColor={updateUserLabelColor}
                   onAddUserLabel={addUserLabel}
                   onSaveMeta={handleSaveMeta}
+                  compact={isPhone}
                 />
               ))}
             </div>
