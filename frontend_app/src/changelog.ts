@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.3';
+export const APP_VERSION = '0.6.4';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,33 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.4',
+    date: '2026-11-02',
+    highlights: 'Zooming and moving the map on a phone feel natural, nodes can be moved by touch, and editing a node puts the cursor after its text.',
+    items: [
+      {
+        kind: 'feature',
+        title: 'Move nodes on a touch screen',
+        desc: "Now that one finger moves the map, nodes have their own gesture. Hold a node still for a moment until it lifts, then drag it. Drop it on another node to make it a child of that node, or anywhere else to place it there.",
+      },
+      {
+        kind: 'fix',
+        title: 'Zoom stays centred',
+        desc: 'Pinching on a phone or tablet used to zoom towards the left edge of the map, so what you were looking at slid away. The map now zooms around the point between your fingers and follows them as they move. The zoom buttons and the + and − keys zoom around the middle of the screen, and Ctrl or ⌘ with the scroll wheel zooms around the pointer.',
+      },
+      {
+        kind: 'improvement',
+        title: 'Drag the map from anywhere',
+        desc: 'On a phone or tablet, moving the map only worked if your finger started on empty canvas, which a full map may not have. A one-finger drag now moves the map wherever it starts, nodes included; tapping a node still selects it. After a pinch, the finger left on the screen keeps moving the map.',
+      },
+      {
+        kind: 'improvement',
+        title: 'Editing a node continues from the end of its text',
+        desc: 'Opening a node for editing put the cursor before its text. It now goes after the last word, ready to keep writing.',
+      },
+    ],
+  },
   {
     version: '0.6.3',
     date: '2026-10-07',

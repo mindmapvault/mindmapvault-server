@@ -74,3 +74,27 @@ export const toCanvasPoint = (
 /** The distance between two touches, for pinch zoom. */
 export const touchDistance = (a: Point, b: Point): number =>
   Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+
+/** The point halfway between two touches — what a pinch zooms around. */
+export const touchMidpoint = (a: Point, b: Point): Point => ({
+  x: (a.x + b.x) / 2,
+  y: (a.y + b.y) / 2,
+});
+
+/**
+ * Change the zoom while keeping one point on screen where it is.
+ *
+ * `anchor` is in canvas-element coordinates (relative to its top-left). Without
+ * this the map scales around that top-left corner, so on a phone everything
+ * slides off to the side as you zoom.
+ */
+export const zoomAround = (view: ViewState, nextZoom: number, anchor: Point): ViewState => {
+  const ratio = nextZoom / view.zoom;
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: anchor.x - (anchor.x - view.pan.x) * ratio,
+      y: anchor.y - (anchor.y - view.pan.y) * ratio,
+    },
+  };
+};

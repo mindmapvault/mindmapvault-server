@@ -1609,6 +1609,16 @@
   filter: drop-shadow(0 0 8px #22c55e88) !important;
 }
 
+/* A node held on a touch screen, picked up and ready to drag. */
+.mm-node-group.mm-lifted {
+  opacity: 0.9;
+  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.45));
+}
+.mm-node-group.mm-lifted rect {
+  stroke: var(--accent) !important;
+  stroke-width: 2.5 !important;
+}
+
 /* ── Canvas ──────────────────────────────────────────────────────────────── */
 /* ── Canvas area + docked trays (see docs/UI_REWORK_PLAN.md §2.2) ─────────── */
 .mm-canvas-area {
@@ -1737,6 +1747,10 @@
   background: var(--mm-canvas-bg);
   cursor: grab;
   display: block;
+  /* Take over all touch gestures (pan/pinch are handled in JS) so the browser
+     doesn't fight us with native scroll, double-tap-zoom or pull-to-refresh. */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .mm-canvas:active { cursor: grabbing; }
 

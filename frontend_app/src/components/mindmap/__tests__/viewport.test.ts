@@ -10,6 +10,8 @@ import {
   readViewState,
   toCanvasPoint,
   touchDistance,
+  touchMidpoint,
+  zoomAround,
 } from '../viewport';
 
 describe('readViewState', () => {
@@ -75,5 +77,27 @@ describe('toCanvasPoint', () => {
 describe('touchDistance', () => {
   it('measures the gap between two fingers', () => {
     expect(touchDistance({ x: 0, y: 0 }, { x: 3, y: 4 })).toBe(5);
+  });
+});
+
+describe('touchMidpoint', () => {
+  it('is halfway between two fingers', () => {
+    expect(touchMidpoint({ x: 10, y: 20 }, { x: 30, y: 60 })).toEqual({ x: 20, y: 40 });
+  });
+});
+
+describe('zoomAround', () => {
+  it('keeps the anchor point still on screen', () => {
+    const before = { pan: { x: 40, y: -20 }, zoom: 1.5 };
+    const anchor = { x: 200, y: 300 };
+    const under = toCanvasPoint(anchor.x, anchor.y, { left: 0, top: 0 }, before);
+    const after = zoomAround(before, 3, anchor);
+    expect(after.zoom).toBe(3);
+    expect(toCanvasPoint(anchor.x, anchor.y, { left: 0, top: 0 }, after)).toEqual(under);
+  });
+
+  it('leaves the pan alone when the zoom does not change', () => {
+    const view = { pan: { x: 10, y: 20 }, zoom: 2 };
+    expect(zoomAround(view, 2, { x: 500, y: 500 })).toEqual(view);
   });
 });

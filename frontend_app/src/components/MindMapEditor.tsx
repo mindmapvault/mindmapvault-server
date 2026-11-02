@@ -102,6 +102,10 @@ interface DragState {
 
 /** At this many pictures at Medium or Large, the map says it may get slow. */
 const LARGE_IMAGE_WARNING = 50;
+/** How long a finger rests on a node before it lifts for dragging. */
+const TOUCH_HOLD_MS = 450;
+/** How far a finger may wobble during that hold, in screen pixels. */
+const TOUCH_HOLD_SLOP = 10;
 
 /**
  * Which larger copy a picture drawn at `shown` uses: its original scaled for
@@ -540,6 +544,13 @@ export function DesktopMindMapEditor({
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const svgRef = useRef<SVGSVGElement>(null);
+
+  /** Zoom by a step around the middle of the canvas — the buttons and the +/- keys. */
+  const zoomViewBy = viewport.zoomBy;
+  const zoomCenter = useCallback((delta: number) => {
+    const r = svgRef.current?.getBoundingClientRect();
+    zoomViewBy(delta, r ? { x: r.width / 2, y: r.height / 2 } : { x: 0, y: 0 });
+  }, [zoomViewBy]);
   const containerRef = useRef<HTMLDivElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const notesRef = useRef<NoteEditorHandle>(null);
@@ -1098,10 +1109,18 @@ export function DesktopMindMapEditor({
   //  EDITING
   // ══════════════════════════════════════════════════════════════════════════
 
+  /** Focus the edit field with the cursor after the text, so typing carries on from the end. */
+  const focusAtEnd = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  };
+
   const startEditing = (node: MindMapTreeNode) => {
     setEditingId(node.id);
     setEditText(node.text);
-    setTimeout(() => editRef.current?.focus(), 20);
+    setTimeout(() => focusAtEnd(editRef.current), 20);
   };
 
   const commitEdit = useCallback(() => {
@@ -1514,8 +1533,8 @@ export function DesktopMindMapEditor({
       'node.linkVault': () => openVaultLinkPicker(selectedId),
       'view.root': () => setSelectedId('root'),
       'view.focusMode': () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); },
-      'view.zoomIn': () => viewport.zoomBy(0.15),
-      'view.zoomOut': () => viewport.zoomBy(-0.15),
+      'view.zoomIn': () => zoomCenter(0.15),
+      'view.zoomOut': () => zoomCenter(-0.15),
       'view.zoomFit': () => { fitView(); },
       'view.colourTray': () => setColourTray(!colourTrayEnabled),
       'view.iconTray': () => setIconTray(!iconTrayEnabled),
@@ -1641,7 +1660,12 @@ export function DesktopMindMapEditor({
   // ══════════════════════════════════════════════════════════════════════════
 
   const onWheelNative = useCallback((e: WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) { e.preventDefault(); viewport.zoomBy(-e.deltaY * 0.001); }
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      // Zoom around the cursor, as every map and image viewer does.
+      const r = (e.currentTarget as Element).getBoundingClientRect();
+      viewport.zoomBy(-e.deltaY * 0.001, { x: e.clientX - r.left, y: e.clientY - r.top });
+    }
     else viewport.nudgePan(-e.deltaX, -e.deltaY);
   }, []);
 
@@ -1670,6 +1694,38 @@ export function DesktopMindMapEditor({
     setMultiSelect(new Set());
   }, [pan, zoom]);
 
+  /** Move a node drag in progress — mouse or touch. False when there is none. */
+  const continueNodeDrag = useCallback((clientX: number, clientY: number): boolean => {
+    if (!dragRef.current) return false;
+    const d = dragRef.current;
+    const { x: dx, y: dy } = dragDelta(
+      { x: d.startClientX, y: d.startClientY },
+      { x: clientX, y: clientY },
+      zoom,
+    );
+    if (!d.moved && passedDragThreshold({ x: dx, y: dy })) { d.moved = true; setIsDragging(true); }
+    if (d.moved) {
+      d.currentX = d.origX + dx;
+      d.currentY = d.origY + dy;
+      // Move the dragged node visually
+      const el = svgRef.current?.querySelector(`[data-node="${d.nodeId}"]`) as SVGGElement | null;
+      if (el) el.style.transform = `translate(${dx}px, ${dy}px)`;
+      // Also move other multi-selected nodes
+      if (multiSelect.size > 0) {
+        for (const id of multiSelect) {
+          if (id === d.nodeId) continue;
+          const mel = svgRef.current?.querySelector(`[data-node="${id}"]`) as SVGGElement | null;
+          if (mel) mel.style.transform = `translate(${dx}px, ${dy}px)`;
+        }
+      }
+      // Drop target detection (only when dragging a single node)
+      if (multiSelect.size <= 1) {
+        setDropTargetId(findDropTarget(layout, d.nodeId, { x: d.currentX, y: d.currentY }));
+      }
+    }
+    return true;
+  }, [zoom, layout, multiSelect]);
+
   const onMouseMoveSvg = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     // Rectangle selection drag
     if (rectSel) {
@@ -1680,66 +1736,23 @@ export function DesktopMindMapEditor({
       }
       return;
     }
-    if (dragRef.current) {
-      const d = dragRef.current;
-      const { x: dx, y: dy } = dragDelta(
-        { x: d.startClientX, y: d.startClientY },
-        { x: e.clientX, y: e.clientY },
-        zoom,
-      );
-      if (!d.moved && passedDragThreshold({ x: dx, y: dy })) { d.moved = true; setIsDragging(true); }
-      if (d.moved) {
-        d.currentX = d.origX + dx;
-        d.currentY = d.origY + dy;
-        // Move the dragged node visually
-        const el = svgRef.current?.querySelector(`[data-node="${d.nodeId}"]`) as SVGGElement | null;
-        if (el) el.style.transform = `translate(${dx}px, ${dy}px)`;
-        // Also move other multi-selected nodes
-        if (multiSelect.size > 0) {
-          for (const id of multiSelect) {
-            if (id === d.nodeId) continue;
-            const mel = svgRef.current?.querySelector(`[data-node="${id}"]`) as SVGGElement | null;
-            if (mel) mel.style.transform = `translate(${dx}px, ${dy}px)`;
-          }
-        }
-        // Drop target detection (only when dragging a single node)
-        if (multiSelect.size <= 1) {
-          setDropTargetId(findDropTarget(layout, d.nodeId, { x: d.currentX, y: d.currentY }));
-        }
-      }
-      return;
-    }
+    if (continueNodeDrag(e.clientX, e.clientY)) return;
     viewport.continuePan(e.clientX, e.clientY);
-  }, [zoom, layout, rectSel, viewport, multiSelect]);
+  }, [rectSel, viewport, continueNodeDrag]);
 
-  /** The browser's TouchList, as the two points a pinch is measured between. */
-  const touchPair = (touches: React.TouchList) => ({
-    a: { x: touches[0].clientX, y: touches[0].clientY },
-    b: { x: touches[1].clientX, y: touches[1].clientY },
-  });
-
-  const onTouchStartSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
-    if (e.touches.length === 2) {
-      viewport.beginPinch(touchPair(e.touches));
-      return;
-    }
-    if (e.touches.length !== 1) return;
-    if ((e.target as SVGElement).closest('[data-node]')) return;
-    viewport.beginPan(e.touches[0].clientX, e.touches[0].clientY);
-    setContextMenu(null);
-    setMultiSelect(new Set());
-  }, [viewport]);
-
-  const onTouchMoveSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
-    if (e.touches.length === 2 && viewport.continuePinch(touchPair(e.touches))) return;
-    if (e.touches.length !== 1) return;
-    viewport.continuePan(e.touches[0].clientX, e.touches[0].clientY);
-  }, [viewport]);
-
-  const onTouchEndSvg = useCallback(() => {
-    viewport.endGesture();
-    if (svgRef.current) svgRef.current.style.cursor = '';
-  }, [viewport]);
+  /**
+   * The browser's TouchList, as the two points a pinch is measured between,
+   * relative to the canvas so the pinch can zoom around the point between them.
+   */
+  const touchPair = (touches: React.TouchList) => {
+    const r = svgRef.current?.getBoundingClientRect();
+    const left = r?.left ?? 0;
+    const top = r?.top ?? 0;
+    return {
+      a: { x: touches[0].clientX - left, y: touches[0].clientY - top },
+      b: { x: touches[1].clientX - left, y: touches[1].clientY - top },
+    };
+  };
 
   const getNodeIdAtClientPoint = useCallback((clientX: number, clientY: number): string | null => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -2046,20 +2059,18 @@ export function DesktopMindMapEditor({
     await attachFilesToSelectedNode([file]);
   }, [attachFilesToSelectedNode, recordingBlob, recordingName]);
 
-  const onMouseUpSvg = useCallback(() => {
-    // Finish rectangle selection
-    if (rectSel) {
-      const ids = nodesInMarquee(layout, rectSel);
-      setMultiSelect(ids);
-      if (ids.size > 0) {
-        const first = [...ids][0];
-        setSelectedId(first);
-      }
-      setRectSel(null);
-      return;
+  /** Undo the on-screen offset a drag gave the dragged node and the rest of the selection. */
+  const clearDragTransforms = useCallback((nodeId: string) => {
+    const el = svgRef.current?.querySelector(`[data-node="${nodeId}"]`) as SVGGElement | null;
+    if (el) el.style.transform = '';
+    for (const id of multiSelect) {
+      const mel = svgRef.current?.querySelector(`[data-node="${id}"]`) as SVGGElement | null;
+      if (mel) mel.style.transform = '';
     }
-    viewport.endPan();
-    if (svgRef.current) svgRef.current.style.cursor = '';
+  }, [multiSelect]);
+
+  /** End a node drag — mouse or touch: drop onto another node, or leave it where it is. */
+  const finishNodeDrag = useCallback(() => {
     if (dragRef.current && dragRef.current.moved) {
       const d = dragRef.current;
       const dx = (d.currentX - d.origX);
@@ -2093,7 +2104,151 @@ export function DesktopMindMapEditor({
     dragRef.current = null;
     setIsDragging(false);
     setDropTargetId(null);
-  }, [rectSel, layout, dropTargetId, reparentNode, root, mutate, multiSelect]);
+  }, [layout, dropTargetId, reparentNode, root, mutate, multiSelect]);
+
+  const onMouseUpSvg = useCallback(() => {
+    // Finish rectangle selection
+    if (rectSel) {
+      const ids = nodesInMarquee(layout, rectSel);
+      setMultiSelect(ids);
+      if (ids.size > 0) {
+        const first = [...ids][0];
+        setSelectedId(first);
+      }
+      setRectSel(null);
+      return;
+    }
+    viewport.endPan();
+    if (svgRef.current) svgRef.current.style.cursor = '';
+    finishNodeDrag();
+  }, [rectSel, layout, viewport, finishNodeDrag]);
+
+  // ── Touch ──────────────────────────────────────────────────────────────────
+  // One finger drags the map from anywhere, nodes included. To move a node,
+  // hold it still until it lifts, then drag; dropping it on another node makes
+  // it that node's child, as with the mouse.
+
+  /** A finger resting on a node, waiting to see whether it is a hold. */
+  const holdRef = useRef<{
+    timer: ReturnType<typeof setTimeout>;
+    /** Where the finger came down, for telling a hold from a pan. */
+    startX: number; startY: number;
+    /** Where it is now, so a lifted node starts from under the finger. */
+    x: number; y: number;
+  } | null>(null);
+  /** The node lifted by a hold, drawn raised while it is dragged. */
+  const [liftedId, setLiftedId] = useState<string | null>(null);
+  /** The same, read by the touch handlers without waiting for a render. */
+  const liftedRef = useRef(false);
+
+  const cancelHold = useCallback(() => {
+    if (!holdRef.current) return;
+    clearTimeout(holdRef.current.timer);
+    holdRef.current = null;
+  }, []);
+
+  /** Drop a lifted node back where it was, without moving or reparenting it. */
+  const cancelTouchDrag = useCallback(() => {
+    cancelHold();
+    const d = dragRef.current;
+    if (!d) return;
+    clearDragTransforms(d.nodeId);
+    dragRef.current = null;
+    setIsDragging(false);
+    setDropTargetId(null);
+    liftedRef.current = false;
+    setLiftedId(null);
+  }, [cancelHold, clearDragTransforms]);
+
+  const onTouchStartSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    if (e.touches.length === 2) {
+      cancelTouchDrag();
+      viewport.beginPinch(touchPair(e.touches));
+      return;
+    }
+    if (e.touches.length !== 1) return;
+    const target = e.target as Element;
+    // Typing in a node's edit field needs its own touches to place the cursor.
+    if (target.closest('foreignObject, textarea, input')) return;
+    const { clientX: x, clientY: y } = e.touches[0];
+    viewport.beginPan(x, y);
+    const nodeId = target.closest('[data-node]')?.getAttribute('data-node');
+    if (!nodeId) {
+      setContextMenu(null);
+      setMultiSelect(new Set());
+      return;
+    }
+    cancelHold();
+    const hold = {
+      startX: x,
+      startY: y,
+      x,
+      y,
+      timer: setTimeout(() => {
+        holdRef.current = null;
+        const box = layout[nodeId];
+        if (!box) return;
+        viewport.endPan();
+        // Measured from where the finger is now, so the node does not jump.
+        dragRef.current = {
+          nodeId, startClientX: hold.x, startClientY: hold.y,
+          origX: box.x, origY: box.y, currentX: box.x, currentY: box.y, moved: false,
+        };
+        setSelectedId(nodeId);
+        liftedRef.current = true;
+        setLiftedId(nodeId);
+        navigator.vibrate?.(15);
+      }, TOUCH_HOLD_MS),
+    };
+    holdRef.current = hold;
+  }, [viewport, layout, cancelHold, cancelTouchDrag]);
+
+  const onTouchMoveSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    if (e.touches.length === 2 && viewport.continuePinch(touchPair(e.touches))) return;
+    if (e.touches.length !== 1) return;
+    const { clientX: x, clientY: y } = e.touches[0];
+    if (continueNodeDrag(x, y)) return;
+    const hold = holdRef.current;
+    if (hold) {
+      // Keep the map still while a hold might be starting; moving further
+      // than a wobble makes it a pan, and the map catches up with the finger.
+      if (Math.hypot(x - hold.startX, y - hold.startY) < TOUCH_HOLD_SLOP) {
+        hold.x = x;
+        hold.y = y;
+        return;
+      }
+      cancelHold();
+    }
+    viewport.continuePan(x, y);
+  }, [viewport, continueNodeDrag, cancelHold]);
+
+  const onTouchEndSvg = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    cancelHold();
+    const d = dragRef.current;
+    if (d && liftedRef.current) {
+      // No click or double-tap from the finger that lifted the node.
+      e.preventDefault();
+      if (!d.moved) onHoldRelease(d.nodeId);
+      finishNodeDrag();
+      liftedRef.current = false;
+      setLiftedId(null);
+      viewport.endGesture();
+      return;
+    }
+    viewport.endGesture();
+    // Lifting one finger of a pinch carries on as a pan with the other, rather
+    // than leaving the map stuck until both are lifted.
+    if (e.touches.length === 1) viewport.beginPan(e.touches[0].clientX, e.touches[0].clientY);
+    if (svgRef.current) svgRef.current.style.cursor = '';
+  }, [viewport, cancelHold, finishNodeDrag, isMobile]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** A hold released without dragging leaves the node selected and nothing else. */
+  const onHoldRelease = (_nodeId: string) => {};
+
+  const onTouchCancelSvg = useCallback(() => {
+    cancelTouchDrag();
+    viewport.endGesture();
+  }, [viewport, cancelTouchDrag]);
 
   // ── Fit view ──────────────────────────────────────────────────────────────
   const fitView = useCallback(() => {
@@ -2231,7 +2386,7 @@ export function DesktopMindMapEditor({
 
     const elems: JSX.Element[] = [
       <g key={node.id} data-node={node.id}
-        className={`mm-node-group${isSelected ? ' mm-selected' : ''}${isMulti ? ' mm-multi-selected' : ''}${isDrop ? ' mm-drop-target' : ''}${isFaded ? ' mm-faded' : ''}`}
+        className={`mm-node-group${isSelected ? ' mm-selected' : ''}${isMulti ? ' mm-multi-selected' : ''}${isDrop ? ' mm-drop-target' : ''}${node.id === liftedId ? ' mm-lifted' : ''}${isFaded ? ' mm-faded' : ''}`}
         style={{ cursor: isDragging ? 'grabbing' : 'pointer' }}
         onClick={(e) => {
           e.stopPropagation();
@@ -2310,7 +2465,7 @@ export function DesktopMindMapEditor({
       }
     }
     return elems;
-    }, [layout, selectedId, multiSelect, editingId, editText, dropTargetId, isDragging, searchResults, displayImageUrls,
+    }, [layout, selectedId, multiSelect, editingId, editText, dropTargetId, isDragging, liftedId, searchResults, displayImageUrls,
       cancelHoverPopupClose, scheduleHoverPopupClose, commitEdit, cancelEdit, openNodeImage, toggleCollapse, bodyActions, userLabels,
       focusMode, focusedIds, rootLeftCollapsed, rootRightCollapsed]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2634,8 +2789,8 @@ export function DesktopMindMapEditor({
             <div className="mm-toolbar-group" data-ribbon-tab="view">
               <span className="mm-toolbar-group-label">Zoom</span>
               <div className="mm-toolbar-group-btns">
-          <button className="mm-btn" onClick={() => viewport.zoomBy(0.15)} data-label="Zoom in" data-shortcut={formatButtonShortcut('view.zoomIn', keyboardLayout)} title="Zoom in (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 8v6m-3-3h6"/></svg></button>
-          <button className="mm-btn" onClick={() => viewport.zoomBy(-0.15)} data-label="Zoom out" data-shortcut={formatButtonShortcut('view.zoomOut', keyboardLayout)} title="Zoom out (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M8 11h6"/></svg></button>
+          <button className="mm-btn" onClick={() => zoomCenter(0.15)} data-label="Zoom in" data-shortcut={formatButtonShortcut('view.zoomIn', keyboardLayout)} title="Zoom in (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 8v6m-3-3h6"/></svg></button>
+          <button className="mm-btn" onClick={() => zoomCenter(-0.15)} data-label="Zoom out" data-shortcut={formatButtonShortcut('view.zoomOut', keyboardLayout)} title="Zoom out (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M8 11h6"/></svg></button>
           <button className="mm-btn" onClick={fitView} data-label="Fit" data-shortcut={formatButtonShortcut('view.zoomFit', keyboardLayout)} title="Fit view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg></button>
               </div>
             </div>
@@ -2745,8 +2900,8 @@ export function DesktopMindMapEditor({
                     ['node.icons', 'Icons', () => setShowIconPicker((v) => !v)],
                     ['node.dates', 'Dates', () => setShowDateDialog(true)],
                     ['node.labels', 'Tags', () => setShowTagDialog((v) => !v)],
-                    ['view.zoomIn', 'Zoom in', () => viewport.zoomBy(0.15)],
-                    ['view.zoomOut', 'Zoom out', () => viewport.zoomBy(-0.15)],
+                    ['view.zoomIn', 'Zoom in', () => zoomCenter(0.15)],
+                    ['view.zoomOut', 'Zoom out', () => zoomCenter(-0.15)],
                     ['view.zoomFit', 'Fit view', fitView],
                     ['node.autoAlign', 'Auto-align', () => autoAlignSubtree(selectedId)],
                     ['view.focusMode', 'Focus mode', () => { setFocusMode((v) => { if (!v) setFocusAnchorId(selectedId); return !v; }); }],
@@ -2815,7 +2970,7 @@ export function DesktopMindMapEditor({
         {trayFor('left')}
       <div className="mm-canvas-wrap">
         <svg ref={svgRef} className="mm-canvas" onMouseDown={onMouseDownSvg} onMouseMove={onMouseMoveSvg} onMouseUp={onMouseUpSvg} onMouseLeave={onMouseUpSvg}
-          onTouchStart={onTouchStartSvg} onTouchMove={onTouchMoveSvg} onTouchEnd={onTouchEndSvg} onTouchCancel={onTouchEndSvg}
+          onTouchStart={onTouchStartSvg} onTouchMove={onTouchMoveSvg} onTouchEnd={onTouchEndSvg} onTouchCancel={onTouchCancelSvg}
           onDragOver={onDragOverSvg} onDragLeave={onDragLeaveSvg} onDrop={(e) => { void onDropSvg(e); }}
           onClick={() => { setShowColorPicker(false); setContextMenu(null); if (!shortcutsPinned) setShowShortcuts(false); }}>
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
