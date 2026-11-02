@@ -53,6 +53,11 @@ export const CHANGELOG: ChangelogEntry[] = [
       },
       {
         kind: 'fix',
+        title: 'Moving a node no longer selects text',
+        desc: 'On iPhone and iPad, holding a node to move it also started the system text selection, which spread blue highlighting across the map while dragging.',
+      },
+      {
+        kind: 'fix',
         title: 'Zoom stays centred',
         desc: 'Pinching on a phone or tablet used to zoom towards the left edge of the map, so what you were looking at slid away. The map now zooms around the point between your fingers and follows them as they move. The zoom buttons and the + and − keys zoom around the middle of the screen, and Ctrl or ⌘ with the scroll wheel zooms around the pointer.',
       },

@@ -1751,8 +1751,20 @@
      doesn't fight us with native scroll, double-tap-zoom or pull-to-refresh. */
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
+  /* A long press lifts a node for dragging. Without these, iOS also starts a
+     text selection there and the drag paints half the screen blue. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 .mm-canvas:active { cursor: grabbing; }
+/* The node being edited still needs its text selectable. */
+.mm-canvas textarea,
+.mm-canvas input {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
 
 /* SVG dots grid */
 .mm-canvas {

@@ -19,6 +19,7 @@ touch, and editing a node puts the cursor after its text.
 - **Editing a node continues from the end of its text.** Opening a node for editing put the cursor before its text. It now goes after the last word, ready to keep writing.
 
 ### Fixed
+- **Moving a node no longer selects text.** On iPhone and iPad, holding a node to move it also started the system text selection, which spread blue highlighting across the map while dragging.
 - **Zoom stays centred.** Pinching on a phone or tablet used to zoom towards the left edge of the map, so what you were looking at slid away. The map now zooms around the point between your fingers and follows them as they move. The zoom buttons and the + and − keys zoom around the middle of the screen, and Ctrl or ⌘ with the scroll wheel zooms around the pointer.
   On iPhone and iPad the browser also zoomed the whole page at the same time; the map canvas now handles every touch gesture itself.
 
