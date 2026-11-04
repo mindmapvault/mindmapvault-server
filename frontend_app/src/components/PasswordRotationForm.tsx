@@ -194,7 +194,7 @@ export function PasswordRotationForm() {
       {done && (
         <p
           className="mt-3 rounded-lg px-3 py-2 text-sm"
-          style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#34d399' }}
+          style={{ background: 'rgba(16, 185, 129, 0.12)', color: 'var(--tone-success)' }}
           data-testid="rotation-done"
         >
           Password changed. This session carries on; other devices were signed out.
@@ -239,7 +239,7 @@ export function PasswordRotationForm() {
       {error && (
         <p
           className="mt-3 rounded-lg px-3 py-2 text-xs"
-          style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#fca5a5' }}
+          style={{ background: 'rgba(239, 68, 68, 0.12)', color: 'var(--tone-danger)' }}
           data-testid="rotation-error"
         >
           {error}

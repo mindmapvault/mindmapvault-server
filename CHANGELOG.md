@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-04
+
+Light mode is easier to read.
+
+### Fixed
+- **Messages and captions in light mode.** Success, warning and error messages kept their dark-mode colours, pale text on a white card. Each now has a light-mode shade. Dates, descriptions and other secondary text are darker as well.
+- **Switches and ticked tasks in light mode.** The "Always on" switch on the shortcuts card was invisible when off, and a ticked box in a note looked empty, both while reading and while writing. Buttons on the accent colour show white text again, and the keys on the shortcuts card are lined up as a table.
+
 ## [0.6.5] - 2026-11-02
 
 Security updates for the server and the app. Nothing changes in how they work.

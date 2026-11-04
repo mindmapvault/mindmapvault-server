@@ -24,9 +24,9 @@ import { isTauri } from '../storage';
 export type SettingsTab = 'account' | 'appearance' | 'interface' | 'changelog' | 'help';
 
 const changeKindStyle: Record<ChangeKind, { label: string; color: string; bg: string }> = {
-  feature: { label: 'New', color: '#a78bfa', bg: 'rgba(124,58,237,0.14)' },
-  improvement: { label: 'Improved', color: '#38bdf8', bg: 'rgba(56,189,248,0.14)' },
-  fix: { label: 'Fixed', color: '#34d399', bg: 'rgba(16,185,129,0.14)' },
+  feature: { label: 'New', color: 'var(--tone-feature)', bg: 'rgba(124,58,237,0.14)' },
+  improvement: { label: 'Improved', color: 'var(--tone-info)', bg: 'rgba(56,189,248,0.14)' },
+  fix: { label: 'Fixed', color: 'var(--tone-success)', bg: 'rgba(16,185,129,0.14)' },
 };
 
 const PRESETS = [
@@ -765,7 +765,7 @@ function ProfileSection() {
       {error && (
         <p
           className="mb-3 rounded-lg px-3 py-2 text-xs"
-          style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#fca5a5' }}
+          style={{ background: 'rgba(239, 68, 68, 0.12)', color: 'var(--tone-danger)' }}
         >
           {error}
         </p>
@@ -802,11 +802,11 @@ function ProfileSection() {
       </div>
 
       {!emailValid && (
-        <p className="mt-2 text-xs" style={{ color: '#fca5a5' }}>
+        <p className="mt-2 text-xs" style={{ color: 'var(--tone-danger)' }}>
           Enter a valid email address or leave it empty.
         </p>
       )}
-      {saved && <p className="mt-2 text-xs" style={{ color: '#34d399' }}>Profile saved.</p>}
+      {saved && <p className="mt-2 text-xs" style={{ color: 'var(--tone-success)' }}>Profile saved.</p>}
       <p className="mt-2 text-xs leading-5" style={{ color: 'var(--text-muted)' }}>
         Optional, and how whoever administers this server can recognise your account. Unlike
         your vaults, these fields are stored unencrypted and are visible in the admin console.

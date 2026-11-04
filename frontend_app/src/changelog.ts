@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.5';
+export const APP_VERSION = '0.6.6';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,23 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.6',
+    date: '2026-11-04',
+    highlights: 'Light mode is easier to read.',
+    items: [
+      {
+        kind: 'fix',
+        title: 'Readable messages and captions in light mode',
+        desc: 'Success, warning and error messages kept their dark-mode colours and were hard to read on white. Dates, descriptions and other secondary text are darker too.',
+      },
+      {
+        kind: 'fix',
+        title: 'Switches and ticked tasks in light mode',
+        desc: 'The "Always on" switch on the shortcuts card disappeared when off, and a ticked box in a note looked empty. Buttons on the accent colour have white text again.',
+      },
+    ],
+  },
   {
     version: '0.6.5',
     date: '2026-11-02',
