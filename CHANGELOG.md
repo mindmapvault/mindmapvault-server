@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+- **Note popup in light mode.** Hovering a vault in the list view showed its note in a dark box with dim text. It is light now, like the rest of the page, as are the panels on the shared-vault page and in the encryption and subscription dialogs.
+
 ## [0.6.6] - 2026-11-04
 
 Light mode is easier to read.
