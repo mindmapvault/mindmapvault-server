@@ -34,8 +34,13 @@ section="$(awk -v v="$version" '
   found { print }
 ' "$repo_root/CHANGELOG.md")"
 
-# Title from the first plain line of the section, in the releases' Title Case.
-summary="$(printf '%s\n' "$section" | awk 'NF && !/^[#-]/ { print; exit }' | sed 's/[.]$//')"
+# Title from the first sentence of the section's opening paragraph (which may
+# wrap over several lines), in the releases' Title Case.
+summary="$(printf '%s\n' "$section" | awk '
+  !started && NF && !/^[#-]/ { started = 1 }
+  started && !NF { exit }
+  started { printf "%s ", $0 }
+' | sed -E 's/([.!?])( .*)?$//; s/ +$//')"
 title="$tag"
 if [ -n "$summary" ]; then
   title="$tag — $(python3 -c 'import sys; print(" ".join(w[:1].upper() + w[1:] for w in sys.argv[1].split()))' "$summary")"
@@ -73,6 +78,12 @@ else
     echo
     image_block
   } > "$notes"
-  gh release create "$tag" --verify-tag --title "$title" --notes-file "$notes"
+  # Only the newest version may be Latest. GitHub would otherwise give the
+  # label to whichever release was created last, so filling in an old release
+  # would take it from the current one.
+  newest="$(gh api '/repos/{owner}/{repo}/tags?per_page=100' --jq '.[].name' | grep -E '^v[0-9]' | sort -V | tail -n1)"
+  latest=false
+  [ "$tag" = "$newest" ] && latest=true
+  gh release create "$tag" --verify-tag --title "$title" --notes-file "$notes" --latest="$latest"
   echo "Created release $tag: $title"
 fi
