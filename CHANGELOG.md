@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-05
+
+Copy, cut and paste nodes.
+
 ### Added
 - **Copy, cut and paste nodes.** ⌘C/Ctrl+C copies the selected branch (or several), ⌘X/Ctrl+X cuts it, and ⌘V/Ctrl+V pastes it as a child of the selected node. Pasting a cut puts the same nodes back, files and all; pasting a copy makes new ones. Also in the right-click menu, and as buttons in the Standard and Large toolbars. A picture on the clipboard still pastes onto the node as before.
 

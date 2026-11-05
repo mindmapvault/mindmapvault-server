@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.6';
+export const APP_VERSION = '0.6.7';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,28 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.7',
+    date: '2026-11-05',
+    highlights: 'Copy, cut and paste nodes.',
+    items: [
+      {
+        kind: 'feature',
+        title: 'Copy, cut and paste nodes',
+        desc: '⌘C/Ctrl+C copies the selected branch, ⌘X/Ctrl+X cuts it and ⌘V/Ctrl+V pastes it under the selected node. Also in the right-click menu and the toolbar.',
+      },
+      {
+        kind: 'fix',
+        title: 'Links to other apps',
+        desc: 'A link such as obsidian://open?vault=… or zotero://… on a node opened as a broken web address. It now opens in the app it belongs to.',
+      },
+      {
+        kind: 'fix',
+        title: 'Note popup in light mode',
+        desc: 'Hovering a vault in the list showed its note in a dark box with dim text. It is light now, like the rest of the page.',
+      },
+    ],
+  },
   {
     version: '0.6.6',
     date: '2026-11-04',
