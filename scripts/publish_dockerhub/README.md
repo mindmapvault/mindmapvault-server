@@ -6,6 +6,19 @@ Self-host MindMapVault Server with a guided installer. No local build step requi
 - Project page: https://www.mindmapvault.com/
 - Download overview: https://www.mindmapvault.com/download/
 - Docker Hub image: `kornelko2/mindmapvault-server`
+- Releases and what changed: https://github.com/mindmapvault/mindmapvault-server/releases
+
+---
+
+## Tags
+
+| Tag | What it is |
+| --- | --- |
+| `latest` | The newest release. Currently `v0.6.7`. |
+| `vX.Y.Z` | One release. Never moved once published. Its GitHub release lists the changes and the image digest. |
+| `sha-<commit>` | A build of one commit on `main`, for testing. Not a release. |
+
+Every image is built for `linux/amd64` and `linux/arm64`. The same images are on GHCR as `ghcr.io/mindmapvault/mindmapvault-server`.
 
 ---
 
@@ -73,7 +86,7 @@ Choose `update` mode when prompted.
 If you want to pin a specific image tag, set it when asked for `SERVER_IMAGE`, for example:
 
 ```text
-kornelko2/mindmapvault-server:v1.2.4
+kornelko2/mindmapvault-server:v0.6.7
 ```
 
 ---
@@ -130,13 +143,9 @@ Source-of-truth files:
 
 ---
 
-## Maintainer publishing helper
+## How images are published
 
-Maintainers can mirror GHCR tags to Docker Hub with:
-
-```bash
-./scripts/publish_dockerhub/publish-to-dockerhub.sh v1.2.3
-```
+Pushing a `vX.Y.Z` tag builds the image on GitHub Actions (each architecture on its own runner), publishes it here and on GHCR, creates the GitHub release, and updates this page.
 
 ---
 

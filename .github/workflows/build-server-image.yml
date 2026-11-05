@@ -361,6 +361,46 @@ jobs:
           digest="$(docker buildx imagetools inspect "$GHCR:$TAG" --format '{{json .Manifest}}' | jq -r .digest)"
           scripts/github_release.sh "$TAG" "$digest" "$GHCR" "$DOCKERHUB"
 
+      # The Docker Hub page is scripts/publish_dockerhub/README.md with the
+      # release just published filled in. Editing it needs a Docker Hub token
+      # allowed to change the repository (Read, Write, Delete); with a narrower
+      # one this step only warns, because the image itself is already out.
+      - name: Update the Docker Hub overview
+        if: steps.release.outputs.is_release == 'true' && steps.image.outputs.dockerhub_enabled == 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          DOCKERHUB: ${{ steps.image.outputs.dockerhub }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          SHORT: Self-hosted, end-to-end encrypted mind maps. The MindMapVault server, app and admin. AGPL-3.0.
+        run: |
+          repo="${DOCKERHUB#docker.io/}"
+          sed -E \
+            -e "s|(Currently \`)v[0-9]+\.[0-9]+\.[0-9]+|\1${TAG}|" \
+            -e "s|(mindmapvault-server:)v[0-9]+\.[0-9]+\.[0-9]+|\1${TAG}|g" \
+            scripts/publish_dockerhub/README.md > "$RUNNER_TEMP/overview.md"
+
+          username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]')"
+          token="$(printf '%s' "$DOCKERHUB_TOKEN" | tr -d '[:space:]')"
+          jwt="$(jq -n --arg u "$username" --arg p "$token" '{identifier: $u, secret: $p}' \
+            | curl -sS -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/auth/token \
+            | jq -r '.access_token // empty')" || jwt=""
+          if [ -z "$jwt" ]; then
+            echo "::warning::Could not sign in to the Docker Hub API; the overview was not updated."
+            exit 0
+          fi
+
+          body="$(jq -n --rawfile full "$RUNNER_TEMP/overview.md" --arg short "$SHORT" '{full_description: $full, description: $short}')"
+          status="$(curl -sS -o "$RUNNER_TEMP/hub.json" -w '%{http_code}' -X PATCH \
+            -H "Authorization: Bearer $jwt" -H 'Content-Type: application/json' \
+            -d "$body" "https://hub.docker.com/v2/repositories/${repo}/")"
+          if [ "$status" = 200 ]; then
+            echo "Docker Hub overview updated for $TAG."
+          else
+            echo "::warning::Docker Hub did not accept the overview (HTTP $status): $(head -c 300 "$RUNNER_TEMP/hub.json"). The token probably needs the Read, Write, Delete permission."
+          fi
+
       - name: Publish usage summary
         shell: bash
         run: |
