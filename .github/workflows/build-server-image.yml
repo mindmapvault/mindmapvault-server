@@ -135,7 +135,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # write: the release step below creates or updates the GitHub release.
+      contents: write
       packages: write
 
     steps:
@@ -344,6 +345,21 @@ jobs:
             done
           done <<< "${{ steps.meta.outputs.tags }}"
           exit "$failed"
+
+      # Every release page names the image built for it: the notes are the
+      # CHANGELOG section plus the pull commands and the digest. A tag without
+      # a release gets one; an existing release keeps its title.
+      - name: Create or update the GitHub release
+        if: steps.release.outputs.is_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          GHCR: ${{ steps.image.outputs.ghcr }}
+          DOCKERHUB: ${{ steps.image.outputs.dockerhub }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$GHCR:$TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+          scripts/github_release.sh "$TAG" "$digest" "$GHCR" "$DOCKERHUB"
 
       - name: Publish usage summary
         shell: bash
