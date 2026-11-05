@@ -151,6 +151,12 @@ function ImageSizesDialog({ sizes, onChange, onClose }: {
   );
 }
 
+// Text the user has selected on the page, which ⌘C/Ctrl+C should copy as text.
+function hasTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export function DesktopMindMapEditor({
   initialTree, initialShowShortcuts, disableAutoPanToSelection, externalNodeAttachments, title, onSave, onTitleChange, saving, saveMsg, error, onBack,
@@ -932,24 +938,8 @@ export function DesktopMindMapEditor({
 
   // ── Duplicate ─────────────────────────────────────────────────────────────
 
-  /**
-   * Duplicates a node and everything under it.
-   *
-   * Attachments are *copied*, not shared. Reassigning node ids while leaving
-   * attachment ids alone would leave two nodes pointing at one stored file, and
-   * from then on deleting either node's file breaks the other. Copying keeps
-   * the invariant trivial — one attachment belongs to exactly one node — at the
-   * cost of duplicated bytes for a rare action.
-   *
-   * A copy that fails leaves the duplicate without that file rather than
-   * sharing the original's: an incomplete duplicate is recoverable, a shared
-   * one quietly corrupts both.
-   */
-  const duplicateNode = useCallback(async (nodeId: string) => {
-    const source = nodeId === 'root' ? null : findNode(root, nodeId);
-    if (!source || !source.parent) return;
-    const clone = ops.cloneSubtreeWithNewIds(source.node);
-
+  /** Gives a fresh clone copies of its files (see duplicateNode below). */
+  const copyCloneAttachments = useCallback(async (clone: MindMapTreeNode, target: string) => {
     const withAttachments = ops.nodesWithAttachments(clone);
     if (withAttachments.length > 0) {
       setNodeImageBusy(true);
@@ -989,9 +979,30 @@ export function DesktopMindMapEditor({
         setNodeImageBusy(false);
       }
       if (failures > 0) {
-        showToast(`${failures} file${failures === 1 ? '' : 's'} could not be copied to the duplicate`);
+        showToast(`${failures} file${failures === 1 ? '' : 's'} could not be copied to ${target}`);
       }
     }
+  }, [onCopyNodeAttachment, showToast]);
+
+  /**
+   * Duplicates a node and everything under it.
+   *
+   * Attachments are *copied*, not shared. Reassigning node ids while leaving
+   * attachment ids alone would leave two nodes pointing at one stored file, and
+   * from then on deleting either node's file breaks the other. Copying keeps
+   * the invariant trivial — one attachment belongs to exactly one node — at the
+   * cost of duplicated bytes for a rare action.
+   *
+   * A copy that fails leaves the duplicate without that file rather than
+   * sharing the original's: an incomplete duplicate is recoverable, a shared
+   * one quietly corrupts both.
+   */
+  const duplicateNode = useCallback(async (nodeId: string) => {
+    const source = nodeId === 'root' ? null : findNode(root, nodeId);
+    if (!source || !source.parent) return;
+    const clone = ops.cloneSubtreeWithNewIds(source.node);
+
+    await copyCloneAttachments(clone, 'the duplicate');
 
     // The tree as it is now, not as it was before the copying: an edit made
     // while the files were in flight has to survive this insert.
@@ -999,7 +1010,7 @@ export function DesktopMindMapEditor({
     if (!next) return;
     mutate(next);
     setSelectedId(clone.id);
-  }, [root, mutate, onCopyNodeAttachment, showToast]);
+  }, [root, mutate, copyCloneAttachments]);
 
   // ── Reparent (drag-drop) ──────────────────────────────────────────────────
   const reparentNode = useCallback((nodeId: string, newParentId: string) => {
@@ -1106,6 +1117,63 @@ export function DesktopMindMapEditor({
   }, [root, mutate, getTargetIds]);
 
   const hasBulk = multiSelect.size > 0;
+
+  // ── Copy / cut / paste ────────────────────────────────────────────────────
+  // Branches copied in this map. The OS clipboard gets them as a text outline,
+  // which also pushes out a picture copied earlier, so the next paste on the
+  // canvas brings the nodes rather than that picture.
+  const nodeClipboard = useRef<{ nodes: MindMapTreeNode[]; cut: boolean; outline: string; onSystemClipboard: boolean } | null>(null);
+  const [hasNodeClipboard, setHasNodeClipboard] = useState(false);
+
+  const copyNodes = useCallback((nodeIds: Iterable<string>, cut: boolean) => {
+    const nodes = ops.topLevelSelection(root, nodeIds, { includeRoot: !cut });
+    if (nodes.length === 0) {
+      if (cut) showToast('The central node cannot be cut');
+      return;
+    }
+    const outline = ops.outlineText(nodes);
+    const clip = { nodes: nodes.map((n) => cloneTree(n)), cut, outline, onSystemClipboard: false };
+    nodeClipboard.current = clip;
+    setHasNodeClipboard(true);
+    navigator.clipboard?.writeText(outline).then(() => { clip.onSystemClipboard = true; }, () => {});
+    const what = nodes.length === 1 ? `"${nodes[0].text.slice(0, 40)}"` : `${nodes.length} branches`;
+    if (cut) {
+      const removed = ops.removeNodes(root, nodes.map((n) => n.id));
+      if (removed) {
+        setSelectedId(removed.parentId);
+        setMultiSelect(new Set());
+        mutate(removed.root);
+      }
+    }
+    showToast(`${cut ? 'Cut' : 'Copied'} ${what}`);
+  }, [root, mutate, showToast]);
+
+  const pasteNodes = useCallback(async (targetId: string) => {
+    const clip = nodeClipboard.current;
+    if (!clip) return;
+    // The first paste after a cut puts the same nodes back, files and all.
+    // Every other paste is a copy with ids (and files) of its own.
+    const idsInMap = [...ops.subtreeIds(clip.nodes)].some((id) => findNode(root, id));
+    let nodes: MindMapTreeNode[];
+    if (clip.cut && !idsInMap) {
+      nodes = clip.nodes.map((n) => cloneTree(n));
+      clip.cut = false;
+    } else {
+      nodes = [];
+      for (const n of clip.nodes) {
+        const clone = ops.cloneSubtreeWithNewIds(n);
+        await copyCloneAttachments(clone, 'the pasted copy');
+        nodes.push(clone);
+      }
+    }
+    const current = rootRef.current;
+    const parentId = findNode(current, targetId) ? targetId : 'root';
+    const next = ops.appendChildren(current, parentId, nodes);
+    if (!next) return;
+    mutate(next);
+    setMultiSelect(new Set());
+    setSelectedId(nodes[0].id);
+  }, [root, mutate, showToast, copyCloneAttachments]);
 
   // ══════════════════════════════════════════════════════════════════════════
   //  EDITING
@@ -1541,6 +1609,8 @@ export function DesktopMindMapEditor({
       'view.colourTray': () => setColourTray(!colourTrayEnabled),
       'view.iconTray': () => setIconTray(!iconTrayEnabled),
       'edit.undo': () => { undo(); },
+      'edit.copy': () => copyNodes(getTargetIds(), false),
+      'edit.cut': () => copyNodes(getTargetIds(), true),
       'edit.redo': () => { redo(); },
       'find.search': () => { setSearchOpen(true); setTimeout(() => searchRef.current?.focus(), 50); },
       'find.shortcuts': () => setShowShortcuts((v) => !v),
@@ -1558,6 +1628,8 @@ export function DesktopMindMapEditor({
     }
 
     const actionId = matchShortcut(e, keyboardLayout);
+    // Selected text on the page is copied as text, as anywhere else.
+    if ((actionId === 'edit.copy' || actionId === 'edit.cut') && hasTextSelection()) return;
     if (actionId && actionHandlers[actionId]) {
       // Shift+Tab on a non-root node is "add child", not "add left child" —
       // only the root has a left side to add to.
@@ -1568,7 +1640,8 @@ export function DesktopMindMapEditor({
       e.preventDefault();
       actionHandlers[actionId]();
       const def = SHORTCUTS.find((sc) => sc.id === actionId);
-      if (def) showToast(`${formatShortcut(actionId, keyboardLayout)} — ${def.label}`);
+      // Copy and cut say what they took; the generic caption would hide that.
+      if (def && actionId !== 'edit.copy' && actionId !== 'edit.cut') showToast(`${formatShortcut(actionId, keyboardLayout)} — ${def.label}`);
       return;
     }
 
@@ -1614,7 +1687,7 @@ export function DesktopMindMapEditor({
     }
     }, [editingId, notesOpen, openNotes, saveNotes, selectedId, root, layout, addChild, addSibling, deleteNode, cancelEdit, cycleColor, cycleProgress,
       toggleCheckbox, undo, redo, toggleCollapse, openNotes, showToast, resetNodePosition, resetAllPositions, autoAlignSubtree, showIconPicker, showColorPicker, focusMode, focusedIds,
-      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, onOpenSecurePanel, onShowHistory, openAttachFiles,
+      hasBulk, bulkDelete, bulkToggleCheckbox, bulkCycleProgress, bulkToggleCollapse, bulkResetPosition, copyNodes, getTargetIds, onOpenSecurePanel, onShowHistory, openAttachFiles,
       // fitView is declared below this hook, so it cannot be listed here; it is
       // only ever called lazily from inside the handler.
       keyboardLayout, onBack, setColourTray, colourTrayEnabled, setIconTray, iconTrayEnabled,
@@ -1911,10 +1984,17 @@ export function DesktopMindMapEditor({
     };
     // The event and the fallback can both see one keystroke; only one may place it.
     const recentlyPasted = () => Date.now() - imagePastedAt.current < 1000;
+    const pasteCopiedNodes = () => {
+      if (!nodeClipboard.current) return;
+      imagePastedAt.current = Date.now();
+      void pasteNodes(selectedId);
+    };
     const fromNativeClipboard = async () => {
       if (recentlyPasted()) return;
       const file = await readNativeClipboardImage();
-      if (file && !recentlyPasted()) place(file);
+      if (recentlyPasted()) return;
+      if (file) place(file);
+      else pasteCopiedNodes();
     };
 
     const onPaste = (e: ClipboardEvent) => {
@@ -1924,6 +2004,14 @@ export function DesktopMindMapEditor({
         .map((item) => item.getAsFile())
         .find((value): value is File => Boolean(value));
       if (!file) {
+        // Text copied somewhere else since the nodes were: paste nothing
+        // rather than nodes the user no longer has in mind.
+        const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n/g, '\n').trim();
+        const clip = nodeClipboard.current;
+        if (clip?.onSystemClipboard && text && text !== clip.outline.trim()) {
+          imagePastedAt.current = Date.now();
+          return;
+        }
         void fromNativeClipboard();
         return;
       }
@@ -1942,7 +2030,7 @@ export function DesktopMindMapEditor({
       window.removeEventListener('paste', onPaste);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [attachNodeImage, editingId, notesOpen, root, selectedId, showToast]);
+  }, [attachNodeImage, editingId, notesOpen, root, selectedId, showToast, pasteNodes]);
 
   const onDropSvg = useCallback(async (e: React.DragEvent<SVGSVGElement>) => {
     if (!onNodeFileDrop || e.dataTransfer.files.length === 0) return;
@@ -2673,6 +2761,9 @@ export function DesktopMindMapEditor({
               <div className="mm-toolbar-group-btns">
           <button className="mm-btn mm-essential" onClick={undo} data-label="Undo" data-shortcut={formatButtonShortcut('edit.undo', keyboardLayout)} title="Undo (F9)" disabled={!history.canUndo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a6 6 0 010 12H9m-6-12l4-4m-4 4l4 4"/></svg></button>
           <button className="mm-btn mm-essential" onClick={redo} data-label="Redo" data-shortcut={formatButtonShortcut('edit.redo', keyboardLayout)} title="Redo (F10)" disabled={!history.canRedo}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 10H11a6 6 0 000 12h4m6-12l-4-4m4 4l-4 4"/></svg></button>
+              <button className="mm-btn" data-label="Copy" data-shortcut={formatButtonShortcut('edit.copy', keyboardLayout)} onClick={() => copyNodes(getTargetIds(), false)} title={`Copy (${formatShortcut('edit.copy', keyboardLayout)})`}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="9" y="9" width="13" height="13" rx="2"/><path strokeLinecap="round" strokeLinejoin="round" d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+              <button className="mm-btn" data-label="Cut" data-shortcut={formatButtonShortcut('edit.cut', keyboardLayout)} onClick={() => copyNodes(getTargetIds(), true)} title={`Cut (${formatShortcut('edit.cut', keyboardLayout)})`} disabled={selectedId === 'root' && !hasBulk}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path strokeLinecap="round" strokeLinejoin="round" d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/></svg></button>
+              <button className="mm-btn" data-label="Paste" data-shortcut={formatButtonShortcut('edit.paste', keyboardLayout)} onClick={() => { void pasteNodes(selectedId); }} title={`Paste as child (${formatShortcut('edit.paste', keyboardLayout)})`} disabled={!hasNodeClipboard}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path strokeLinecap="round" strokeLinejoin="round" d="M12 10v7m-3-3l3 3 3-3"/></svg></button>
               </div>
             </div>
           )}
@@ -3476,6 +3567,9 @@ export function DesktopMindMapEditor({
             {!cmIsRoot && cmCanMoveUp && <button className="mm-context-item" onClick={() => { moveNode(contextMenu.nodeId, 'up'); setContextMenu(null); }}>Move Up</button>}
             {!cmIsRoot && cmCanMoveDown && <button className="mm-context-item" onClick={() => { moveNode(contextMenu.nodeId, 'down'); setContextMenu(null); }}>Move Down</button>}
             {!cmIsRoot && <button className="mm-context-item" onClick={() => { void duplicateNode(contextMenu.nodeId); setContextMenu(null); }}>Duplicate</button>}
+            <button className="mm-context-item" onClick={() => { copyNodes([contextMenu.nodeId], false); setContextMenu(null); }}>Copy</button>
+            {!cmIsRoot && <button className="mm-context-item" onClick={() => { copyNodes([contextMenu.nodeId], true); setContextMenu(null); }}>Cut</button>}
+            {hasNodeClipboard && <button className="mm-context-item" onClick={() => { void pasteNodes(contextMenu.nodeId); setContextMenu(null); }}>Paste as child</button>}
             <button className="mm-context-item" onClick={() => { resetNodePosition(contextMenu.nodeId); setContextMenu(null); }}>Reset Position <kbd>R</kbd></button>
             <button className="mm-context-item" onClick={() => { autoAlignSubtree(contextMenu.nodeId); setContextMenu(null); }}>Auto-align subtree <kbd>A</kbd></button>
             {!cmIsRoot && (<><div className="mm-context-divider" /><button className="mm-context-item mm-context-danger" onClick={() => { deleteNode(contextMenu.nodeId); setContextMenu(null); }}>Delete <kbd>Del</kbd></button></>)}
