@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { SessionKeys } from '../types';
+import { clearSessionCache } from '../utils/sessionCache';
 
 interface AuthState {
   // ── Persisted (localStorage) ──────────────────────────────────────────────
@@ -35,8 +36,12 @@ export const useAuthStore = create<AuthState>()(
 
       setSessionKeys: (keys) => set({ sessionKeys: keys }),
 
-      logout: () =>
-        set({ accessToken: null, refreshToken: null, username: null, sessionKeys: null }),
+      logout: () => {
+        // Decrypted previews and lobby metadata must not outlive the unlock
+        // session; `sessionCache` holds nothing but process memory.
+        clearSessionCache();
+        set({ accessToken: null, refreshToken: null, username: null, sessionKeys: null });
+      },
 
       isAuthenticated: () => {
         const state = get();

@@ -52,22 +52,18 @@ export function labelsEqual(a: string[], b: string[]): boolean {
   return a.every((label, idx) => label === b[idx]);
 }
 
-// ── Per-device vault colour ─────────────────────────────────────
+// ── Per-device vault colour and labels (plaintext keys, before this fix) ──
 
 /**
- * Local mode has no server to keep a vault's colour on, so it lives in
- * `localStorage` under this key. The key is persisted data: renaming it
- * silently resets every local vault to the default colour.
+ * Where a local-mode vault's colour sat in `localStorage` before the lobby
+ * metadata was encrypted (`utils/lobbyMeta.ts`). Read once, by the migration,
+ * and removed. It is persisted data: renaming it would leave old colours behind.
  */
 export function vaultColorStorageKey(vaultId: string): string {
   return `vault-color-${vaultId}`;
 }
 
-/**
- * Where a local-mode vault's labels live. Local mode has no server to hold
- * them, so they sit in `localStorage` under this key — persisted data, like
- * the colour key above.
- */
+/** Where a local-mode vault's labels sat; read by the migration only. */
 export function vaultLabelsStorageKey(vaultId: string): string {
   return `vault-labels-${vaultId}`;
 }

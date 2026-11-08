@@ -3,9 +3,15 @@ import { resolveLucideIcon, type LucideIconNode } from '../components/lucideIcon
 import type { MindMapGraph, MindMapTree, MindMapTreeNode } from '../types';
 import type { ThemeMode } from '../store/theme';
 
-// v4: thumbnails are laid out from the shared geometry now, so anything
-// cached under v3 was drawn with the old, off-centre arithmetic.
-const CACHE_KEY = 'cryptmind-vault-preview-cache-v4';
+import {
+  readVaultPreviewCache,
+  writeVaultPreviewCache,
+  type VaultPreviewCache,
+  type VaultPreviewTheme,
+} from './sessionCache';
+
+// Previews are rendered from decrypted vault content, so they are cached in
+// process memory only (see `sessionCache.ts`), never in WebView storage.
 const MAX_CACHE_ENTRIES = 80;
 const PREVIEW_WIDTH = 760;
 const PREVIEW_HEIGHT = 260;
@@ -83,9 +89,6 @@ export interface VaultPreviewSummary {
   saved_at: string;
 }
 
-type VaultPreviewThemeMap = Partial<Record<'dark' | 'light', VaultPreviewSummary>>;
-type VaultPreviewCache = Record<string, VaultPreviewThemeMap>;
-
 function normalizePreviewText(value: string | undefined | null): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -106,33 +109,22 @@ function clampLabel(value: string, maxLength = 18): string {
 }
 
 function readCache(): VaultPreviewCache {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as VaultPreviewCache;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+  return readVaultPreviewCache();
 }
 
-function writeCache(cache: VaultPreviewCache) {
-  if (typeof window === 'undefined') return;
-  try {
-    const entries = Object.entries(cache)
-      .map(([k, v]) => {
-        const times = Object.values(v || {}).map((s) => s.saved_at).filter(Boolean) as string[];
-        const latest = times.length > 0 ? times.sort().reverse()[0] : '';
-        return [k, v, latest] as const;
-      })
-      .sort((left, right) => (right[2] || '').localeCompare(left[2] || ''))
-      .slice(0, MAX_CACHE_ENTRIES)
-      .map(([k, v]) => [k, v]);
-    window.localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // Ignore preview cache persistence failures.
-  }
+/** Keep the newest `MAX_CACHE_ENTRIES` vaults, by their latest save. */
+function writeCache(cache: VaultPreviewCache): void {
+  const entries = Object.entries(cache)
+    .map(([k, v]) => {
+      // pick latest saved_at among theme variants
+      const times = Object.values(v || {}).map((s) => s.saved_at).filter(Boolean) as string[];
+      const latest = times.length > 0 ? times.sort().reverse()[0] : '';
+      return [k, v, latest] as const;
+    })
+    .sort((left, right) => (right[2] || '').localeCompare(left[2] || ''))
+    .slice(0, MAX_CACHE_ENTRIES)
+    .map(([k, v]) => [k, v]);
+  writeVaultPreviewCache(Object.fromEntries(entries) as VaultPreviewCache);
 }
 
 function encodeSvg(svg: string): string {
@@ -537,8 +529,8 @@ async function rasterizeSvg(svg: string, width = CLOUD_PREVIEW_WIDTH, height = C
   }
 }
 
-function savePreview(vaultId: string, theme: 'dark' | 'light', preview: VaultPreviewSummary): VaultPreviewSummary {
-  const cache = readCache() as VaultPreviewCache;
+function savePreview(vaultId: string, theme: VaultPreviewTheme, preview: VaultPreviewSummary): VaultPreviewSummary {
+  const cache = readCache();
   const entry = cache[vaultId] ?? {};
   // Previews render asynchronously, so one for an older save can finish last
   // (an import renders the heavy original while the editor has already saved
@@ -551,8 +543,19 @@ function savePreview(vaultId: string, theme: 'dark' | 'light', preview: VaultPre
   return preview;
 }
 
-export function loadCachedVaultPreview(vaultId: string, updatedAt: string, theme: 'dark' | 'light' = 'dark'): VaultPreviewSummary | null {
-  const cache = readCache() as VaultPreviewCache;
+/**
+ * Puts previews read back from the encrypted file beside a local vault into
+ * the session cache. The newer-save rule of `savePreview` applies, so a file
+ * from before the last save cannot replace what the editor rendered since.
+ */
+export function restoreVaultPreviews(vaultId: string, previews: Partial<Record<VaultPreviewTheme, VaultPreviewSummary>>): void {
+  (Object.entries(previews) as Array<[VaultPreviewTheme, VaultPreviewSummary]>).forEach(([theme, preview]) => {
+    savePreview(vaultId, theme, preview);
+  });
+}
+
+export function loadCachedVaultPreview(vaultId: string, updatedAt: string, theme: VaultPreviewTheme = 'dark'): VaultPreviewSummary | null {
+  const cache = readCache();
   const entry = cache[vaultId];
   if (!entry) return null;
   const themed = entry[theme] ?? entry.dark ?? entry.light ?? null;

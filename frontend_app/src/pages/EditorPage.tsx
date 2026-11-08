@@ -45,6 +45,7 @@ import {
   isVaultPreviewAttachmentMeta,
   saveTreeVaultPreview,
 } from '../utils/vaultPreview';
+import { saveLocalVaultPreview } from '../utils/localVaultPreview';
 
 function mergeAttachmentRefs(
   inlineAttachments: NodeAttachmentRef[] | undefined,
@@ -423,7 +424,9 @@ export function EditorPage() {
           : await storage.downloadBlob(id);
         tree = await decryptTree(blob, dek);
       }
-      saveTreeVaultPreview(id, updatedAt, tree);
+      // Local vaults also get their preview written to the encrypted file
+      // beside the vault, so the lobby can show it after a restart.
+      void (isLocalMode ? saveLocalVaultPreview(id, updatedAt, tree) : saveTreeVaultPreview(id, updatedAt, tree));
       setInitialTree(tree);
       setCurrentTree(tree);
       setSelectedNodeId(tree.view_state?.selected_node_id ?? 'root');
@@ -572,7 +575,9 @@ export function EditorPage() {
       await storage.uploadBlob(id, encBlob);
       await syncVaultPreviewAttachments(tree);
       const refreshed = await storage.getVault(id);
-      saveTreeVaultPreview(id, refreshed.updated_at, tree);
+      void (isLocalMode
+        ? saveLocalVaultPreview(id, refreshed.updated_at, tree)
+        : saveTreeVaultPreview(id, refreshed.updated_at, tree));
       const sdt = new Date(refreshed.updated_at);
       setVersionTooltip(sdt.toLocaleString());
       // Re-fetch version list to get updated vN count

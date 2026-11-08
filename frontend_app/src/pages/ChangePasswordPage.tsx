@@ -5,6 +5,7 @@ import { buildPasswordRotationBundle } from '../crypto/keyRotation';
 import type { LocalProfileForRotation, VaultEntryForRotation } from '../crypto/keyRotation';
 import { useAuthStore } from '../store/auth';
 import { useModeStore } from '../store/mode';
+import { useLobbyMetaStore } from '../store/lobbyMeta';
 import { PasswordInput } from '../components/PasswordInput';
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -67,6 +68,10 @@ export function ChangePasswordPage() {
         });
 
         if (sessionKeys) {
+          // The lobby's colours and labels are encrypted under the master key
+          // as well; re-encrypt them so they survive the password change.
+          setProgress('Re-encrypting vault colours and labels…');
+          await useLobbyMetaStore.getState().rotateKey(sessionKeys.masterKey, bundle.newMasterKey, profile.username);
           setSessionKeys({ ...sessionKeys, masterKey: bundle.newMasterKey });
         }
       }
