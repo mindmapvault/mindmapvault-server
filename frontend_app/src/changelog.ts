@@ -16,7 +16,7 @@
  * columns) which belongs in release notes rather than in a dialog.
  */
 
-export const APP_VERSION = '0.6.7';
+export const APP_VERSION = '0.6.8';
 
 /**
  * localStorage key recording the last version whose "What's New" the user saw.
@@ -41,6 +41,23 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.6.8',
+    date: '2026-11-08',
+    highlights: 'Decrypted previews and vault labels no longer stay on disk.',
+    items: [
+      {
+        kind: 'fix',
+        title: 'Vault previews stayed on disk',
+        desc: 'The thumbnails in the vault list are drawn from the decrypted map and were cached in the browser\'s storage in plain text, which survived lock and logout. They now live in memory only; in local mode each vault keeps an encrypted preview file beside it so the list still shows thumbnails after a restart.',
+      },
+      {
+        kind: 'fix',
+        title: 'Vault colours and labels in local mode are encrypted at rest',
+        desc: 'The colour and labels of each local vault, and the label library the editor\'s tags use, are now stored encrypted with the profile\'s key, like titles and notes. Existing ones are carried over on the first unlock.',
+      },
+    ],
+  },
   {
     version: '0.6.7',
     date: '2026-11-05',

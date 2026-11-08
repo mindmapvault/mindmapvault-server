@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-08
+
+Decrypted previews and vault labels no longer stay on disk.
+
+### Security
+- **Decrypted vault previews stayed on disk.** The thumbnails in the vault list are drawn from the decrypted map, node texts included, and were cached in the browser's or desktop WebView's local storage, which is written to disk as plain text and was never cleared on lock or logout. The cache is now kept in memory only and is dropped on lock and logout; any cache an earlier version left behind is deleted on the first start. So that the list in local mode still shows thumbnails after a restart, each local vault's preview is now written as an encrypted file beside the vault and decrypted when the list opens. A local vault saved by an earlier version shows the "Open and save this vault to create its preview" placeholder until it is opened once. Reported against the FOSS edition by chyde80 (GHSA-3fq6-35q6-xcp9); the same code shipped here.
+- **Vault colours and labels in local mode are encrypted at rest.** The colour and labels of each local vault, and the label library the editor's tags use, were kept in plain text as well. They are now stored encrypted with the profile's key, like vault titles and notes, and are re-encrypted when the password is changed. Existing colours and labels are carried over on the first unlock. In server mode the label library is no longer mirrored to local storage; it is read from the account settings each session.
+
 ## [0.6.7] - 2026-11-05
 
 Copy, cut and paste nodes.
